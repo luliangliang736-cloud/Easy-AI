@@ -19,6 +19,7 @@ import {
   Crown,
   Rocket,
 } from "lucide-react";
+import { compressImage } from "@/lib/imageUtils";
 
 const MODEL_TIERS = [
   {
@@ -275,7 +276,16 @@ export default function ChatPanel({
   const addImages = useCallback(async (files) => {
     const remaining = maxImages - (refImages?.length || 0);
     const toProcess = Array.from(files).slice(0, remaining);
-    const results = await Promise.all(toProcess.map(readFileAsDataURL));
+    const results = await Promise.all(
+      toProcess.map(async (file) => {
+        const dataUrl = await readFileAsDataURL(file);
+        try {
+          return await compressImage(dataUrl, 1280, 0.78);
+        } catch {
+          return dataUrl;
+        }
+      })
+    );
     const newImages = [...(refImages || []), ...results];
     onRefImagesChange(newImages);
     if (params.image_size === "auto" && results.length > 0) {

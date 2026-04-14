@@ -17,6 +17,51 @@ function errStr(e) {
 }
 
 const REQUEST_TIMEOUT_MS = 55000;
+const STORAGE_VERSION = "8";
+
+async function makeMessagePreviewImage(img) {
+  if (typeof img !== "string") {
+    return img;
+  }
+
+  if (/^https?:\/\//i.test(img)) {
+    return img;
+  }
+
+  if (/^data:image\//i.test(img)) {
+    return compressImage(img, 160, 0.5);
+  }
+
+  return img;
+}
+
+function sanitizeMessagesForStorage(messages) {
+  return messages.slice(0, 200).map((msg) => {
+    if (!Array.isArray(msg.refImages) || msg.refImages.length === 0) {
+      return msg;
+    }
+
+    return {
+      ...msg,
+      refImages: msg.refImages.map((img) => {
+        if (typeof img !== "string") {
+          return img;
+        }
+
+        if (/^https?:\/\//i.test(img)) {
+          return img;
+        }
+
+        if (/^data:image\//i.test(img)) {
+          // Prevent localStorage from being filled with large base64 strings.
+          return "";
+        }
+
+        return img;
+      }).filter(Boolean),
+    };
+  });
+}
 
 async function parseApiResponse(res) {
   const rawText = await res.text();
@@ -118,10 +163,10 @@ function HomeInner() {
   useEffect(() => {
     try {
       const ver = localStorage.getItem("lovart-version");
-      if (ver !== "7") {
+      if (ver !== STORAGE_VERSION) {
         localStorage.removeItem("lovart-messages");
         localStorage.removeItem("lovart-canvas-images");
-        localStorage.setItem("lovart-version", "7");
+        localStorage.setItem("lovart-version", STORAGE_VERSION);
         return;
       }
       const saved = localStorage.getItem("lovart-messages");
@@ -136,12 +181,20 @@ function HomeInner() {
 
   // Persist messages
   useEffect(() => {
-    localStorage.setItem("lovart-messages", JSON.stringify(messages.slice(0, 200)));
+    try {
+      localStorage.setItem("lovart-messages", JSON.stringify(sanitizeMessagesForStorage(messages)));
+    } catch {
+      localStorage.removeItem("lovart-messages");
+    }
   }, [messages]);
 
   // Persist canvas images
   useEffect(() => {
-    localStorage.setItem("lovart-canvas-images", JSON.stringify(canvasImages.slice(0, 100)));
+    try {
+      localStorage.setItem("lovart-canvas-images", JSON.stringify(canvasImages.slice(0, 100)));
+    } catch {
+      localStorage.removeItem("lovart-canvas-images");
+    }
   }, [canvasImages]);
 
   const updateMessage = useCallback((id, updates) => {
@@ -158,10 +211,14 @@ function HomeInner() {
     const modelLabel = MODEL_LABELS[params.model] || params.model;
     const hasImages = refImages.length > 0;
 
+    const messageRefImages = hasImages
+      ? await Promise.all(refImages.map((img) => makeMessagePreviewImage(img)))
+      : [];
+
     const userMsg = {
       id: userMsgId, role: "user", text,
       params: { ...params }, modelLabel,
-      refImages: hasImages ? [...refImages] : [],
+      refImages: messageRefImages,
     };
     const aiMsg = {
       id: aiMsgId, role: "assistant", text,
