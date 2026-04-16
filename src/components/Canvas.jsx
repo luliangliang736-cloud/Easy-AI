@@ -25,9 +25,10 @@ const MAX_ZOOM_PCT = 800;
 /** deltaY 越大缩放越快；与 trackpad/滚轮配合 */
 const ZOOM_EXP_SENSITIVITY = 0.0018;
 
-/** 以屏幕点 (sx,sy) 为锚点应用新 zoom（世界坐标不变） */
+/** 以屏幕点 (sx,sy) 为锚点应用新 zoom（世界坐标不变）；zoom 始终为整数 % */
 function applyZoomAtScreenPoint(cam, sx, sy, newZoomPct) {
-  const z = Math.min(MAX_ZOOM_PCT, Math.max(MIN_ZOOM_PCT, newZoomPct));
+  const clamped = Math.min(MAX_ZOOM_PCT, Math.max(MIN_ZOOM_PCT, newZoomPct));
+  const z = Math.round(clamped);
   const oldS = cam.zoom / 100;
   const newS = z / 100;
   const wx = (sx - cam.x) / oldS;
@@ -35,6 +36,15 @@ function applyZoomAtScreenPoint(cam, sx, sy, newZoomPct) {
   cam.x = sx - wx * newS;
   cam.y = sy - wy * newS;
   cam.zoom = z;
+}
+
+function blobToDataUrl(blob) {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => resolve(r.result);
+    r.onerror = reject;
+    r.readAsDataURL(blob);
+  });
 }
 
 /** 世界坐标 AABB 相交（含贴边） */
@@ -102,7 +112,7 @@ function ContextMenu({ x, y, img, isLocked, onClose, onAction }) {
 
 export default function Canvas({
   images, selectedImage, onSelectImage, onDeleteImage,
-  onUpdateImage, onSendToChat, onDropImages,
+  onUpdateImage, onSendToChat, onDropImages, onPasteImages,
   activeTool, onToolChange, zoom, onZoomChange,
   ref,
   textItems = [],
@@ -120,7 +130,11 @@ export default function Canvas({
   const toast = useToast();
   const containerRef = useRef(null);
   /** 相机：同步可变对象（非 React state），平移/缩放后需 forceRender */
-  const cameraRef = useRef({ x: 0, y: 0, zoom: typeof zoom === "number" ? zoom : 100 });
+  const cameraRef = useRef({
+    x: 0,
+    y: 0,
+    zoom: Math.round(typeof zoom === "number" ? zoom : 100),
+  });
   const [action, setAction] = useState(null);
   const actionRef = useRef(null);
   const [, forceRender] = useReducer((c) => c + 1, 0);
@@ -132,6 +146,10 @@ export default function Canvas({
   const [multiSelectedImageIds, setMultiSelectedImageIds] = useState([]);
   const [multiSelectedTextIds, setMultiSelectedTextIds] = useState([]);
   const [selectedShapeId, setSelectedShapeId] = useState(null);
+  /** 按住空格临时平移（与 Figma 类似）；与 handlePointerDown 同步读取 */
+  const spacePanHeldRef = useRef(false);
+  /** 画布内 Ctrl/Cmd+C 复制后的数据（系统剪贴板失败时仍可粘贴） */
+  const canvasClipboardRef = useRef(null);
 
   actionRef.current = action;
 
@@ -287,6 +305,43 @@ export default function Canvas({
     return () => window.removeEventListener("keydown", handleKey);
   }, [activeTool, selectedImage, selectedTextId, selectedShapeId, multiSelectedImageIds, multiSelectedTextIds, onDeleteImage, onDeleteText, onDeleteShape, onSelectImage]);
 
+  /** 空格按住：可左键拖拽平移画布（输入框内不抢占空格） */
+  useEffect(() => {
+    const typing = () => {
+      const el = document.activeElement;
+      if (!el) return false;
+      const tag = el.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA") return true;
+      return Boolean(el.isContentEditable);
+    };
+    const onKeyDown = (e) => {
+      if (e.code !== "Space") return;
+      if (typing()) return;
+      if (e.repeat) return;
+      e.preventDefault();
+      spacePanHeldRef.current = true;
+      forceRender();
+    };
+    const onKeyUp = (e) => {
+      if (e.code !== "Space") return;
+      spacePanHeldRef.current = false;
+      forceRender();
+    };
+    const onBlur = () => {
+      if (!spacePanHeldRef.current) return;
+      spacePanHeldRef.current = false;
+      forceRender();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("blur", onBlur);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("blur", onBlur);
+    };
+  }, []);
+
   /** 工具栏：以视口中心为锚点缩放（线性步进保持与按钮一致） */
   const handleToolbarZoomChange = useCallback(
     (updater) => {
@@ -300,7 +355,9 @@ export default function Canvas({
         const cy = rect.height / 2;
         applyZoomAtScreenPoint(cam, cx, cy, nextZ);
       } else {
-        cam.zoom = Math.min(MAX_ZOOM_PCT, Math.max(MIN_ZOOM_PCT, nextZ));
+        cam.zoom = Math.round(
+          Math.min(MAX_ZOOM_PCT, Math.max(MIN_ZOOM_PCT, nextZ))
+        );
       }
       onZoomChange?.(cam.zoom);
       forceRender();
@@ -351,6 +408,108 @@ export default function Canvas({
   const isTextTool = activeTool === "text";
   const isSelectTool = activeTool === "select";
   const isShapeTool = activeTool === "shape";
+
+  const copyCanvasImages = useCallback(async () => {
+    const ids =
+      multiSelectedImageIds.length > 0
+        ? [...multiSelectedImageIds]
+        : selectedImage
+          ? [selectedImage.id]
+          : [];
+    if (ids.length === 0) return;
+    const items = ids
+      .map((iid) => images.find((im) => im.id === iid))
+      .filter(Boolean)
+      .map((im) => ({ image_url: im.image_url, prompt: im.prompt || "" }));
+    if (items.length === 0) return;
+    canvasClipboardRef.current = { items };
+    try {
+      const first = items[0];
+      const res = await fetch(first.image_url);
+      const blob = await res.blob();
+      const type =
+        blob.type && blob.type.startsWith("image/") ? blob.type : "image/png";
+      await navigator.clipboard.write([new ClipboardItem({ [type]: blob })]);
+      toast("已复制", "success", 1200);
+    } catch {
+      toast("已复制（可在画布内粘贴）", "info", 1500);
+    }
+  }, [images, multiSelectedImageIds, selectedImage, toast]);
+
+  const pasteCanvasImages = useCallback(async () => {
+    if (!onPasteImages) return;
+    const tryClipboard = async () => {
+      try {
+        const clipItems = await navigator.clipboard.read();
+        for (const clipItem of clipItems) {
+          const types = clipItem.types.filter((t) => t.startsWith("image/"));
+          for (const t of types) {
+            const blob = await clipItem.getType(t);
+            const dataUrl = await blobToDataUrl(blob);
+            return [{ image_url: dataUrl, prompt: "粘贴" }];
+          }
+        }
+      } catch {
+        /* ignore */
+      }
+      return null;
+    };
+    const fromClip = await tryClipboard();
+    if (fromClip?.length) {
+      onPasteImages(fromClip);
+      return;
+    }
+    if (canvasClipboardRef.current?.items?.length) {
+      onPasteImages(
+        canvasClipboardRef.current.items.map((it) => ({
+          image_url: it.image_url,
+          prompt: (it.prompt && String(it.prompt).trim())
+            ? `${it.prompt} (副本)`
+            : "副本",
+        }))
+      );
+    } else {
+      toast("剪贴板无图片", "info", 1200);
+    }
+  }, [onPasteImages, toast]);
+
+  useEffect(() => {
+    const typing = () => {
+      const el = document.activeElement;
+      if (!el) return false;
+      const tag = el.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA") return true;
+      return Boolean(el.isContentEditable);
+    };
+    const onKeyDown = (e) => {
+      if (typing()) return;
+      const mod = e.ctrlKey || e.metaKey;
+      if (mod && e.key.toLowerCase() === "c") {
+        const ids =
+          multiSelectedImageIds.length > 0
+            ? multiSelectedImageIds
+            : selectedImage
+              ? [selectedImage.id]
+              : [];
+        if (ids.length === 0) return;
+        e.preventDefault();
+        copyCanvasImages();
+        return;
+      }
+      if (mod && e.key.toLowerCase() === "v") {
+        e.preventDefault();
+        pasteCanvasImages();
+        return;
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [
+    copyCanvasImages,
+    pasteCanvasImages,
+    multiSelectedImageIds,
+    selectedImage,
+  ]);
 
   /**
    * 文案块在子层拦截事件。文字工具：单击进入编辑。
@@ -462,6 +621,14 @@ export default function Canvas({
     setContextMenu(null);
     const target = e.target;
     if (target.closest?.("[data-text-editor]")) return;
+
+    if (spacePanHeldRef.current && e.button === 0) {
+      e.preventDefault();
+      setContextMenu(null);
+      setAction("pan");
+      e.currentTarget.setPointerCapture(e.pointerId);
+      return;
+    }
 
     const imgEl = target.closest("[data-canvas-item]");
     const cam = cameraRef.current;
@@ -883,19 +1050,23 @@ export default function Canvas({
   const isMarquee = action?.type === "marquee";
   const isGroupDrag = action?.type === "group_drag";
 
-  const cursor = isHandTool
-    ? (isPanning ? "cursor-grabbing" : "cursor-grab")
-    : isShapeTool
-      ? "cursor-crosshair"
-      : isMarquee || action?.type === "shape_draw"
+  const spacePanHeld = spacePanHeldRef.current;
+  const cursor =
+    isHandTool || spacePanHeld
+      ? isPanning
+        ? "cursor-grabbing"
+        : "cursor-grab"
+      : isShapeTool
         ? "cursor-crosshair"
-        : isPanning
-          ? "cursor-grabbing"
-          : isDraggingText || isDragging || isGroupDrag
-            ? "cursor-move"
-            : isTextTool
-              ? "cursor-text"
-              : "cursor-default";
+        : isMarquee || action?.type === "shape_draw"
+          ? "cursor-crosshair"
+          : isPanning
+            ? "cursor-grabbing"
+            : isDraggingText || isDragging || isGroupDrag
+              ? "cursor-move"
+              : isTextTool
+                ? "cursor-text"
+                : "cursor-default";
 
   return (
     <div
@@ -943,7 +1114,7 @@ export default function Canvas({
               </svg>
             </div>
             <p className="text-sm text-text-tertiary opacity-40">在右侧面板输入提示词开始生成</p>
-            <p className="text-xs text-text-tertiary opacity-25 mt-1">拖拽平移 · 滚轮缩放 · 拖入图片 · 文字工具添加文案 · 右键菜单</p>
+            <p className="text-xs text-text-tertiary opacity-25 mt-1">中键或按住空格拖拽平移 · 滚轮缩放 · Ctrl+C / Ctrl+V · 拖入图片 · 文字工具 · 右键菜单</p>
           </div>
         )}
 

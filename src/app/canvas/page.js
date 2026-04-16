@@ -803,6 +803,24 @@ function HomeInner() {
     toast(`已添加 ${files.length} 张图片到画布`, "success");
   }, [canvasHistory, toast]);
 
+  /** 画布内复制后粘贴（Ctrl/Cmd+V），或与系统剪贴板图片合并 */
+  const handlePasteCanvasImages = useCallback(
+    (items) => {
+      if (!items?.length) return;
+      const ts = Date.now();
+      canvasHistory.push((prev) => [
+        ...prev,
+        ...items.map((it, i) => ({
+          id: `paste-${ts}-${i}`,
+          image_url: it.image_url,
+          prompt: (it.prompt && String(it.prompt).trim()) || "粘贴",
+        })),
+      ]);
+      toast(`已粘贴 ${items.length} 张图片`, "success", 1500);
+    },
+    [canvasHistory, toast]
+  );
+
   const handleRetry = useCallback((msg) => {
     setPrompt(msg.text);
     if (msg.params) setParamsClamped(msg.params);
@@ -943,6 +961,7 @@ function HomeInner() {
         onUpdateImage={handleUpdateImage}
         onSendToChat={handleSendToChat}
         onDropImages={handleDropImages}
+        onPasteImages={handlePasteCanvasImages}
         activeTool={activeTool}
         onToolChange={setActiveTool}
         zoom={zoom}

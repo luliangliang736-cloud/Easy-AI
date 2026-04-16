@@ -91,7 +91,7 @@ export default function Toolbar({
         className="px-1.5 h-8 rounded-lg flex items-center justify-center text-[11px] text-text-tertiary hover:text-text-primary hover:bg-bg-hover font-mono transition-all min-w-[42px]"
         title="重置缩放"
       >
-        {zoom}%
+        {Math.round(zoom)}%
       </button>
       <button
         onClick={() => onZoomChange((z) => Math.min(z + 10, 800))}
