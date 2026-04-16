@@ -5,6 +5,7 @@ import Link from "next/link";
 import Canvas from "@/components/Canvas";
 import ChatPanel from "@/components/ChatPanel";
 import HistoryPanel from "@/components/HistoryPanel";
+import TextEditBlocksPanel from "@/components/TextEditBlocksPanel";
 import { ToastProvider, useToast } from "@/components/Toast";
 import { compressImage } from "@/lib/imageUtils";
 import { useHistory } from "@/lib/useHistory";
@@ -113,6 +114,7 @@ const REQUEST_TIMEOUT_MS = 90000;
 const MAX_PARALLEL_GENERATIONS = 2;
 const STORAGE_VERSION = "9";
 const DEFAULT_CONVERSATION_TITLE = "新建对话";
+const TEXT_EDIT_ENABLED = false;
 
 function createConversation(overrides = {}) {
   const now = Date.now();
@@ -148,6 +150,46 @@ async function makeMessagePreviewImage(img) {
   }
 
   return img;
+}
+
+function detectRefImageMeta(src) {
+  return new Promise((resolve) => {
+    if (!src || typeof src !== "string") {
+      resolve({ ratio: "1:1", width: 0, height: 0, dimensionsLabel: "" });
+      return;
+    }
+
+    const img = new Image();
+    img.onload = () => {
+      const width = img.naturalWidth || img.width || 0;
+      const height = img.naturalHeight || img.height || 0;
+      const candidates = [
+        [1, 1], [16, 9], [9, 16], [4, 3], [3, 4],
+        [3, 2], [2, 3], [4, 5], [5, 4],
+        [21, 9], [1, 4], [4, 1], [8, 1], [1, 8],
+      ];
+      let ratio = "1:1";
+      let minDiff = Infinity;
+      const currentRatio = width > 0 && height > 0 ? width / height : 1;
+
+      for (const [w, h] of candidates) {
+        const diff = Math.abs(currentRatio - w / h);
+        if (diff < minDiff) {
+          minDiff = diff;
+          ratio = `${w}:${h}`;
+        }
+      }
+
+      resolve({
+        ratio,
+        width,
+        height,
+        dimensionsLabel: width > 0 && height > 0 ? `${width} × ${height}` : "",
+      });
+    };
+    img.onerror = () => resolve({ ratio: "1:1", width: 0, height: 0, dimensionsLabel: "" });
+    img.src = src;
+  });
 }
 
 function sanitizeMessagesForStorage(messages) {
@@ -272,6 +314,116 @@ const MODEL_LABELS = {
   "gemini-3-pro-image-preview-4k": "Pro 4K",
 };
 
+const UPSCALE_MODELS = {
+  flash: {
+    "1K": "gemini-2.5-flash-image-hd",
+    "2K": "gemini-3.1-flash-image-preview-2k",
+    "4K": "gemini-3.1-flash-image-preview-4k",
+  },
+  flash2: {
+    "1K": "gemini-3.1-flash-image-preview",
+    "2K": "gemini-3.1-flash-image-preview-2k",
+    "4K": "gemini-3.1-flash-image-preview-4k",
+  },
+  pro: {
+    "1K": "gemini-3-pro-image-preview",
+    "2K": "gemini-3-pro-image-preview-2k",
+    "4K": "gemini-3-pro-image-preview-4k",
+  },
+};
+
+function resolveUpscaleModel(currentModel, targetSize) {
+  const family = currentModel?.startsWith("gemini-3-pro-image-preview")
+    ? "pro"
+    : currentModel?.startsWith("gemini-3.1-flash-image-preview")
+      ? "flash2"
+      : "flash";
+  return UPSCALE_MODELS[family]?.[targetSize] || UPSCALE_MODELS.flash2[targetSize];
+}
+
+function normalizeTextEditBlocks(blocks = []) {
+  return (Array.isArray(blocks) ? blocks : [])
+    .filter((block) => block?.text)
+    .map((block, index) => {
+      const bbox = block.bbox
+        ? {
+            x: Number(block.bbox.x || 0),
+            y: Number(block.bbox.y || 0),
+            w: Number(block.bbox.w || 0),
+            h: Number(block.bbox.h || 0),
+          }
+        : null;
+      const quad = Array.isArray(block.quad) && block.quad.length >= 4
+        ? block.quad.map((point) => [Number(point?.[0] || 0), Number(point?.[1] || 0)])
+        : bbox
+          ? [
+              [bbox.x, bbox.y],
+              [bbox.x + bbox.w, bbox.y],
+              [bbox.x + bbox.w, bbox.y + bbox.h],
+              [bbox.x, bbox.y + bbox.h],
+            ]
+          : null;
+      return {
+        id: block.id || `ocr-${index}`,
+        text: String(block.text || "").trim(),
+        replacement: typeof block.replacement === "string" ? block.replacement : "",
+        enabled: block.enabled !== false,
+        bbox,
+        quad,
+        score: Number(block.score || 0),
+        angle: Number(block.angle || 0),
+        align: block.align || "center",
+        font_path: block.font_path || null,
+        font_size: block.font_size == null ? null : Number(block.font_size),
+        font_weight: block.font_weight || "auto",
+        style_name: block.style_name || "",
+        fill: Array.isArray(block.fill) ? block.fill.map((value) => Number(value || 0)) : null,
+        fill_confidence: Number(block.fill_confidence || 0),
+        stroke_fill: Array.isArray(block.stroke_fill) ? block.stroke_fill.map((value) => Number(value || 0)) : null,
+        stroke_confidence: Number(block.stroke_confidence || 0),
+        stroke_width: Number(block.stroke_width || 0),
+        shadow_fill: Array.isArray(block.shadow_fill) ? block.shadow_fill.map((value) => Number(value || 0)) : null,
+        shadow_offset: Array.isArray(block.shadow_offset) ? block.shadow_offset.map((value) => Number(value || 0)) : null,
+        line_boxes: Array.isArray(block.line_boxes) ? block.line_boxes : null,
+        line_spacing: block.line_spacing == null ? null : Number(block.line_spacing),
+        char_spacing: block.char_spacing == null ? null : Number(block.char_spacing),
+        mask_box: block.mask_box || null,
+        notes: block.notes || "",
+      };
+    })
+    .filter((block) => block.text);
+}
+
+function getActiveTextReplacements(blocks = []) {
+  return normalizeTextEditBlocks(blocks).filter((block) => {
+    const replacement = String(block.replacement || "").trim();
+    return block.enabled && replacement && replacement !== block.text;
+  });
+}
+
+function buildTextEditPrompt(baseText, blocks = []) {
+  const replacements = getActiveTextReplacements(blocks);
+  if (replacements.length === 0) {
+    return String(baseText || "").trim();
+  }
+
+  const header = String(baseText || "").trim()
+    || "请编辑这张图中的文字，保留原有版式、字体风格、字号关系、颜色关系和整体视觉效果，只替换指定文案。";
+  const instructions = replacements
+    .map((block, index) => `${index + 1}. 将「${block.text}」替换为「${String(block.replacement).trim()}」`)
+    .join("\n");
+
+  return `${header}
+
+已识别文字替换清单：
+${instructions}
+
+要求：
+1. 仅修改以上指定文字，其它图形、背景、人物、装饰不要改动。
+2. 尽量保持原有排版、对齐、字号层级、颜色风格与视觉权重。
+3. 如果某段文字是多行排版，请继续保持合理换行。`;
+}
+
 function HomeInner() {
   const toast = useToast();
   const { theme, toggleTheme } = useTheme("dark");
@@ -281,6 +433,8 @@ function HomeInner() {
   const [zoom, setZoom] = useState(100);
   const [prompt, setPrompt] = useState("");
   const [refImages, setRefImages] = useState([]);
+  const [textEditBlocks, setTextEditBlocks] = useState([]);
+  const [textEditPanelVisible, setTextEditPanelVisible] = useState(false);
   const [params, setParams] = useState({
     model: "gemini-3.1-flash-image-preview-512",
     image_size: "1:1",
@@ -306,7 +460,9 @@ function HomeInner() {
   const canvasShapesHistory = useHistory([]);
   const canvasShapes = canvasShapesHistory.state;
   const [selectedImage, setSelectedImage] = useState(null);
+  const [selectedImageRect, setSelectedImageRect] = useState(null);
   const [isGenerating, setIsGenerating] = useState(false);
+  const [isTextEditing, setIsTextEditing] = useState(false);
   const [panelWidth, setPanelWidth] = useState(340);
   const [historyCollapsed, setHistoryCollapsed] = useState(true);
   const [historySearch, setHistorySearch] = useState("");
@@ -315,6 +471,26 @@ function HomeInner() {
   const activeGenerationRef = useRef(null);
   const activeConversation = conversations.find((conversation) => conversation.id === activeConversationId) || conversations[0];
   const messages = activeConversation?.messages || [];
+  const isBusy = isGenerating || isTextEditing;
+  const canSubmit = Boolean(String(prompt || "").trim() || getActiveTextReplacements(textEditBlocks).length > 0);
+  const viewportWidth = typeof window !== "undefined" ? window.innerWidth : 0;
+  const viewportHeight = typeof window !== "undefined" ? window.innerHeight : 0;
+  const floatingTextPanelWidth = 280;
+  const floatingTextPanelStyle = TEXT_EDIT_ENABLED && selectedImageRect && textEditPanelVisible && textEditBlocks.length > 0
+    ? (() => {
+        const gap = 16;
+        const canvasRightLimit = Math.max(24, viewportWidth - panelWidth - 24);
+        let left = selectedImageRect.right + gap;
+        if (left + floatingTextPanelWidth > canvasRightLimit) {
+          left = Math.max(24, selectedImageRect.left - floatingTextPanelWidth - gap);
+        }
+        const top = Math.min(
+          Math.max(88, selectedImageRect.top + 4),
+          Math.max(88, viewportHeight - 420)
+        );
+        return { left, top, width: floatingTextPanelWidth };
+      })()
+    : null;
   const historyMessages = conversations.flatMap((conversation) =>
     (conversation.messages || []).map((message) => ({
       ...message,
@@ -403,6 +579,39 @@ function HomeInner() {
       localStorage.removeItem("lovart-active-conversation");
     }
   }, [activeConversationId, conversations]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const firstRefImage = refImages?.[0];
+
+    if (!firstRefImage) {
+      setParamsClamped((prev) => ({
+        ...prev,
+        _autoRatio: undefined,
+        _autoDimensions: undefined,
+      }));
+      return undefined;
+    }
+
+    void detectRefImageMeta(firstRefImage).then((meta) => {
+      if (cancelled) return;
+      setParamsClamped((prev) => ({
+        ...prev,
+        image_size: "auto",
+        _autoRatio: meta.ratio,
+        _autoDimensions: meta.dimensionsLabel || undefined,
+      }));
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [refImages, setParamsClamped]);
+
+  useEffect(() => {
+    if ((refImages?.length || 0) > 0) return;
+    setTextEditBlocks([]);
+  }, [refImages]);
 
   // Persist canvas images
   useEffect(() => {
@@ -498,6 +707,8 @@ function HomeInner() {
   const resetComposer = useCallback(() => {
     setPrompt("");
     setRefImages([]);
+    setTextEditBlocks([]);
+    setTextEditPanelVisible(false);
     setShowParams(false);
     setSelectedImage(null);
     canvasSelectionUrlsRef.current = [];
@@ -505,10 +716,15 @@ function HomeInner() {
 
   const handleGenerate = useCallback(async (retryPayload = null) => {
     const sourceText = retryPayload?.text ?? prompt;
-    const text = String(sourceText || "").trim();
+    const effectiveTextEditBlocks = retryPayload?.textEditBlocks || textEditBlocks;
+    const composerText = String(sourceText || "").trim();
+    const text = buildTextEditPrompt(composerText, effectiveTextEditBlocks);
     const effectiveParams = retryPayload?.params || params;
     const effectiveRefImages = retryPayload?.refImages || refImages;
-    if (!text || isGenerating || !activeConversationId) return;
+    const preserveComposer = Boolean(retryPayload?.preserveComposer);
+    const hidePlaceholderPrompt = Boolean(retryPayload?.hidePlaceholderPrompt);
+    const editMode = retryPayload?.editMode || null;
+    if (!text || isBusy || !activeConversationId) return;
 
     const ts = Date.now();
     const conversationId = activeConversationId;
@@ -521,21 +737,23 @@ function HomeInner() {
       ? await Promise.all(effectiveRefImages.map((img) => makeMessagePreviewImage(img)))
       : [];
 
-    const inferred = inferLoopCountFromPrompt(text);
+    const inferred = inferLoopCountFromPrompt(composerText);
     const count = Math.min(
       Math.max(Math.max(effectiveParams.num || 1, inferred), 1),
       MAX_GEN_COUNT
     );
-    const variantDescriptors = getVariantDescriptors(text, count);
+    const variantDescriptors = getVariantDescriptors(composerText || text, count);
     const genParams = { ...effectiveParams, num: count };
+    const displayText = composerText || "请按识别到的文本替换规则编辑图片中的文字";
 
     const userMsg = {
       id: userMsgId,
       role: "user",
-      text,
+      text: displayText,
       params: genParams,
       modelLabel,
       refImages: messageRefImages,
+      textEditBlocks: effectiveTextEditBlocks,
     };
     const tasks = Array.from({ length: count }, (_, i) => ({
       id: `${aiMsgId}-task-${i}`,
@@ -547,7 +765,7 @@ function HomeInner() {
     const aiMsg = {
       id: aiMsgId,
       role: "assistant",
-      text,
+      text: displayText,
       params: genParams,
       modelLabel,
       status: "generating",
@@ -558,7 +776,9 @@ function HomeInner() {
 
     updateConversationMessages(conversationId, (prev) => [...prev, userMsg, aiMsg]);
     setIsGenerating(true);
-    setPrompt("");
+    if (!preserveComposer) {
+      setPrompt("");
+    }
 
     try {
       const requestController = new AbortController();
@@ -600,7 +820,8 @@ function HomeInner() {
           taskId: task.id,
           slotIndex: task.index,
           totalCount: count,
-          prompt: text,
+          prompt: displayText,
+          hidePromptText: hidePlaceholderPrompt,
           isGeneratingPlaceholder: true,
           generationStatus: "pending",
           placeholderAspectRatio,
@@ -649,6 +870,7 @@ function HomeInner() {
                   model: effectiveParams.model,
                   image_size: imageSize,
                   num: 1,
+                  mode: editMode,
                 }),
               });
             } else {
@@ -711,7 +933,7 @@ function HomeInner() {
               {
                 id: canvasItemId,
                 image_url: url,
-                prompt: text,
+                prompt: displayText,
               },
             ]);
             return { status: "completed" };
@@ -772,7 +994,9 @@ function HomeInner() {
         );
       }
 
-      setRefImages([]);
+      if (!preserveComposer) {
+        setRefImages([]);
+      }
     } catch (err) {
       if (
         activeGenerationRef.current?.conversationId === conversationId &&
@@ -815,10 +1039,11 @@ function HomeInner() {
     }
   }, [
     prompt,
-    isGenerating,
+    isBusy,
     activeConversationId,
     params,
     refImages,
+    textEditBlocks,
     updateMessage,
     updateConversationMessages,
     patchTask,
@@ -876,6 +1101,293 @@ function HomeInner() {
     }
   }, [toast]);
 
+  const handleTextEditBlocksChange = useCallback((next) => {
+    setTextEditBlocks((prev) => {
+      const resolved = typeof next === "function" ? next(prev) : next;
+      return normalizeTextEditBlocks(resolved);
+    });
+  }, []);
+
+  const handleCancelTextEditPanel = useCallback(() => {
+    setTextEditBlocks([]);
+    setTextEditPanelVisible(false);
+    toast("已取消文字编辑", "info", 1200);
+  }, [toast]);
+
+  const handleApplyTextEditPanel = useCallback(async (nextBlocks) => {
+    const normalizedBlocks = normalizeTextEditBlocks(nextBlocks);
+    const activeReplacements = getActiveTextReplacements(normalizedBlocks);
+    if (activeReplacements.length === 0) {
+      toast("请至少填写一条要替换的文案", "info", 1500);
+      return;
+    }
+    if (isBusy) {
+      toast("当前有任务进行中，请稍候再试", "info", 1500);
+      return;
+    }
+    if (!activeConversationId) {
+      toast("当前没有可用对话", "info", 1500);
+      return;
+    }
+
+    const sourceImage = selectedImage?.image_url || refImages[0];
+    if (!sourceImage) {
+      toast("未找到要编辑的参考图", "info", 1500);
+      return;
+    }
+
+    const displayText = String(prompt || "").trim() || "请替换这张图中的指定文字，并保持原尺寸、原版式与原视觉风格。";
+    const ts = Date.now();
+    const conversationId = activeConversationId;
+    const userMsgId = `user-text-edit-${ts}`;
+    const aiMsgId = `ai-text-edit-${ts}`;
+    let previewImage = sourceImage;
+    try {
+      previewImage = await makeMessagePreviewImage(sourceImage);
+    } catch {
+      previewImage = sourceImage;
+    }
+    const sharedParams = {
+      model: "python-text-edit",
+      image_size: "原尺寸",
+      num: 1,
+    };
+    const userMsg = {
+      id: userMsgId,
+      role: "user",
+      text: displayText,
+      params: sharedParams,
+      modelLabel: "Python Text Edit",
+      refImages: previewImage ? [previewImage] : [],
+      textEditBlocks: normalizedBlocks,
+    };
+    const aiMsg = {
+      id: aiMsgId,
+      role: "assistant",
+      text: "本地文字替换结果",
+      params: sharedParams,
+      modelLabel: "Python Text Edit",
+      status: "generating",
+      urls: [],
+      error: null,
+    };
+
+    setTextEditBlocks(normalizedBlocks);
+    setTextEditPanelVisible(false);
+    updateConversationMessages(conversationId, (prev) => [...prev, userMsg, aiMsg]);
+    setIsTextEditing(true);
+
+    try {
+      const res = await fetchWithTimeout("/api/text-edit", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          image: sourceImage,
+          blocks: normalizedBlocks,
+          lang: "en",
+        }),
+      }, 10 * 60 * 1000);
+      const data = await parseApiResponse(res);
+      if (!res.ok || data.error) {
+        throw new Error(errStr(data.error || `文字替换失败（${res.status}）`));
+      }
+
+      const urls = Array.isArray(data.data?.urls) ? data.data.urls.filter(Boolean) : [];
+      if (urls.length === 0) {
+        throw new Error("文字替换未返回结果图片");
+      }
+
+      updateMessage(conversationId, aiMsgId, {
+        status: "completed",
+        urls,
+        error: null,
+      });
+
+      canvasHistory.push((prev) => [
+        ...prev,
+        ...urls.map((url, index) => ({
+          id: `${aiMsgId}-${index}`,
+          image_url: url,
+          prompt: displayText,
+        })),
+      ]);
+      toast(`文字替换完成，${urls.length} 张结果已添加到画布`, "success", 2200);
+    } catch (err) {
+      updateMessage(conversationId, aiMsgId, {
+        status: "failed",
+        error: errStr(err),
+      });
+      toast(errStr(err) || "文字替换失败", "info", 2200);
+    } finally {
+      setIsTextEditing(false);
+    }
+  }, [
+    activeConversationId,
+    canvasHistory,
+    isBusy,
+    prompt,
+    refImages,
+    selectedImage,
+    toast,
+    updateConversationMessages,
+    updateMessage,
+  ]);
+
+  const handleSelectedImageRectChange = useCallback((nextRect) => {
+    setSelectedImageRect((prev) => {
+      if (!nextRect && !prev) return prev;
+      if (!nextRect) return null;
+      if (
+        prev
+        && prev.left === nextRect.left
+        && prev.top === nextRect.top
+        && prev.right === nextRect.right
+        && prev.bottom === nextRect.bottom
+        && prev.width === nextRect.width
+        && prev.height === nextRect.height
+      ) {
+        return prev;
+      }
+      return nextRect;
+    });
+  }, []);
+
+  const handleQuickEditImage = useCallback(async (actionId, img) => {
+    if (!img?.image_url) return;
+
+    if (actionId === "cutout") {
+      if (isBusy) {
+        toast("当前有任务进行中，请稍候再试", "info", 1500);
+        return;
+      }
+
+      const meta = await detectRefImageMeta(img.image_url);
+      setSelectedImage(img);
+      setTextEditBlocks([]);
+      setTextEditPanelVisible(false);
+      await handleGenerate({
+        text: "请基于这张参考图进行专业抠图，完整保留主体，去除背景，输出干净透明背景效果，不要改变主体造型与细节，不要新增元素。",
+        params: {
+          ...params,
+          image_size: "auto",
+          _autoRatio: meta.ratio,
+          _autoDimensions: meta.dimensionsLabel || undefined,
+          num: 1,
+        },
+        refImages: [img.image_url],
+        preserveComposer: true,
+        hidePlaceholderPrompt: true,
+        editMode: "cutout",
+      });
+      return;
+    }
+
+    if (actionId === "editText") {
+      if (!TEXT_EDIT_ENABLED) {
+        setTextEditBlocks([]);
+        setTextEditPanelVisible(false);
+        toast("编辑文字功能已暂时停用", "info", 1800);
+        return;
+      }
+      if (isBusy) {
+        toast("当前有任务进行中，请稍候再试", "info", 1500);
+        return;
+      }
+      setSelectedImage(img);
+      setRefImages((prev) => {
+        if (prev.includes(img.image_url)) return prev;
+        return [...prev, img.image_url];
+      });
+      toast("正在识别图片文字...", "info", 1200);
+
+      try {
+        const res = await fetchWithTimeout("/api/ocr", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ image: img.image_url }),
+        }, 120000);
+        const data = await parseApiResponse(res);
+        if (!res.ok || data.error) {
+          throw new Error(errStr(data.error || `OCR 请求失败（${res.status}）`));
+        }
+
+        const blocks = Array.isArray(data.data?.blocks) ? data.data.blocks : [];
+        const normalizedBlocks = normalizeTextEditBlocks(
+          blocks.map((block) => ({
+            ...block,
+            replacement: "",
+            enabled: true,
+          }))
+        );
+        const recognizedLines = blocks
+          .map((block, index) => `${index + 1}. ${block.text}`)
+          .slice(0, 20);
+        setTextEditBlocks(normalizedBlocks);
+        setTextEditPanelVisible(normalizedBlocks.length > 0);
+
+        const nextPrompt = recognizedLines.length > 0
+          ? "请基于这张参考图编辑其中的文字，保留原有版式、层级、字体风格、颜色关系与视觉效果，只替换我指定的文案内容。"
+          : "请基于这张参考图编辑其中的文字，保留原有版式与视觉风格，只修改文字相关内容。当前未识别到明确文字，请按图片内容继续编辑。";
+
+        setPrompt(nextPrompt);
+        toast(
+          recognizedLines.length > 0
+            ? `已识别 ${recognizedLines.length} 段文字`
+            : "未识别到明确文字，已填入通用编辑指令",
+          "success",
+          1800
+        );
+      } catch (err) {
+        setTextEditBlocks([]);
+        setTextEditPanelVisible(false);
+        setPrompt("请基于这张参考图编辑其中的文字，保留原有版式与视觉风格，只修改文字相关内容。");
+        toast(errStr(err) || "文字识别失败，已回退到通用编辑指令", "info", 2200);
+      }
+      return;
+    }
+
+    const promptMap = {
+    };
+    const nextPrompt = promptMap[actionId];
+    if (!nextPrompt) return;
+
+    setRefImages((prev) => {
+      if (prev.includes(img.image_url)) return prev;
+      return [...prev, img.image_url];
+    });
+    setTextEditBlocks([]);
+    setTextEditPanelVisible(false);
+    setSelectedImage(img);
+    setPrompt(nextPrompt);
+    toast("已填入快捷编辑指令", "success", 1500);
+  }, [handleGenerate, isBusy, params, toast]);
+
+  const handleQuickUpscaleImage = useCallback(async (targetSize, img) => {
+    if (!img?.image_url || !targetSize) return;
+    if (isBusy) {
+      toast("当前有任务进行中，请稍候再试", "info", 1500);
+      return;
+    }
+
+    const meta = await detectRefImageMeta(img.image_url);
+    const model = resolveUpscaleModel(params.model, targetSize);
+    setTextEditBlocks([]);
+    setTextEditPanelVisible(false);
+    await handleGenerate({
+      text: `请基于这张参考图做高清放大与细节增强，直接输出 ${targetSize} 高分辨率版本，保持主体、构图、文字内容与风格一致，不要改图，不要新增元素。`,
+      params: {
+        ...params,
+        model,
+        image_size: "auto",
+        _autoRatio: meta.ratio,
+        _autoDimensions: meta.dimensionsLabel || undefined,
+        num: 1,
+      },
+      refImages: [img.image_url],
+      preserveComposer: true,
+    });
+  }, [handleGenerate, isBusy, params, toast]);
+
   const handleUpdateImage = useCallback(() => {}, []);
 
   /** 由画布选中同步到右侧参考图的 URL 列表（单选 / 框选多图） */
@@ -886,6 +1398,7 @@ function HomeInner() {
       const toRemove = [...canvasSelectionUrlsRef.current];
       canvasSelectionUrlsRef.current = [];
       setSelectedImage(null);
+      setTextEditPanelVisible(false);
       setRefImages((prev) =>
         prev.filter((u) => !toRemove.includes(u))
       );
@@ -911,6 +1424,7 @@ function HomeInner() {
     if (list.length < 2) return;
     const prevCanvasUrls = [...canvasSelectionUrlsRef.current];
     canvasSelectionUrlsRef.current = [...list];
+    setTextEditPanelVisible(false);
     setRefImages((prev) => {
       const withoutCanvas = prev.filter((u) => !prevCanvasUrls.includes(u));
       const merged = [...withoutCanvas];
@@ -979,6 +1493,7 @@ function HomeInner() {
     const retryText = msg.text?.trim() || previousUserMessage?.text?.trim() || "";
     const retryParams = msg.params || previousUserMessage?.params || params;
     const retryRefImages = previousUserMessage?.refImages || [];
+    const retryTextEditBlocks = previousUserMessage?.textEditBlocks || [];
 
     if (!retryText) {
       toast("未找到可重试的提示词", "info", 1500);
@@ -988,6 +1503,7 @@ function HomeInner() {
     setPrompt(retryText);
     setParamsClamped(retryParams);
     setRefImages(retryRefImages);
+    setTextEditBlocks(normalizeTextEditBlocks(retryTextEditBlocks));
   }, [messages, params, setParamsClamped, toast]);
 
   const handleDownload = useCallback(async (msg) => {
@@ -1019,6 +1535,7 @@ function HomeInner() {
     }
     if (msg.text) setPrompt(msg.text);
     if (msg.params) setParamsClamped(msg.params);
+    setTextEditBlocks(normalizeTextEditBlocks(msg.textEditBlocks || []));
     toast("已载入历史提示词", "info", 1200);
   }, [toast, setParamsClamped]);
 
@@ -1035,7 +1552,7 @@ function HomeInner() {
   }, [toast]);
 
   const handleNewConversation = useCallback(() => {
-    if (isGenerating) {
+    if (isBusy) {
       toast("生成过程中暂时不能切换对话", "info", 1500);
       return;
     }
@@ -1043,19 +1560,19 @@ function HomeInner() {
     setConversations((prev) => [nextConversation, ...prev]);
     setActiveConversationId(nextConversation.id);
     resetComposer();
-  }, [isGenerating, resetComposer, toast]);
+  }, [isBusy, resetComposer, toast]);
 
   const handleSelectConversation = useCallback((conversationId) => {
-    if (isGenerating) {
+    if (isBusy) {
       toast("生成过程中暂时不能切换对话", "info", 1500);
       return;
     }
     setActiveConversationId(conversationId);
     resetComposer();
-  }, [isGenerating, resetComposer, toast]);
+  }, [isBusy, resetComposer, toast]);
 
   const handleDeleteConversation = useCallback((conversationId) => {
-    if (isGenerating) {
+    if (isBusy) {
       toast("生成过程中暂时不能删除对话", "info", 1500);
       return;
     }
@@ -1077,10 +1594,10 @@ function HomeInner() {
     });
 
     toast("对话已删除", "info", 1200);
-  }, [activeConversationId, isGenerating, resetComposer, toast]);
+  }, [activeConversationId, isBusy, resetComposer, toast]);
 
   const handleDeleteMessage = useCallback((messageId) => {
-    if (isGenerating) {
+    if (isBusy) {
       toast("生成过程中暂时不能删除记录", "info", 1500);
       return;
     }
@@ -1090,7 +1607,7 @@ function HomeInner() {
 
     updateConversationMessages(activeConversationId, (prev) => prev.filter((message) => message.id !== messageId));
     toast("记录已删除", "info", 1200);
-  }, [activeConversationId, isGenerating, toast, updateConversationMessages]);
+  }, [activeConversationId, isBusy, toast, updateConversationMessages]);
 
   const historyWidth = historyCollapsed ? 40 : 220;
 
@@ -1125,6 +1642,8 @@ function HomeInner() {
         onDeleteImage={handleDeleteImage}
         onUpdateImage={handleUpdateImage}
         onSendToChat={handleSendToChat}
+        onQuickEditImage={handleQuickEditImage}
+        onQuickUpscaleImage={handleQuickUpscaleImage}
         onDropImages={handleDropImages}
         onDropGeneratedImage={handleDropGeneratedImage}
         onPasteImages={handlePasteCanvasImages}
@@ -1143,7 +1662,25 @@ function HomeInner() {
         shapeMode={shapeMode}
         onShapeModeChange={setShapeMode}
         onSyncCanvasRefImages={handleSyncCanvasRefImages}
+        onSelectedImageRectChange={handleSelectedImageRectChange}
       />
+      {TEXT_EDIT_ENABLED && floatingTextPanelStyle && (
+        <div
+          className="fixed z-30"
+          style={floatingTextPanelStyle}
+        >
+          <TextEditBlocksPanel
+            blocks={textEditBlocks}
+            onChange={handleTextEditBlocksChange}
+            onCancel={handleCancelTextEditPanel}
+            onApply={handleApplyTextEditPanel}
+            title="编辑文字"
+            subtitle="填写替换内容后，可直接取消或立即发送修改"
+            applyLabel="立即使用"
+            isApplying={isTextEditing}
+          />
+        </div>
+      )}
       <ChatPanel
         conversations={conversations}
         activeConversationId={activeConversationId}
@@ -1155,13 +1692,17 @@ function HomeInner() {
         prompt={prompt}
         onPromptChange={setPrompt}
         onSubmit={handleGenerate}
-        isGenerating={isGenerating}
+        canSubmit={canSubmit}
+        isGenerating={isBusy}
         params={params}
         onParamsChange={setParamsClamped}
         showParams={showParams}
         onToggleParams={() => setShowParams(!showParams)}
         refImages={refImages}
         onRefImagesChange={setRefImages}
+        textEditBlocks={textEditBlocks}
+        onTextEditBlocksChange={handleTextEditBlocksChange}
+        showTextEditPanelInline={false}
         onRetry={handleRetry}
         onDownload={handleDownload}
         onImageClick={handleImageClick}

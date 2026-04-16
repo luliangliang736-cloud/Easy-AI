@@ -25,6 +25,7 @@ export async function POST(request) {
       model: model || "gemini-3.1-flash-image-preview",
       image_size: image_size || "1:1",
       num: Math.min(Math.max(num || 1, 1), MAX_GEN_COUNT),
+      service_tier: "priority",
     };
 
     if (ref_images?.length) {

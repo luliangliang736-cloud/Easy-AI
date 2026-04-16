@@ -7,7 +7,7 @@ import {
 import {
   Maximize2, Download, Trash2, Copy,
   MessageSquare, Lock, Unlock, FileDown, Image as ImageIcon,
-  Minus, Plus,
+  Minus, Plus, Scissors, Type,
 } from "lucide-react";
 import { flushSync } from "react-dom";
 import { useToast } from "@/components/Toast";
@@ -51,6 +51,24 @@ function blobToDataUrl(blob) {
 /** 世界坐标 AABB 相交（含贴边） */
 function worldRectsOverlap(ax, ay, aw, ah, bx, by, bw, bh) {
   return !(ax + aw < bx || bx + bw < ax || ay + ah < by || by + bh < ay);
+}
+
+function getCanvasImageHeight(img, pos, meta) {
+  if (!img || !pos) return 0;
+  if (img.isGeneratingPlaceholder) {
+    const ratio = img.placeholderAspectRatio || 1;
+    return Math.max(160, Math.round(pos.w / ratio));
+  }
+  return meta ? (pos.w * meta.height) / meta.width : pos.w;
+}
+
+function getUpscalePreviewSize(meta, targetLongSide) {
+  if (!meta?.width || !meta?.height || !targetLongSide) return "";
+  const aspect = meta.width / meta.height;
+  if (aspect >= 1) {
+    return `${targetLongSide}×${Math.round(targetLongSide / aspect)}`;
+  }
+  return `${Math.round(targetLongSide * aspect)}×${targetLongSide}`;
 }
 
 function ContextMenu({ x, y, img, isLocked, onClose, onAction }) {
@@ -113,7 +131,7 @@ function ContextMenu({ x, y, img, isLocked, onClose, onAction }) {
 
 export default function Canvas({
   images, selectedImage, onSelectImage, onDeleteImage,
-  onUpdateImage, onSendToChat, onDropImages, onDropGeneratedImage, onPasteImages,
+  onUpdateImage, onSendToChat, onQuickEditImage, onQuickUpscaleImage, onDropImages, onDropGeneratedImage, onPasteImages,
   activeTool, onToolChange, zoom, onZoomChange,
   ref,
   generatingItems = [],
@@ -128,6 +146,7 @@ export default function Canvas({
   shapeMode = "rect",
   onShapeModeChange,
   onSyncCanvasRefImages,
+  onSelectedImageRectChange,
 }) {
   const toast = useToast();
   const containerRef = useRef(null);
@@ -141,6 +160,7 @@ export default function Canvas({
   const actionRef = useRef(null);
   const [, forceRender] = useReducer((c) => c + 1, 0);
   const [contextMenu, setContextMenu] = useState(null);
+  const [upscaleMenuFor, setUpscaleMenuFor] = useState(null);
   const lockedRef = useRef(new Set());
   const [fileDragOver, setFileDragOver] = useState(false);
   const [selectedTextId, setSelectedTextId] = useState(null);
@@ -331,6 +351,44 @@ export default function Canvas({
     return () => window.removeEventListener("keydown", handleKey);
   }, [activeTool, selectedImage, selectedTextId, selectedShapeId, multiSelectedImageIds, multiSelectedTextIds, onDeleteImage, onDeleteText, onDeleteShape, onSelectImage]);
 
+  useEffect(() => {
+    if (!onSelectedImageRectChange) return;
+    if (!selectedImage?.id) {
+      onSelectedImageRectChange(null);
+      return;
+    }
+
+    const selector = `[data-canvas-item="${String(selectedImage.id).replace(/"/g, '\\"')}"]`;
+    const el = containerRef.current?.querySelector(selector);
+    if (!el) {
+      onSelectedImageRectChange(null);
+      return;
+    }
+
+    const rect = el.getBoundingClientRect();
+    onSelectedImageRectChange({
+      left: Math.round(rect.left),
+      top: Math.round(rect.top),
+      right: Math.round(rect.right),
+      bottom: Math.round(rect.bottom),
+      width: Math.round(rect.width),
+      height: Math.round(rect.height),
+    });
+  });
+
+  useEffect(() => {
+    if (!upscaleMenuFor) return undefined;
+    const handlePointerDown = (event) => {
+      const target = event.target;
+      if (target?.closest?.("[data-upscale-menu]") || target?.closest?.("[data-upscale-trigger]")) {
+        return;
+      }
+      setUpscaleMenuFor(null);
+    };
+    window.addEventListener("pointerdown", handlePointerDown);
+    return () => window.removeEventListener("pointerdown", handlePointerDown);
+  }, [upscaleMenuFor]);
+
   /** 空格按住：可左键拖拽平移画布（输入框内不抢占空格） */
   useEffect(() => {
     const typing = () => {
@@ -434,6 +492,16 @@ export default function Canvas({
   const isTextTool = activeTool === "text";
   const isSelectTool = activeTool === "select";
   const isShapeTool = activeTool === "shape";
+  const quickEditActions = [
+    { id: "cutout", label: "抠图", icon: Scissors },
+    { id: "upscale", label: "高清放大", icon: Maximize2 },
+    { id: "editText", label: "编辑文字", icon: Type, disabled: true },
+  ];
+  const upscaleOptions = [
+    { id: "1K", edge: 1024 },
+    { id: "2K", edge: 2048 },
+    { id: "4K", edge: 4096 },
+  ];
 
   const copyCanvasImages = useCallback(async () => {
     const ids =
@@ -651,6 +719,7 @@ export default function Canvas({
     if (e.button === 1) return;
     if (e.target.closest("[data-toolbar]")) return;
     setContextMenu(null);
+    setUpscaleMenuFor(null);
     const target = e.target;
     if (target.closest?.("[data-text-editor]")) return;
 
@@ -725,6 +794,28 @@ export default function Canvas({
       const pos = positionsRef.current[id];
       if (!pos) return;
       const img = images.find((i) => i.id === id);
+      if (isSelectTool && e.shiftKey) {
+        const baseIds = multiSelectedImageIds.length > 0
+          ? multiSelectedImageIds
+          : selectedImage?.id
+            ? [selectedImage.id]
+            : [];
+        const nextIds = baseIds.includes(id) ? baseIds : [...baseIds, id];
+        const nextUrls = nextIds
+          .map((iid) => images.find((item) => item.id === iid)?.image_url)
+          .filter(Boolean);
+        setSelectedTextId(null);
+        setMultiSelectedTextIds([]);
+        if (nextIds.length <= 1 && img) {
+          setMultiSelectedImageIds([]);
+          onSelectImage(img);
+        } else {
+          setMultiSelectedImageIds(nextIds);
+          onSelectImage(null);
+          onSyncCanvasRefImages?.(nextUrls);
+        }
+        return;
+      }
       const totalMulti = multiSelectedImageIds.length + multiSelectedTextIds.length;
       const inMulti =
         multiSelectedImageIds.includes(id) || multiSelectedTextIds.includes(id);
@@ -815,7 +906,7 @@ export default function Canvas({
     setAction("pan");
     e.currentTarget.setPointerCapture(e.pointerId);
   }, [
-    images, onSelectImage, isHandTool, isTextTool, isSelectTool, isShapeTool, onAddText,
+    images, selectedImage, onSelectImage, isHandTool, isTextTool, isSelectTool, isShapeTool, onAddText,
     multiSelectedImageIds, multiSelectedTextIds, textItems,
     shapeItems, shapeMode,
   ]);
@@ -915,11 +1006,11 @@ export default function Canvas({
       } else {
         setSelectedShapeId(null);
         const hitsImg = [];
-        images.forEach((im) => {
+        renderImages.forEach((im) => {
           const p = positionsRef.current[im.id];
           if (!p) return;
           const meta = imageMetaRef.current[im.id];
-          const ih = meta ? (p.w * meta.height) / meta.width : p.w;
+          const ih = getCanvasImageHeight(im, p, meta);
           if (worldRectsOverlap(p.x, p.y, p.w, ih, mx1, my1, mw, mh)) {
             hitsImg.push(im.id);
           }
@@ -958,11 +1049,17 @@ export default function Canvas({
         const totalHits = hitsImg.length + hitsTx.length;
         if (totalHits === 1) {
           if (hitsImg.length === 1) {
-            const one = images.find((im) => im.id === hitsImg[0]);
-            if (one) onSelectImage?.(one);
+            const one = renderImages.find((im) => im.id === hitsImg[0]);
+            if (one?.isGeneratingPlaceholder) {
+              onSelectImage?.(null);
+              setMultiSelectedImageIds([one.id]);
+              setMultiSelectedTextIds([]);
+            } else if (one) {
+              onSelectImage?.(one);
+              setMultiSelectedImageIds([]);
+              setMultiSelectedTextIds([]);
+            }
             setSelectedTextId(null);
-            setMultiSelectedImageIds([]);
-            setMultiSelectedTextIds([]);
           } else if (hitsTx.length === 1) {
             onSelectImage?.(null);
             setSelectedTextId(hitsTx[0]);
@@ -988,7 +1085,7 @@ export default function Canvas({
     }
     setAction(null);
     try { e.currentTarget.releasePointerCapture(e.pointerId); } catch {}
-  }, [onUpdateImage, onSelectImage, onAddShape, onSyncCanvasRefImages, images]);
+  }, [onUpdateImage, onSelectImage, onAddShape, onSyncCanvasRefImages, images, renderImages]);
 
   const handleContextMenu = useCallback((e) => {
     e.preventDefault();
@@ -1205,9 +1302,9 @@ export default function Canvas({
           const pos = positionsRef.current[img.id];
           if (!pos) return null;
           if (img.isGeneratingPlaceholder) {
-            const placeholderRatio = img.placeholderAspectRatio || 1;
-            const placeholderHeight = Math.max(160, Math.round(pos.w / placeholderRatio));
+            const placeholderHeight = getCanvasImageHeight(img, pos);
             const isRunning = img.generationStatus === "generating";
+            const isHighlighted = multiSelectedImageIds.includes(img.id);
             return (
               <div
                 key={img.id}
@@ -1216,7 +1313,9 @@ export default function Canvas({
                 style={{ left: pos.x, top: pos.y, width: pos.w }}
               >
                 <div
-                  className="rounded-xl overflow-hidden border border-border-primary bg-bg-secondary/80 hover:border-border-secondary transition-colors"
+                  className={`rounded-xl overflow-hidden border-2 bg-bg-secondary/80 transition-colors ${
+                    isHighlighted ? "border-accent" : "border-border-primary hover:border-border-secondary"
+                  }`}
                   style={{ height: placeholderHeight }}
                 >
                   <div
@@ -1232,9 +1331,11 @@ export default function Canvas({
                       <p className="text-xs text-text-primary font-medium">
                         {isRunning ? "生成中" : "等待中"}
                       </p>
-                      <p className="text-[10px] text-text-tertiary mt-1">
-                        {img.prompt || "正在准备生成"}
-                      </p>
+                      {!img.hidePromptText && (
+                        <p className="text-[10px] text-text-tertiary mt-1">
+                          {img.prompt || "正在准备生成"}
+                        </p>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -1263,13 +1364,87 @@ export default function Canvas({
               style={{ left: pos.x, top: pos.y, width: pos.w }}
             >
               {isChromeSingle && (
-                <div className="absolute -top-6 left-0 right-0 flex items-center justify-between text-[10px] text-accent pointer-events-none z-10">
-                  <div className="flex items-center gap-1.5 px-1.5 py-0.5 rounded-md bg-bg-primary/90 border border-accent/40">
-                    <ImageIcon size={10} />
-                    <span>{img.prompt || "Image"}</span>
+                <div className="absolute left-0 right-0 bottom-full mb-2 z-10 flex flex-col gap-2">
+                  <div className="flex items-center gap-2 px-2 py-1.5 rounded-xl border border-border-primary bg-bg-primary/92 backdrop-blur-xl shadow-lg pointer-events-auto overflow-visible">
+                    {quickEditActions.map((action) => {
+                      if (action.id === "upscale") {
+                        return (
+                          <div key={action.id} className="relative">
+                            <button
+                              type="button"
+                              data-upscale-trigger
+                              onPointerDown={(e) => e.stopPropagation()}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setUpscaleMenuFor((prev) => (prev === img.id ? null : img.id));
+                              }}
+                              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors whitespace-nowrap"
+                              title={action.label}
+                            >
+                              <action.icon size={12} />
+                              <span>{action.label}</span>
+                            </button>
+                            {upscaleMenuFor === img.id && (
+                              <div
+                                data-upscale-menu
+                                className="absolute left-0 top-[calc(100%+8px)] z-20 min-w-[168px] rounded-2xl border border-border-primary bg-bg-primary/96 shadow-2xl backdrop-blur-xl p-2"
+                              >
+                                {upscaleOptions.map((option) => (
+                                  <button
+                                    key={option.id}
+                                    type="button"
+                                    onPointerDown={(e) => e.stopPropagation()}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setUpscaleMenuFor(null);
+                                      onQuickUpscaleImage?.(option.id, img);
+                                    }}
+                                    className="w-full flex items-center justify-between gap-3 px-3 py-2 rounded-xl text-left hover:bg-bg-hover transition-colors"
+                                  >
+                                    <span className="text-sm text-text-primary">{option.id}</span>
+                                    <span className="text-xs text-text-tertiary">
+                                      {getUpscalePreviewSize(meta, option.edge)}
+                                    </span>
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      }
+
+                      return (
+                        <button
+                          key={action.id}
+                          type="button"
+                          disabled={action.disabled}
+                          onPointerDown={(e) => e.stopPropagation()}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (action.disabled) return;
+                            onQuickEditImage?.(action.id, img);
+                          }}
+                          className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] transition-colors whitespace-nowrap ${
+                            action.disabled
+                              ? "text-text-tertiary/45 bg-bg-hover/40 cursor-not-allowed"
+                              : "text-text-secondary hover:text-text-primary hover:bg-bg-hover"
+                          }`}
+                          title={action.label}
+                        >
+                          <action.icon size={12} />
+                          <span>{action.label}</span>
+                        </button>
+                      );
+                    })}
                   </div>
-                  <div className="px-1.5 py-0.5 rounded-md bg-bg-primary/90 border border-accent/40" title="原图像素尺寸">
-                    {sizeLabel}
+                  <div className="flex items-center justify-between gap-2 text-[10px] text-accent pointer-events-none">
+                    <div className="flex items-center gap-1.5 px-1.5 py-0.5 rounded-md bg-bg-primary/90 border border-accent/40 min-w-0">
+                      <ImageIcon size={10} />
+                      <span className="truncate">{img.prompt || "Image"}</span>
+                    </div>
+                    <div className="px-1.5 py-0.5 rounded-md bg-bg-primary/90 border border-accent/40 shrink-0" title="原图像素尺寸">
+                      {sizeLabel}
+                    </div>
                   </div>
                 </div>
               )}

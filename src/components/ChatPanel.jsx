@@ -25,6 +25,7 @@ import {
 } from "lucide-react";
 import { compressImage } from "@/lib/imageUtils";
 import { MAX_GEN_COUNT } from "@/lib/genLimits";
+import TextEditBlocksPanel from "@/components/TextEditBlocksPanel";
 
 const CANVAS_IMAGE_MIME = "application/x-easy-ai-canvas-image";
 
@@ -365,9 +366,11 @@ export default function ChatPanel({
   onNewConversation,
   onDeleteConversation,
   onDeleteMessage,
-  messages, prompt, onPromptChange, onSubmit, isGenerating,
+  messages, prompt, onPromptChange, onSubmit, canSubmit = false, isGenerating,
   params, onParamsChange, showParams, onToggleParams,
   refImages, onRefImagesChange,
+  textEditBlocks = [], onTextEditBlocksChange,
+  showTextEditPanelInline = true,
   onRetry, onDownload, onImageClick,
   onPauseGenerate,
   theme, onToggleTheme,
@@ -528,7 +531,11 @@ export default function ChatPanel({
   };
 
   const handleKeyDown = (e) => {
-    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); onSubmit(); }
+    if (e.key === "Enter" && !e.shiftKey) {
+      if (!canSubmit) return;
+      e.preventDefault();
+      onSubmit();
+    }
   };
 
   // Drag & drop
@@ -875,6 +882,14 @@ export default function ChatPanel({
             </div>
           )}
 
+          {showTextEditPanelInline && textEditBlocks?.length > 0 && (
+            <TextEditBlocksPanel
+              blocks={textEditBlocks}
+              onChange={onTextEditBlocksChange}
+              className=""
+            />
+          )}
+
           {/* Input box with drag-and-drop */}
           <div
             className={`flex items-end gap-2 rounded-xl p-2.5 transition-all ${
@@ -916,8 +931,8 @@ export default function ChatPanel({
                 <PauseCircle size={16} />
               </button>
             ) : (
-              <button onClick={onSubmit} disabled={!prompt.trim()}
-                className={`flex-shrink-0 p-2 rounded-lg transition-all ${!prompt.trim() ? "text-text-tertiary cursor-not-allowed" : "bg-accent hover:bg-accent-hover text-white"}`}>
+              <button onClick={onSubmit} disabled={!canSubmit}
+                className={`flex-shrink-0 p-2 rounded-lg transition-all ${!canSubmit ? "text-text-tertiary cursor-not-allowed" : "bg-accent hover:bg-accent-hover text-white"}`}>
                 <Send size={16} />
               </button>
             )}

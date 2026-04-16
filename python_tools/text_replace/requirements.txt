@@ -1,0 +1,11 @@
+paddlepaddle
+paddleocr
+opencv-python
+pillow
+numpy
+gradio
+torch
+diffusers
+transformers
+accelerate
+segment-anything
