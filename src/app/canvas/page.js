@@ -111,7 +111,7 @@ function parseAspectRatio(imageSize) {
 }
 
 const REQUEST_TIMEOUT_MS = 90000;
-const MAX_PARALLEL_GENERATIONS = 2;
+const MAX_PARALLEL_GENERATIONS = 1;
 const STORAGE_VERSION = "9";
 const DEFAULT_CONVERSATION_TITLE = "新建对话";
 const TEXT_EDIT_ENABLED = false;
