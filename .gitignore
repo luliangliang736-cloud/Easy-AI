@@ -26,6 +26,8 @@
 *.pem
 *.traineddata
 /.vscode
+__pycache__/
+*.pyc
 
 # debug
 npm-debug.log*
