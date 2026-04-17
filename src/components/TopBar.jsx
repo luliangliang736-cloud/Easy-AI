@@ -9,6 +9,7 @@ import {
   Moon,
   Sun,
 } from "lucide-react";
+import BrandLogo from "@/components/BrandLogo";
 
 export default function TopBar({
   projectName,
@@ -24,7 +25,7 @@ export default function TopBar({
     <div className="h-12 bg-bg-secondary border-b border-border-primary flex items-center justify-between px-4 flex-shrink-0">
       <div className="flex items-center gap-3">
         <Link href="/" className="w-7 h-7 rounded-lg bg-accent flex items-center justify-center hover:bg-accent-hover transition-all" title="返回首页">
-          <span className="text-white text-sm font-bold leading-none">E</span>
+          <BrandLogo className="w-3.5 h-3.5 text-white" />
         </Link>
         <span className="text-sm font-medium text-text-primary">
           {projectName || "未命名项目"}

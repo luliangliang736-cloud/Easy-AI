@@ -8,6 +8,7 @@ import {
   Palette, RefreshCw, Download, MousePointer2, Sun, Moon,
 } from "lucide-react";
 import { useTheme } from "@/lib/useTheme";
+import BrandLogo from "@/components/BrandLogo";
 
 const FEATURES = [
   { icon: Wand2, title: "AI 智能生图", desc: "输入文字描述，AI 为你生成高质量图片", iconColor: "text-violet-400" },
@@ -35,7 +36,7 @@ export default function HomePage() {
       <nav className="fixed top-0 left-0 right-0 z-50 flex items-center justify-between px-6 lg:px-12 py-4 bg-bg-primary/70 backdrop-blur-xl border-b border-border-primary/60">
         <div className="flex items-center gap-3">
           <div className="w-9 h-9 rounded-xl bg-accent flex items-center justify-center">
-            <span className="text-white text-lg font-bold leading-none">E</span>
+            <BrandLogo className="w-5 h-5 text-white" />
           </div>
           <span className="text-lg font-semibold text-text-primary tracking-tight">Easy AI</span>
         </div>
@@ -169,7 +170,7 @@ export default function HomePage() {
         <div className="max-w-5xl mx-auto flex items-center justify-between">
           <div className="flex items-center gap-2">
             <div className="w-6 h-6 rounded-lg bg-accent flex items-center justify-center">
-              <span className="text-white text-xs font-bold leading-none">E</span>
+              <BrandLogo className="w-3.5 h-3.5 text-white" />
             </div>
             <span className="text-xs text-text-tertiary">Easy AI</span>
           </div>

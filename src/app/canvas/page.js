@@ -7,6 +7,7 @@ import ChatPanel from "@/components/ChatPanel";
 import HistoryPanel from "@/components/HistoryPanel";
 import TextEditBlocksPanel from "@/components/TextEditBlocksPanel";
 import { ToastProvider, useToast } from "@/components/Toast";
+import BrandLogo from "@/components/BrandLogo";
 import { compressImage } from "@/lib/imageUtils";
 import { useHistory } from "@/lib/useHistory";
 import { useTheme } from "@/lib/useTheme";
@@ -103,6 +104,39 @@ function buildSingleResultPrompt(text, count, index = 0, variantDescriptor = "")
 4. 单主体，单类型，单画面。no collage, no multiple subjects, no split layout, no duplicated objects.`;
 }
 
+function buildAgentPrompt(text, refImages = []) {
+  const basePrompt = String(text || "").trim();
+  if (!refImages.length) {
+    return basePrompt;
+  }
+
+  return `${basePrompt}
+
+Agent mode hidden instructions:
+- Treat the provided reference image(s) as the primary grounding.
+- keep composition
+- keep lighting
+- keep aspect ratio
+- keep camera angle, framing, perspective, and scene layout
+- keep subject identity, key shapes, proportions, and object relationships
+- do not crop, zoom, rotate, or rearrange the scene unless the user explicitly asks for it
+- only change the parts that are explicitly requested by the user
+- if multiple reference images are provided, use the first image as the main composition and aspect-ratio anchor`;
+}
+
+function resolveAgentParams(baseParams, promptText, refImages = []) {
+  const compactText = String(promptText || "").replace(/\s+/g, "");
+  const needsHighFidelity = /海报|poster|品牌|branding|logo|字体|排版|版式|产品图|电商|包装|KV|banner|高清|高细节|细节/.test(compactText);
+
+  return {
+    ...baseParams,
+    model: needsHighFidelity ? "gemini-3-pro-image-preview" : AGENT_DEFAULT_MODEL,
+    image_size: refImages.length > 0 ? "auto" : "1:1",
+    num: 1,
+    service_tier: AGENT_DEFAULT_SERVICE_TIER,
+  };
+}
+
 function parseAspectRatio(imageSize) {
   if (!imageSize || imageSize === "auto") return 1;
   const [w, h] = String(imageSize).split(":").map(Number);
@@ -115,6 +149,10 @@ const MAX_PARALLEL_GENERATIONS = 1;
 const STORAGE_VERSION = "9";
 const DEFAULT_CONVERSATION_TITLE = "新建对话";
 const TEXT_EDIT_ENABLED = false;
+const VALID_SERVICE_TIERS = new Set(["default", "priority"]);
+const DEFAULT_COMPOSER_MODE = "agent";
+const AGENT_DEFAULT_MODEL = "gemini-3.1-flash-image-preview";
+const AGENT_DEFAULT_SERVICE_TIER = "priority";
 
 function createConversation(overrides = {}) {
   const now = Date.now();
@@ -150,6 +188,29 @@ async function makeMessagePreviewImage(img) {
   }
 
   return img;
+}
+
+function sanitizeStoredImageList(images) {
+  if (!Array.isArray(images) || images.length === 0) {
+    return images;
+  }
+
+  return images.map((img) => {
+    if (typeof img !== "string") {
+      return img;
+    }
+
+    if (/^https?:\/\//i.test(img)) {
+      return img;
+    }
+
+    if (/^data:image\//i.test(img)) {
+      // Prevent localStorage from being filled with large base64 strings.
+      return "";
+    }
+
+    return img;
+  }).filter(Boolean);
 }
 
 function detectRefImageMeta(src) {
@@ -194,28 +255,17 @@ function detectRefImageMeta(src) {
 
 function sanitizeMessagesForStorage(messages) {
   return messages.slice(0, 200).map((msg) => {
-    if (!Array.isArray(msg.refImages) || msg.refImages.length === 0) {
+    const hasRefImages = Array.isArray(msg.refImages) && msg.refImages.length > 0;
+    const hasRequestRefImages = Array.isArray(msg.requestRefImages) && msg.requestRefImages.length > 0;
+
+    if (!hasRefImages && !hasRequestRefImages) {
       return msg;
     }
 
     return {
       ...msg,
-      refImages: msg.refImages.map((img) => {
-        if (typeof img !== "string") {
-          return img;
-        }
-
-        if (/^https?:\/\//i.test(img)) {
-          return img;
-        }
-
-        if (/^data:image\//i.test(img)) {
-          // Prevent localStorage from being filled with large base64 strings.
-          return "";
-        }
-
-        return img;
-      }).filter(Boolean),
+      refImages: sanitizeStoredImageList(msg.refImages),
+      requestRefImages: sanitizeStoredImageList(msg.requestRefImages),
     };
   });
 }
@@ -435,10 +485,12 @@ function HomeInner() {
   const [refImages, setRefImages] = useState([]);
   const [textEditBlocks, setTextEditBlocks] = useState([]);
   const [textEditPanelVisible, setTextEditPanelVisible] = useState(false);
+  const [composerMode, setComposerMode] = useState(DEFAULT_COMPOSER_MODE);
   const [params, setParams] = useState({
     model: "gemini-3.1-flash-image-preview-512",
     image_size: "1:1",
     num: 1,
+    service_tier: "priority",
   });
   const setParamsClamped = useCallback((next) => {
     setParams((prev) => {
@@ -446,7 +498,13 @@ function HomeInner() {
       if (!resolved || typeof resolved !== "object") return resolved;
       const raw = resolved.num ?? prev.num ?? 1;
       const num = Math.min(MAX_GEN_COUNT, Math.max(1, Number(raw) || 1));
-      return { ...resolved, num };
+      const requestedServiceTier = String(
+        resolved.service_tier ?? prev.service_tier ?? "priority"
+      ).trim().toLowerCase();
+      const service_tier = VALID_SERVICE_TIERS.has(requestedServiceTier)
+        ? requestedServiceTier
+        : "priority";
+      return { ...resolved, num, service_tier };
     });
   }, []);
   const [showParams, setShowParams] = useState(false);
@@ -714,13 +772,30 @@ function HomeInner() {
     canvasSelectionUrlsRef.current = [];
   }, []);
 
+  const handleComposerModeChange = useCallback((nextMode) => {
+    const resolvedMode = nextMode === "manual" ? "manual" : "agent";
+    setComposerMode(resolvedMode);
+    if (resolvedMode === "agent") {
+      setShowParams(false);
+    }
+  }, []);
+
   const handleGenerate = useCallback(async (retryPayload = null) => {
     const sourceText = retryPayload?.text ?? prompt;
     const effectiveTextEditBlocks = retryPayload?.textEditBlocks || textEditBlocks;
     const composerText = String(sourceText || "").trim();
-    const text = buildTextEditPrompt(composerText, effectiveTextEditBlocks);
-    const effectiveParams = retryPayload?.params || params;
     const effectiveRefImages = retryPayload?.refImages || refImages;
+    const activeComposerMode = retryPayload?.composerMode || composerMode;
+    const baseText = buildTextEditPrompt(composerText, effectiveTextEditBlocks);
+    const baseParams = retryPayload?.params || params;
+    const effectiveParams = retryPayload?.disableAgentDefaults
+      ? baseParams
+      : activeComposerMode === "agent"
+        ? resolveAgentParams(baseParams, composerText || baseText, effectiveRefImages)
+        : baseParams;
+    const text = activeComposerMode === "agent"
+      ? buildAgentPrompt(baseText, effectiveRefImages)
+      : baseText;
     const preserveComposer = Boolean(retryPayload?.preserveComposer);
     const hidePlaceholderPrompt = Boolean(retryPayload?.hidePlaceholderPrompt);
     const editMode = retryPayload?.editMode || null;
@@ -753,7 +828,9 @@ function HomeInner() {
       params: genParams,
       modelLabel,
       refImages: messageRefImages,
+      requestRefImages: effectiveRefImages,
       textEditBlocks: effectiveTextEditBlocks,
+      composerMode: activeComposerMode,
     };
     const tasks = Array.from({ length: count }, (_, i) => ({
       id: `${aiMsgId}-task-${i}`,
@@ -772,6 +849,7 @@ function HomeInner() {
       tasks,
       urls: [],
       error: null,
+      composerMode: activeComposerMode,
     };
 
     updateConversationMessages(conversationId, (prev) => [...prev, userMsg, aiMsg]);
@@ -871,6 +949,7 @@ function HomeInner() {
                   image_size: imageSize,
                   num: 1,
                   mode: editMode,
+                  service_tier: effectiveParams.service_tier,
                 }),
               });
             } else {
@@ -883,6 +962,7 @@ function HomeInner() {
                   model: effectiveParams.model,
                   image_size: imageSize,
                   num: 1,
+                  service_tier: effectiveParams.service_tier,
                 }),
               });
             }
@@ -1038,6 +1118,7 @@ function HomeInner() {
       setIsGenerating(false);
     }
   }, [
+    composerMode,
     prompt,
     isBusy,
     activeConversationId,
@@ -1278,6 +1359,8 @@ function HomeInner() {
         preserveComposer: true,
         hidePlaceholderPrompt: true,
         editMode: "cutout",
+        disableAgentDefaults: true,
+        composerMode: "manual",
       });
       return;
     }
@@ -1385,6 +1468,8 @@ function HomeInner() {
       },
       refImages: [img.image_url],
       preserveComposer: true,
+      disableAgentDefaults: true,
+      composerMode: "manual",
     });
   }, [handleGenerate, isBusy, params, toast]);
 
@@ -1492,8 +1577,9 @@ function HomeInner() {
       : null;
     const retryText = msg.text?.trim() || previousUserMessage?.text?.trim() || "";
     const retryParams = msg.params || previousUserMessage?.params || params;
-    const retryRefImages = previousUserMessage?.refImages || [];
+    const retryRefImages = previousUserMessage?.requestRefImages || previousUserMessage?.refImages || [];
     const retryTextEditBlocks = previousUserMessage?.textEditBlocks || [];
+    const retryComposerMode = previousUserMessage?.composerMode || msg?.composerMode || "manual";
 
     if (!retryText) {
       toast("未找到可重试的提示词", "info", 1500);
@@ -1501,6 +1587,7 @@ function HomeInner() {
     }
 
     setPrompt(retryText);
+    setComposerMode(retryComposerMode);
     setParamsClamped(retryParams);
     setRefImages(retryRefImages);
     setTextEditBlocks(normalizeTextEditBlocks(retryTextEditBlocks));
@@ -1534,6 +1621,7 @@ function HomeInner() {
       setActiveConversationId(msg._conversationId);
     }
     if (msg.text) setPrompt(msg.text);
+    if (msg.composerMode) setComposerMode(msg.composerMode);
     if (msg.params) setParamsClamped(msg.params);
     setTextEditBlocks(normalizeTextEditBlocks(msg.textEditBlocks || []));
     toast("已载入历史提示词", "info", 1200);
@@ -1620,7 +1708,7 @@ function HomeInner() {
         title="返回首页"
       >
         <div className="w-8 h-8 rounded-xl bg-accent flex items-center justify-center">
-          <span className="text-white text-sm font-bold leading-none">E</span>
+          <BrandLogo className="w-4 h-4 text-white" />
         </div>
         <span className="text-lg font-semibold text-text-primary tracking-tight">Easy AI</span>
       </Link>
@@ -1707,6 +1795,8 @@ function HomeInner() {
         onDownload={handleDownload}
         onImageClick={handleImageClick}
         onPauseGenerate={handlePauseGenerate}
+        composerMode={composerMode}
+        onComposerModeChange={handleComposerModeChange}
         theme={theme}
         onToggleTheme={toggleTheme}
         width={panelWidth}

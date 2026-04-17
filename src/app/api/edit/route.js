@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { MAX_GEN_COUNT } from "@/lib/genLimits";
+import { resolveNanoServiceTier } from "@/lib/nanoConfig";
 
 const API_BASE = process.env.NANO_API_BASE || "https://api.nanobananaapi.dev";
 const API_KEY = process.env.NANO_API_KEY;
@@ -46,7 +47,7 @@ async function runTrueCutout(image) {
 export async function POST(request) {
   try {
     const body = await request.json();
-    const { prompt, image, model, image_size, num, mode } = body;
+    const { prompt, image, model, image_size, num, mode, service_tier } = body;
 
     if (!prompt?.trim()) {
       return NextResponse.json({ error: "Prompt is required" }, { status: 400 });
@@ -79,7 +80,7 @@ export async function POST(request) {
       model: model || "gemini-3.1-flash-image-preview",
       image_size: image_size || "1:1",
       num: Math.min(Math.max(num || 1, 1), MAX_GEN_COUNT),
-      service_tier: "priority",
+      service_tier: resolveNanoServiceTier(service_tier),
     };
 
     console.log("[Edit]", JSON.stringify({ ...payload, image: Array.isArray(payload.image) ? `[${payload.image.length} images]` : "1 image" }));

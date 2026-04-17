@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { MAX_GEN_COUNT } from "@/lib/genLimits";
+import { resolveNanoServiceTier } from "@/lib/nanoConfig";
 
 export const maxDuration = 60;
 
@@ -16,7 +17,7 @@ export async function POST(request) {
 
   try {
     const body = await request.json();
-    const { prompt, model, image_size, num, ref_images } = body;
+    const { prompt, model, image_size, num, ref_images, service_tier } = body;
 
     if (!prompt?.trim()) {
       return NextResponse.json({ error: "Prompt is required" }, { status: 400 });
@@ -27,7 +28,7 @@ export async function POST(request) {
       model: model || "gemini-3.1-flash-image-preview",
       image_size: image_size || "1:1",
       num: Math.min(Math.max(num || 1, 1), MAX_GEN_COUNT),
-      service_tier: "priority",
+      service_tier: resolveNanoServiceTier(service_tier),
     };
 
     if (ref_images?.length) {

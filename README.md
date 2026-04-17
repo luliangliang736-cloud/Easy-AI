@@ -19,10 +19,13 @@
 
 ```
 NANO_API_KEY=sk-your-actual-api-key
-NANO_API_BASE=https://gateway.bananapro.site
+NANO_API_BASE=https://api.nanobananaapi.dev
+NANO_SERVICE_TIER=priority
 ```
 
-API Key 获取地址: https://api.bananapro.site
+`NANO_SERVICE_TIER` 支持 `default` / `priority`，未配置时默认使用 `priority`。
+
+API Key 获取地址: https://nanobananaapi.dev/settings/apikeys
 
 ### 2. 安装依赖
 

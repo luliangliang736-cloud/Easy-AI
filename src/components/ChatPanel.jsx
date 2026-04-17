@@ -16,7 +16,6 @@ import {
   AlertCircle,
   RotateCw,
   Download,
-  Sparkles,
   PauseCircle,
   Zap,
   Crown,
@@ -26,6 +25,7 @@ import {
 import { compressImage } from "@/lib/imageUtils";
 import { MAX_GEN_COUNT } from "@/lib/genLimits";
 import TextEditBlocksPanel from "@/components/TextEditBlocksPanel";
+import BrandLogo from "@/components/BrandLogo";
 
 const CANVAS_IMAGE_MIME = "application/x-easy-ai-canvas-image";
 
@@ -38,8 +38,8 @@ const MODEL_TIERS = [
     color: "text-green-400",
     bg: "bg-green-500/15 border-green-500/30",
     variants: [
-      { model: "gemini-2.5-flash-image", label: "1K", credits: 2 },
-      { model: "gemini-2.5-flash-image-hd", label: "1K HD", credits: 5 },
+      { model: "gemini-2.5-flash-image", label: "1K", credits: { default: 2, priority: 3 } },
+      { model: "gemini-2.5-flash-image-hd", label: "1K HD", credits: { default: 5, priority: 8 } },
     ],
     maxInputImages: 3,
     extendedRatios: false,
@@ -52,10 +52,10 @@ const MODEL_TIERS = [
     color: "text-blue-400",
     bg: "bg-blue-500/15 border-blue-500/30",
     variants: [
-      { model: "gemini-3.1-flash-image-preview-512", label: "512px", credits: 4 },
-      { model: "gemini-3.1-flash-image-preview", label: "1K", credits: 4 },
-      { model: "gemini-3.1-flash-image-preview-2k", label: "2K", credits: 6 },
-      { model: "gemini-3.1-flash-image-preview-4k", label: "4K", credits: 8 },
+      { model: "gemini-3.1-flash-image-preview-512", label: "512px", credits: { default: 4, priority: 6 } },
+      { model: "gemini-3.1-flash-image-preview", label: "1K", credits: { default: 4, priority: 6 } },
+      { model: "gemini-3.1-flash-image-preview-2k", label: "2K", credits: { default: 6, priority: 9 } },
+      { model: "gemini-3.1-flash-image-preview-4k", label: "4K", credits: { default: 8, priority: 12 } },
     ],
     maxInputImages: 10,
     extendedRatios: true,
@@ -68,9 +68,9 @@ const MODEL_TIERS = [
     color: "text-amber-400",
     bg: "bg-amber-500/15 border-amber-500/30",
     variants: [
-      { model: "gemini-3-pro-image-preview", label: "1K", credits: 8 },
-      { model: "gemini-3-pro-image-preview-2k", label: "2K", credits: 8 },
-      { model: "gemini-3-pro-image-preview-4k", label: "4K", credits: 16 },
+      { model: "gemini-3-pro-image-preview", label: "1K", credits: { default: 8, priority: 12 } },
+      { model: "gemini-3-pro-image-preview-2k", label: "2K", credits: { default: 8, priority: 12 } },
+      { model: "gemini-3-pro-image-preview-4k", label: "4K", credits: { default: 16, priority: 24 } },
     ],
     maxInputImages: 14,
     extendedRatios: false,
@@ -79,6 +79,21 @@ const MODEL_TIERS = [
 
 const STANDARD_RATIOS = ["auto", "1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "4:5", "5:4"];
 const EXTENDED_RATIOS = ["21:9", "1:4", "4:1", "8:1", "1:8"];
+const SERVICE_TIERS = [
+  { id: "default", label: "标准", desc: "更省积分" },
+  { id: "priority", label: "高优先", desc: "更稳更快" },
+];
+
+function getServiceTierLabel(serviceTier) {
+  if (serviceTier === "default") return "标准线路";
+  if (serviceTier === "priority") return "高优线路";
+  return "";
+}
+
+function getVariantCredits(variant, serviceTier) {
+  const tier = serviceTier === "default" ? "default" : "priority";
+  return variant?.credits?.[tier] ?? variant?.credits?.priority ?? 0;
+}
 
 /**
  * 读取参考图真实像素尺寸，并匹配最接近的标准比例供 API 使用。
@@ -190,6 +205,7 @@ function MessageBubble({ message, onRetry, onDownload, onImageClick, onPreview, 
             <span className="text-[10px] text-text-tertiary">
               {message.modelLabel} · {message.params?.image_size}
               {message.params?.num > 1 && ` · ${message.params.num}张`}
+              {message.params?.service_tier && ` · ${getServiceTierLabel(message.params.service_tier)}`}
             </span>
           </div>
         </div>
@@ -203,7 +219,7 @@ function MessageBubble({ message, onRetry, onDownload, onImageClick, onPreview, 
       <div className="max-w-[85%] w-full group/message">
         <div className="flex items-center gap-2 mb-2">
           <div className="w-6 h-6 rounded-full bg-accent flex items-center justify-center flex-shrink-0">
-            <Sparkles size={12} className="text-white" />
+            <BrandLogo className="w-3.5 h-3.5 text-white" />
           </div>
           <span className="text-xs text-text-secondary font-medium">AI Agent</span>
           <button
@@ -328,6 +344,7 @@ function MessageBubble({ message, onRetry, onDownload, onImageClick, onPreview, 
                   <span className="text-[10px] text-text-tertiary">
                     {message.modelLabel} · {message.params?.image_size}
                     {message.urls.length > 1 && ` · ${i + 1}/${message.urls.length}`}
+                    {message.params?.service_tier && ` · ${getServiceTierLabel(message.params.service_tier)}`}
                   </span>
                   <button onClick={() => onDownload?.({ ...message, image_url: url })}
                     className="p-1.5 rounded-md text-text-tertiary hover:text-text-primary hover:bg-bg-hover transition-all" title="下载">
@@ -373,6 +390,7 @@ export default function ChatPanel({
   showTextEditPanelInline = true,
   onRetry, onDownload, onImageClick,
   onPauseGenerate,
+  composerMode = "agent", onComposerModeChange,
   theme, onToggleTheme,
   width, onWidthChange,
 }) {
@@ -406,6 +424,7 @@ export default function ChatPanel({
   const currentTier = MODEL_TIERS.find((t) => t.variants.some((v) => v.model === params.model)) || MODEL_TIERS[1];
   const availableRatios = currentTier.extendedRatios ? [...STANDARD_RATIOS, ...EXTENDED_RATIOS] : STANDARD_RATIOS;
   const maxImages = currentTier.maxInputImages;
+  const currentServiceTier = params.service_tier === "default" ? "default" : "priority";
   const filteredConversations = conversations
     .filter((conversation) => {
       const query = conversationSearch.trim().toLowerCase();
@@ -586,7 +605,7 @@ export default function ChatPanel({
         <div className="h-12 px-4 flex items-center justify-between border-b border-border-primary flex-shrink-0">
           <div className="flex items-center gap-2">
             <div className="w-6 h-6 rounded-full bg-accent flex items-center justify-center">
-              <Sparkles size={12} className="text-white" />
+              <BrandLogo className="w-3.5 h-3.5 text-white" />
             </div>
             <span className="text-sm font-medium text-text-primary">Agent</span>
           </div>
@@ -723,7 +742,7 @@ export default function ChatPanel({
           {messages.length === 0 && (
             <div className="flex flex-col items-center justify-center h-full text-center px-4">
               <div className="w-14 h-14 rounded-2xl bg-bg-tertiary border border-border-primary flex items-center justify-center mb-4">
-                <Sparkles size={24} className="text-accent" />
+                <BrandLogo className="w-7 h-7 text-accent" />
               </div>
               <h3 className="text-sm font-medium text-text-primary mb-2">AI 图片生成</h3>
               <p className="text-xs text-text-tertiary leading-relaxed mb-4">
@@ -762,15 +781,42 @@ export default function ChatPanel({
 
         {/* Input area */}
         <div className="border-t border-border-primary p-3 flex-shrink-0 space-y-2">
-          {/* Params toggle */}
-          <button onClick={onToggleParams}
-            className="flex items-center gap-1.5 text-[11px] text-text-tertiary hover:text-text-secondary transition-colors w-full">
-            <Settings2 size={12} />
-            <span>生成参数</span>
-            <ChevronDown size={12} className={`ml-auto transition-transform ${showParams ? "rotate-180" : ""}`} />
-          </button>
+          <div className="flex items-center gap-2">
+            <div className="inline-flex rounded-xl border border-border-primary bg-bg-tertiary p-1">
+              <button
+                type="button"
+                onClick={() => onComposerModeChange?.("agent")}
+                className={`px-3 py-1.5 rounded-lg text-[11px] font-medium transition-all ${
+                  composerMode === "agent"
+                    ? "bg-accent text-white"
+                    : "text-text-secondary hover:text-text-primary"
+                }`}
+              >
+                Agent
+              </button>
+              <button
+                type="button"
+                onClick={() => onComposerModeChange?.("manual")}
+                className={`px-3 py-1.5 rounded-lg text-[11px] font-medium transition-all ${
+                  composerMode === "manual"
+                    ? "bg-accent text-white"
+                    : "text-text-secondary hover:text-text-primary"
+                }`}
+              >
+                手动
+              </button>
+            </div>
+            {composerMode === "manual" && (
+              <button onClick={onToggleParams}
+                className="flex items-center gap-1.5 text-[11px] text-text-tertiary hover:text-text-secondary transition-colors flex-1">
+                <Settings2 size={12} />
+                <span>生成参数</span>
+                <ChevronDown size={12} className={`ml-auto transition-transform ${showParams ? "rotate-180" : ""}`} />
+              </button>
+            )}
+          </div>
 
-          {showParams && (
+          {composerMode === "manual" && showParams && (
             <div className="space-y-3 py-2 animate-fade-in">
               <div>
                 <span className="block text-[11px] text-text-tertiary mb-1.5">模型</span>
@@ -798,7 +844,27 @@ export default function ChatPanel({
                     <button key={v.model} onClick={() => onParamsChange({ ...params, model: v.model })}
                       className={`px-2.5 py-1.5 rounded-lg text-[11px] font-medium transition-all ${params.model === v.model ? "bg-accent text-white" : "bg-bg-tertiary text-text-secondary hover:bg-bg-hover border border-border-primary"}`}>
                       {v.label}
-                      <span className="block text-[9px] opacity-60">{v.credits} credits</span>
+                      <span className="block text-[9px] opacity-60">{getVariantCredits(v, currentServiceTier)} credits</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <span className="block text-[11px] text-text-tertiary mb-1.5">线路</span>
+                <div className="grid grid-cols-2 gap-1.5">
+                  {SERVICE_TIERS.map((tier) => (
+                    <button
+                      key={tier.id}
+                      type="button"
+                      onClick={() => onParamsChange({ ...params, service_tier: tier.id })}
+                      className={`px-3 py-2 rounded-lg text-left border transition-all ${
+                        params.service_tier === tier.id
+                          ? "bg-accent/10 border-accent/30 text-text-primary"
+                          : "bg-bg-tertiary border-border-primary text-text-secondary hover:bg-bg-hover"
+                      }`}
+                    >
+                      <span className="block text-[11px] font-medium">{tier.label}</span>
+                      <span className="block text-[10px] text-text-tertiary mt-0.5">{tier.desc}</span>
                     </button>
                   ))}
                 </div>
@@ -914,8 +980,12 @@ export default function ChatPanel({
               onKeyDown={handleKeyDown}
               placeholder={
                 dragOver ? "松手添加图片..."
-                : refImages?.length > 0 ? "描述你想对图片做的处理..."
-                : "描述你想生成的图片，可拖入参考图..."
+                : composerMode === "agent"
+                  ? (refImages?.length > 0
+                      ? "直接描述目标效果，系统会自动保留参考图关键信息..."
+                      : "直接描述你想要的结果，系统会自动处理参数...")
+                  : refImages?.length > 0 ? "描述你想对图片做的处理..."
+                  : "描述你想生成的图片，可拖入参考图..."
               }
               rows={1}
               className="flex-1 bg-transparent text-text-primary placeholder-text-tertiary resize-none outline-none text-sm leading-5 max-h-24 overflow-y-auto"
