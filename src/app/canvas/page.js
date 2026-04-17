@@ -43,7 +43,7 @@ function inferLoopCountFromPrompt(text) {
   if (!text || typeof text !== "string") return 0;
   const compact = text.replace(/\s/g, "");
   let best = 0;
-  const cnRe = /([0-9]{1,2}|[一二三四五六七八九十两]+)\s*(个)?\s*(套|张|款|组|幅|种|版|次|变|方案|版本|结果|风格)/g;
+  const cnRe = /([0-9]{1,2}|[一二三四五六七八九十两]+)\s*(个)?\s*(套|张|款|组|幅|种|版|次|方案|版本|结果|风格)/g;
   let m;
   while ((m = cnRe.exec(compact)) !== null) {
     const n = parseQuantityToken(m[1]);
@@ -517,6 +517,7 @@ function HomeInner() {
   const canvasTexts = canvasTextsHistory.state;
   const canvasShapesHistory = useHistory([]);
   const canvasShapes = canvasShapesHistory.state;
+  const [semanticSelection, setSemanticSelection] = useState(null);
   const [selectedImage, setSelectedImage] = useState(null);
   const [selectedImageRect, setSelectedImageRect] = useState(null);
   const [isGenerating, setIsGenerating] = useState(false);
@@ -768,6 +769,7 @@ function HomeInner() {
     setTextEditBlocks([]);
     setTextEditPanelVisible(false);
     setShowParams(false);
+    setSemanticSelection(null);
     setSelectedImage(null);
     canvasSelectionUrlsRef.current = [];
   }, []);
@@ -785,6 +787,7 @@ function HomeInner() {
     const effectiveTextEditBlocks = retryPayload?.textEditBlocks || textEditBlocks;
     const composerText = String(sourceText || "").trim();
     const effectiveRefImages = retryPayload?.refImages || refImages;
+    const effectiveSemanticSelection = retryPayload?.semanticSelection || semanticSelection;
     const activeComposerMode = retryPayload?.composerMode || composerMode;
     const baseText = buildTextEditPrompt(composerText, effectiveTextEditBlocks);
     const baseParams = retryPayload?.params || params;
@@ -801,6 +804,105 @@ function HomeInner() {
     const editMode = retryPayload?.editMode || null;
     if (!text || isBusy || !activeConversationId) return;
 
+    if (
+      effectiveSemanticSelection?.maskDataUrl
+      && effectiveSemanticSelection?.imageUrl
+      && !retryPayload?.disableSemanticEdit
+    ) {
+      const ts = Date.now();
+      const conversationId = activeConversationId;
+      const userMsgId = `user-object-edit-${ts}`;
+      const aiMsgId = `ai-object-edit-${ts}`;
+      const messageRefImages = await Promise.all(
+        [effectiveSemanticSelection.imageUrl].map((img) => makeMessagePreviewImage(img))
+      );
+      const sharedParams = {
+        ...effectiveParams,
+        model: "object-mask-edit",
+        image_size: "局部编辑",
+        num: 1,
+      };
+      const userMsg = {
+        id: userMsgId,
+        role: "user",
+        text: composerText,
+        params: sharedParams,
+        modelLabel: "SAM + GPT + OpenAI Images",
+        refImages: messageRefImages,
+        requestRefImages: [effectiveSemanticSelection.imageUrl],
+        semanticSelection: effectiveSemanticSelection,
+        composerMode: activeComposerMode,
+      };
+      const aiMsg = {
+        id: aiMsgId,
+        role: "assistant",
+        text: composerText,
+        params: sharedParams,
+        modelLabel: "SAM + GPT + OpenAI Images",
+        status: "generating",
+        urls: [],
+        error: null,
+        composerMode: activeComposerMode,
+      };
+      updateConversationMessages(conversationId, (prev) => [...prev, userMsg, aiMsg]);
+      setIsGenerating(true);
+      if (!preserveComposer) {
+        setPrompt("");
+      }
+
+      try {
+        const res = await fetchWithTimeout("/api/object-edit", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            image: effectiveSemanticSelection.imageUrl,
+            mask: effectiveSemanticSelection.maskDataUrl,
+            prompt: composerText,
+            selection: {
+              bbox: effectiveSemanticSelection.bbox || null,
+              point: effectiveSemanticSelection.point || null,
+              image_size: effectiveSemanticSelection.imageSize || null,
+              label: effectiveSemanticSelection.label || "",
+              source_prompt: effectiveSemanticSelection.prompt || "",
+              method: effectiveSemanticSelection.method || "",
+            },
+          }),
+        }, 10 * 60 * 1000);
+        const data = await parseApiResponse(res);
+        if (!res.ok || data.error) {
+          throw new Error(errStr(data.error || `局部编辑失败（${res.status}）`));
+        }
+        const urls = Array.isArray(data.data?.urls) ? data.data.urls.filter(Boolean) : [];
+        if (urls.length === 0) {
+          throw new Error("局部编辑未返回结果图片");
+        }
+        updateMessage(conversationId, aiMsgId, {
+          status: "completed",
+          urls,
+          error: null,
+        });
+        canvasHistory.push((prev) => [
+          ...prev,
+          ...urls.map((url, index) => ({
+            id: `${aiMsgId}-${index}`,
+            image_url: url,
+            prompt: composerText,
+          })),
+        ]);
+        setSemanticSelection(null);
+        toast(`局部编辑完成，${urls.length} 张结果已添加到画布`, "success", 2200);
+      } catch (err) {
+        updateMessage(conversationId, aiMsgId, {
+          status: "failed",
+          error: errStr(err),
+        });
+        toast(errStr(err) || "局部编辑失败", "info", 2200);
+      } finally {
+        setIsGenerating(false);
+      }
+      return;
+    }
+
     const ts = Date.now();
     const conversationId = activeConversationId;
     const userMsgId = "user-" + ts;
@@ -813,8 +915,12 @@ function HomeInner() {
       : [];
 
     const inferred = inferLoopCountFromPrompt(composerText);
+    const isEditLikeRequest = hasImages || Boolean(editMode);
+    const requestedCount = isEditLikeRequest
+      ? (inferred || 1)
+      : Math.max(effectiveParams.num || 1, inferred);
     const count = Math.min(
-      Math.max(Math.max(effectiveParams.num || 1, inferred), 1),
+      Math.max(requestedCount, 1),
       MAX_GEN_COUNT
     );
     const variantDescriptors = getVariantDescriptors(composerText || text, count);
@@ -1129,6 +1235,7 @@ function HomeInner() {
     updateConversationMessages,
     patchTask,
     canvasHistory,
+    semanticSelection,
     toast,
   ]);
 
@@ -1346,6 +1453,7 @@ function HomeInner() {
       setSelectedImage(img);
       setTextEditBlocks([]);
       setTextEditPanelVisible(false);
+      setSemanticSelection(null);
       await handleGenerate({
         text: "请基于这张参考图进行专业抠图，完整保留主体，去除背景，输出干净透明背景效果，不要改变主体造型与细节，不要新增元素。",
         params: {
@@ -1369,6 +1477,7 @@ function HomeInner() {
       if (!TEXT_EDIT_ENABLED) {
         setTextEditBlocks([]);
         setTextEditPanelVisible(false);
+        setSemanticSelection(null);
         toast("编辑文字功能已暂时停用", "info", 1800);
         return;
       }
@@ -1377,6 +1486,7 @@ function HomeInner() {
         return;
       }
       setSelectedImage(img);
+      setSemanticSelection(null);
       setRefImages((prev) => {
         if (prev.includes(img.image_url)) return prev;
         return [...prev, img.image_url];
@@ -1440,6 +1550,7 @@ function HomeInner() {
     });
     setTextEditBlocks([]);
     setTextEditPanelVisible(false);
+    setSemanticSelection(null);
     setSelectedImage(img);
     setPrompt(nextPrompt);
     toast("已填入快捷编辑指令", "success", 1500);
@@ -1456,6 +1567,7 @@ function HomeInner() {
     const model = resolveUpscaleModel(params.model, targetSize);
     setTextEditBlocks([]);
     setTextEditPanelVisible(false);
+      setSemanticSelection(null);
     await handleGenerate({
       text: `请基于这张参考图做高清放大与细节增强，直接输出 ${targetSize} 高分辨率版本，保持主体、构图、文字内容与风格一致，不要改图，不要新增元素。`,
       params: {
@@ -1483,6 +1595,7 @@ function HomeInner() {
       const toRemove = [...canvasSelectionUrlsRef.current];
       canvasSelectionUrlsRef.current = [];
       setSelectedImage(null);
+      setSemanticSelection(null);
       setTextEditPanelVisible(false);
       setRefImages((prev) =>
         prev.filter((u) => !toRemove.includes(u))
@@ -1500,6 +1613,7 @@ function HomeInner() {
       return withoutCanvas;
     });
     setSelectedImage(img);
+    setSemanticSelection(null);
   }, []);
 
   /** 框选多张画布图片时，批量同步到右侧参考图（与模型最大参考图数量对齐） */
@@ -1580,6 +1694,7 @@ function HomeInner() {
     const retryRefImages = previousUserMessage?.requestRefImages || previousUserMessage?.refImages || [];
     const retryTextEditBlocks = previousUserMessage?.textEditBlocks || [];
     const retryComposerMode = previousUserMessage?.composerMode || msg?.composerMode || "manual";
+    const retrySemanticSelection = previousUserMessage?.semanticSelection || null;
 
     if (!retryText) {
       toast("未找到可重试的提示词", "info", 1500);
@@ -1590,6 +1705,7 @@ function HomeInner() {
     setComposerMode(retryComposerMode);
     setParamsClamped(retryParams);
     setRefImages(retryRefImages);
+    setSemanticSelection(retrySemanticSelection);
     setTextEditBlocks(normalizeTextEditBlocks(retryTextEditBlocks));
   }, [messages, params, setParamsClamped, toast]);
 
@@ -1623,6 +1739,7 @@ function HomeInner() {
     if (msg.text) setPrompt(msg.text);
     if (msg.composerMode) setComposerMode(msg.composerMode);
     if (msg.params) setParamsClamped(msg.params);
+    setSemanticSelection(msg.semanticSelection || null);
     setTextEditBlocks(normalizeTextEditBlocks(msg.textEditBlocks || []));
     toast("已载入历史提示词", "info", 1200);
   }, [toast, setParamsClamped]);
@@ -1751,6 +1868,7 @@ function HomeInner() {
         onShapeModeChange={setShapeMode}
         onSyncCanvasRefImages={handleSyncCanvasRefImages}
         onSelectedImageRectChange={handleSelectedImageRectChange}
+        onSemanticSelectionChange={setSemanticSelection}
       />
       {TEXT_EDIT_ENABLED && floatingTextPanelStyle && (
         <div

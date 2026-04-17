@@ -1,7 +1,7 @@
 "use client";
 
 import {
-  useState, useRef, useCallback, useEffect,
+  useState, useRef, useCallback, useEffect, useMemo,
   useReducer, useImperativeHandle,
 } from "react";
 import {
@@ -147,6 +147,7 @@ export default function Canvas({
   onShapeModeChange,
   onSyncCanvasRefImages,
   onSelectedImageRectChange,
+  onSemanticSelectionChange,
 }) {
   const toast = useToast();
   const containerRef = useRef(null);
@@ -168,6 +169,10 @@ export default function Canvas({
   const [multiSelectedImageIds, setMultiSelectedImageIds] = useState([]);
   const [multiSelectedTextIds, setMultiSelectedTextIds] = useState([]);
   const [selectedShapeId, setSelectedShapeId] = useState(null);
+  const [semanticSelection, setSemanticSelection] = useState(null);
+  const [semanticSelectingImageId, setSemanticSelectingImageId] = useState(null);
+  const [semanticPickModifierHeld, setSemanticPickModifierHeld] = useState(false);
+  const [semanticPickCursorPos, setSemanticPickCursorPos] = useState(null);
   /** 按住空格临时平移（与 Figma 类似）；与 handlePointerDown 同步读取 */
   const spacePanHeldRef = useRef(false);
   /** 画布内 Ctrl/Cmd+C 复制后的数据（系统剪贴板失败时仍可粘贴） */
@@ -175,10 +180,10 @@ export default function Canvas({
 
   actionRef.current = action;
 
-  const renderImages = [
+  const renderImages = useMemo(() => [
     ...images,
     ...generatingItems.filter((item) => !images.some((img) => img.id === item.id)),
-  ];
+  ], [images, generatingItems]);
 
   const positionsRef = useRef({});
   const imageMetaRef = useRef({});
@@ -426,6 +431,21 @@ export default function Canvas({
     };
   }, []);
 
+  useEffect(() => {
+    const syncModifierState = (event) => {
+      setSemanticPickModifierHeld(Boolean(event.ctrlKey || event.metaKey));
+    };
+    const clearModifierState = () => setSemanticPickModifierHeld(false);
+    window.addEventListener("keydown", syncModifierState);
+    window.addEventListener("keyup", syncModifierState);
+    window.addEventListener("blur", clearModifierState);
+    return () => {
+      window.removeEventListener("keydown", syncModifierState);
+      window.removeEventListener("keyup", syncModifierState);
+      window.removeEventListener("blur", clearModifierState);
+    };
+  }, []);
+
   /** 工具栏：以视口中心为锚点缩放（线性步进保持与按钮一致） */
   const handleToolbarZoomChange = useCallback(
     (updater) => {
@@ -658,6 +678,7 @@ export default function Canvas({
       setMultiSelectedImageIds([]);
       setMultiSelectedTextIds([]);
       setSelectedShapeId(null);
+      setSemanticSelection(null);
       onSelectImage(null);
       setSelectedTextId(t.id);
       if (isTextTool) {
@@ -767,6 +788,7 @@ export default function Canvas({
     const shapeHit = target.closest("[data-shape-item]");
     if (shapeHit && isSelectTool) {
       setEditingTextId(null);
+      setSemanticSelection(null);
       const sid = shapeHit.dataset.shapeItem;
       const sh = shapeItems.find((s) => s.id === sid);
       if (!sh) return;
@@ -794,7 +816,17 @@ export default function Canvas({
       const pos = positionsRef.current[id];
       if (!pos) return;
       const img = images.find((i) => i.id === id);
+      if (isSelectTool && (e.ctrlKey || e.metaKey) && img && !target.closest?.("button")) {
+        const imageNode = imgEl.querySelector("img");
+        setMultiSelectedImageIds([]);
+        setMultiSelectedTextIds([]);
+        setSelectedTextId(null);
+        onSelectImage(img);
+        void selectSemanticObject(img, imageNode, e.clientX, e.clientY);
+        return;
+      }
       if (isSelectTool && e.shiftKey) {
+        setSemanticSelection(null);
         const baseIds = multiSelectedImageIds.length > 0
           ? multiSelectedImageIds
           : selectedImage?.id
@@ -850,6 +882,7 @@ export default function Canvas({
       setMultiSelectedImageIds([]);
       setMultiSelectedTextIds([]);
       setSelectedTextId(null);
+      setSemanticSelection(null);
       if (img) onSelectImage(img);
       if (lockedRef.current.has(id)) return;
       setAction({
@@ -864,6 +897,7 @@ export default function Canvas({
     if (isTextTool && onAddText) {
       onSelectImage(null);
       setSelectedShapeId(null);
+      setSemanticSelection(null);
       const rect = containerRef.current?.getBoundingClientRect();
       if (!rect) return;
       const worldX = (e.clientX - rect.left - cam.x) / scale;
@@ -885,6 +919,7 @@ export default function Canvas({
       setSelectedShapeId(null);
       setMultiSelectedImageIds([]);
       setMultiSelectedTextIds([]);
+      setSemanticSelection(null);
       const rect = containerRef.current?.getBoundingClientRect();
       if (!rect) return;
       const worldX = (e.clientX - rect.left - cam.x) / scale;
@@ -903,6 +938,7 @@ export default function Canvas({
     onSelectImage(null);
     setSelectedTextId(null);
     setEditingTextId(null);
+    setSemanticSelection(null);
     setAction("pan");
     e.currentTarget.setPointerCapture(e.pointerId);
   }, [
@@ -1147,6 +1183,70 @@ export default function Canvas({
     }
   }, [onDeleteImage, onSendToChat, toast]);
 
+  useEffect(() => {
+    if (!semanticSelection?.imageId) return;
+    if (renderImages.some((img) => img.id === semanticSelection.imageId)) return;
+    setSemanticSelection(null);
+  }, [renderImages, semanticSelection]);
+
+  useEffect(() => {
+    onSemanticSelectionChange?.(semanticSelection);
+  }, [onSemanticSelectionChange, semanticSelection]);
+
+  async function selectSemanticObject(img, imageNode, clientX, clientY) {
+    if (!img?.image_url || !imageNode) return;
+    const naturalWidth = imageNode.naturalWidth || imageMetaRef.current[img.id]?.width || 0;
+    const naturalHeight = imageNode.naturalHeight || imageMetaRef.current[img.id]?.height || 0;
+    if (!naturalWidth || !naturalHeight) {
+      toast("图片尚未加载完成，请稍后再试", "info", 1500);
+      return;
+    }
+
+    const rect = imageNode.getBoundingClientRect();
+    const localX = Math.max(0, Math.min(rect.width, clientX - rect.left));
+    const localY = Math.max(0, Math.min(rect.height, clientY - rect.top));
+    const x = Math.max(0, Math.min(naturalWidth - 1, Math.round((localX / rect.width) * naturalWidth)));
+    const y = Math.max(0, Math.min(naturalHeight - 1, Math.round((localY / rect.height) * naturalHeight)));
+
+    setSemanticSelectingImageId(img.id);
+    try {
+      const res = await fetch("/api/select-object", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          image: img.image_url,
+          x,
+          y,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) {
+        throw new Error(data.error || `对象选择失败（${res.status}）`);
+      }
+      const result = data.data || {};
+      if (!result.mask_data_url) {
+        throw new Error("未返回对象选区遮罩");
+      }
+      setSemanticSelection({
+        imageId: img.id,
+        imageUrl: img.image_url,
+        prompt: img.prompt || "",
+        maskDataUrl: result.mask_data_url,
+        bbox: result.bbox || null,
+        method: result.method || "unknown",
+        point: result.point || { x, y },
+        imageSize: result.image_size || { width: naturalWidth, height: naturalHeight },
+        label: result.label || "",
+      });
+      toast(result.label ? `已选中：${result.label}` : `已选中对象（${result.method || "auto"}）`, "success", 1500);
+    } catch (err) {
+      setSemanticSelection(null);
+      toast(err?.message || "对象选择失败", "info", 2200);
+    } finally {
+      setSemanticSelectingImageId(null);
+    }
+  }
+
   // External file drag-and-drop onto canvas
   const handleDragOver = useCallback((e) => {
     e.preventDefault();
@@ -1199,6 +1299,8 @@ export default function Canvas({
   const isDraggingText = action?.type === "textdrag";
   const isMarquee = action?.type === "marquee";
   const isGroupDrag = action?.type === "group_drag";
+  const semanticPickActive =
+    isSelectTool && semanticPickModifierHeld && !isPanning && !isDragging && !isDraggingText && !isGroupDrag && !isMarquee;
 
   const spacePanHeld = spacePanHeldRef.current;
   const cursor =
@@ -1218,6 +1320,19 @@ export default function Canvas({
                 ? "cursor-text"
                 : "cursor-default";
 
+  const handleSemanticPickCursorMove = useCallback((e) => {
+    if (!isSelectTool || !(e.ctrlKey || e.metaKey)) {
+      setSemanticPickCursorPos(null);
+      return;
+    }
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    setSemanticPickCursorPos({
+      x: e.clientX - rect.left,
+      y: e.clientY - rect.top,
+    });
+  }, [isSelectTool]);
+
   return (
     <div
       ref={containerRef}
@@ -1227,13 +1342,36 @@ export default function Canvas({
       }}
       onPointerDownCapture={handleMiddleButtonPanCapture}
       onPointerDown={handlePointerDown}
+      onPointerMoveCapture={handleSemanticPickCursorMove}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
+      onPointerLeave={() => setSemanticPickCursorPos(null)}
       onContextMenu={handleContextMenu}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
+      {semanticPickActive && (
+        <div className="absolute top-4 left-1/2 z-30 -translate-x-1/2 pointer-events-none">
+          <div className="px-3 py-1.5 rounded-full border border-accent/40 bg-bg-primary/92 backdrop-blur-xl text-[11px] text-accent shadow-lg">
+            Ctrl/Cmd + 点击图片，选择对象区域
+          </div>
+        </div>
+      )}
+
+      {semanticPickActive && semanticPickCursorPos && (
+        <div
+          className="absolute z-30 pointer-events-none"
+          style={{
+            left: semanticPickCursorPos.x,
+            top: semanticPickCursorPos.y,
+            transform: "translate(2px, -8px)",
+          }}
+        >
+          <div className="w-3 h-3 rounded-full bg-accent border-2 border-white shadow-[0_0_0_3px_rgba(63,202,88,0.2)]" />
+        </div>
+      )}
+
       {/* File drag overlay */}
       {fileDragOver && (
         <div className="absolute inset-0 z-30 bg-accent/10 border-2 border-dashed border-accent/50 flex items-center justify-center pointer-events-none">
@@ -1348,6 +1486,9 @@ export default function Canvas({
             isHighlighted && multiSelectedImageIds.length === 0;
           const isLocked = lockedRef.current.has(img.id);
           const meta = imageMetaRef.current[img.id];
+          const semanticForImage = semanticSelection?.imageId === img.id ? semanticSelection : null;
+          const semanticBox = semanticForImage?.bbox;
+          const semanticLabel = semanticForImage?.label ? String(semanticForImage.label).trim() : "";
           const displayHeight = meta
             ? Math.round((pos.w * meta.height) / meta.width)
             : Math.round(pos.w);
@@ -1470,6 +1611,46 @@ export default function Canvas({
                       }
                     }}
                   />
+                  {semanticForImage?.maskDataUrl && (
+                    <img
+                      src={semanticForImage.maskDataUrl}
+                      alt=""
+                      className="absolute inset-0 w-full h-full pointer-events-none"
+                      draggable={false}
+                    />
+                  )}
+                  {semanticSelectingImageId === img.id && (
+                    <div className="absolute inset-0 flex items-center justify-center bg-black/20 backdrop-blur-[1px] pointer-events-none">
+                      <div className="px-2.5 py-1 rounded-lg bg-black/60 text-[11px] text-white">
+                        正在识别对象...
+                      </div>
+                    </div>
+                  )}
+                  {semanticBox && semanticForImage?.imageSize?.width && semanticForImage?.imageSize?.height && (
+                    <>
+                      <div
+                        className="absolute border-2 border-emerald-300/90 rounded-lg pointer-events-none shadow-[0_0_0_1px_rgba(16,185,129,0.25)]"
+                        style={{
+                          left: `${(semanticBox.x / semanticForImage.imageSize.width) * 100}%`,
+                          top: `${(semanticBox.y / semanticForImage.imageSize.height) * 100}%`,
+                          width: `${(semanticBox.w / semanticForImage.imageSize.width) * 100}%`,
+                          height: `${(semanticBox.h / semanticForImage.imageSize.height) * 100}%`,
+                        }}
+                      />
+                      {semanticLabel && (
+                        <div
+                          className="absolute px-2 py-1 rounded-full bg-emerald-400 text-black text-[11px] font-medium pointer-events-none shadow-lg"
+                          style={{
+                            left: `${(semanticBox.x / semanticForImage.imageSize.width) * 100}%`,
+                            top: `${Math.max(0, ((semanticBox.y / semanticForImage.imageSize.height) * 100) - 6)}%`,
+                            transform: "translateY(-100%)",
+                          }}
+                        >
+                          {semanticLabel}
+                        </div>
+                      )}
+                    </>
+                  )}
 
                   <div
                     className={`absolute top-2 right-2 flex gap-1 transition-opacity ${
