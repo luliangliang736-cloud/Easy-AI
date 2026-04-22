@@ -13,6 +13,16 @@ const GPT_IMAGE_2_API_KEY_HEADER = (
 const GPT_IMAGE_2_MODEL = process.env.GPT_IMAGE_2_MODEL || "gpt-image-2";
 const GPT_IMAGE_2_TIMEOUT_MS = Number(process.env.GPT_IMAGE_2_TIMEOUT_MS || 10 * 60 * 1000);
 const GPT_IMAGE_2_QUALITY = normalizeQuality(process.env.GPT_IMAGE_2_QUALITY || "medium");
+const GPT_IMAGE_2_OUTPUT_FORMAT = normalizeOutputFormat(process.env.GPT_IMAGE_2_OUTPUT_FORMAT || "png");
+const GPT_IMAGE_2_OUTPUT_COMPRESSION = normalizeOutputCompression(
+  process.env.GPT_IMAGE_2_OUTPUT_COMPRESSION
+);
+const GPT_IMAGE_2_MODERATION = normalizeModeration(process.env.GPT_IMAGE_2_MODERATION || "auto");
+const GPT_IMAGE_2_MAX_EDGE = 3840;
+const GPT_IMAGE_2_MIN_PIXELS = 655360;
+const GPT_IMAGE_2_MAX_PIXELS = 8294400;
+const GPT_IMAGE_2_MAX_ASPECT_RATIO = 3;
+const EXACT_SIZE_PATTERN = /^(\d{2,4})\s*[xX]\s*(\d{2,4})$/;
 
 function withApiVersion(url) {
   if (!GPT_IMAGE_2_API_VERSION) {
@@ -51,8 +61,13 @@ function normalizeImageInput(image) {
 
 function mapImageSize(imageSize = "1:1", hasImageInput = false) {
   const ratio = String(imageSize || "1:1").trim().toLowerCase();
-  if (ratio === "auto" && hasImageInput) {
-    return "1024x1024";
+  const exactSize = parseExactSize(ratio);
+  if (exactSize) {
+    validateExactSizeOrThrow(exactSize.width, exactSize.height);
+    return `${exactSize.width}x${exactSize.height}`;
+  }
+  if (ratio === "auto") {
+    return "auto";
   }
   if (["1:1"].includes(ratio)) return "1024x1024";
   if (["16:9", "4:3", "3:2", "5:4", "21:9", "4:1", "8:1"].includes(ratio)) return "1536x1024";
@@ -66,6 +81,65 @@ function normalizeQuality(quality) {
     return nextValue;
   }
   return "medium";
+}
+
+function normalizeOutputFormat(format) {
+  const nextValue = String(format || "").trim().toLowerCase();
+  if (["png", "jpeg", "webp"].includes(nextValue)) {
+    return nextValue;
+  }
+  return "png";
+}
+
+function normalizeOutputCompression(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const nextValue = Number(value);
+  if (!Number.isFinite(nextValue)) return null;
+  return Math.min(100, Math.max(0, Math.round(nextValue)));
+}
+
+function toMimeType(outputFormat) {
+  const format = normalizeOutputFormat(outputFormat);
+  if (format === "jpeg") return "image/jpeg";
+  if (format === "webp") return "image/webp";
+  return "image/png";
+}
+
+function normalizeModeration(value) {
+  const nextValue = String(value || "").trim().toLowerCase();
+  if (["auto", "low"].includes(nextValue)) {
+    return nextValue;
+  }
+  return "auto";
+}
+
+function parseExactSize(imageSize) {
+  const match = String(imageSize || "").trim().match(EXACT_SIZE_PATTERN);
+  if (!match) return null;
+  const width = Number(match[1]);
+  const height = Number(match[2]);
+  if (!Number.isFinite(width) || !Number.isFinite(height)) return null;
+  return { width, height };
+}
+
+function validateExactSizeOrThrow(width, height) {
+  if (width > GPT_IMAGE_2_MAX_EDGE || height > GPT_IMAGE_2_MAX_EDGE) {
+    throw new Error(`GPT Image 2 自定义尺寸最长边不能超过 ${GPT_IMAGE_2_MAX_EDGE}px。`);
+  }
+  if (width % 16 !== 0 || height % 16 !== 0) {
+    throw new Error("GPT Image 2 自定义尺寸的宽高都必须是 16 的倍数。");
+  }
+  const longEdge = Math.max(width, height);
+  const shortEdge = Math.max(1, Math.min(width, height));
+  if (longEdge / shortEdge > GPT_IMAGE_2_MAX_ASPECT_RATIO) {
+    throw new Error(`GPT Image 2 自定义尺寸长宽比不能超过 ${GPT_IMAGE_2_MAX_ASPECT_RATIO}:1。`);
+  }
+  const totalPixels = width * height;
+  if (totalPixels < GPT_IMAGE_2_MIN_PIXELS || totalPixels > GPT_IMAGE_2_MAX_PIXELS) {
+    throw new Error(
+      `GPT Image 2 自定义尺寸总像素必须介于 ${GPT_IMAGE_2_MIN_PIXELS} 和 ${GPT_IMAGE_2_MAX_PIXELS} 之间。`
+    );
+  }
 }
 
 function parseResponseError(data, status) {
@@ -122,7 +196,17 @@ function base64ToBlob(dataUrl) {
   return { blob: new Blob([buffer], { type: "image/png" }), mimeType: "image/png" };
 }
 
-async function postFormData(url, { model, prompt, images, size, n, quality }) {
+async function postFormData(url, {
+  model,
+  prompt,
+  images,
+  size,
+  n,
+  quality,
+  outputFormat,
+  outputCompression,
+  moderation,
+}) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), GPT_IMAGE_2_TIMEOUT_MS);
   try {
@@ -132,6 +216,11 @@ async function postFormData(url, { model, prompt, images, size, n, quality }) {
     formData.append("n", String(n));
     formData.append("size", size);
     if (quality) formData.append("quality", quality);
+    if (outputFormat) formData.append("output_format", outputFormat);
+    if (outputCompression !== null && outputCompression !== undefined) {
+      formData.append("output_compression", String(outputCompression));
+    }
+    if (moderation) formData.append("moderation", moderation);
 
     for (const imgSrc of images) {
       const { blob, mimeType } = base64ToBlob(imgSrc);
@@ -155,7 +244,7 @@ async function postFormData(url, { model, prompt, images, size, n, quality }) {
   }
 }
 
-function extractUrls(data = {}) {
+function extractUrls(data = {}, fallbackMimeType = "image/png") {
   const items = Array.isArray(data?.data) ? data.data : [];
   return items
     .map((item) => {
@@ -163,10 +252,10 @@ function extractUrls(data = {}) {
         return item.url;
       }
       if (typeof item?.b64_json === "string" && item.b64_json) {
-        return `data:image/png;base64,${item.b64_json}`;
+        return `data:${fallbackMimeType};base64,${item.b64_json}`;
       }
       if (typeof item?.base64 === "string" && item.base64) {
-        return `data:image/png;base64,${item.base64}`;
+        return `data:${fallbackMimeType};base64,${item.base64}`;
       }
       return "";
     })
@@ -181,10 +270,22 @@ export function isGptImage2Configured() {
   return Boolean(GPT_IMAGE_2_API_BASE_RAW && GPT_IMAGE_2_API_KEY && GPT_IMAGE_2_MODEL);
 }
 
-export async function generateWithGptImage2({ prompt, imageSize = "1:1", num = 1 }) {
+export async function generateWithGptImage2({
+  prompt,
+  imageSize = "1:1",
+  num = 1,
+  quality = GPT_IMAGE_2_QUALITY,
+  outputFormat = GPT_IMAGE_2_OUTPUT_FORMAT,
+  outputCompression = GPT_IMAGE_2_OUTPUT_COMPRESSION,
+  moderation = GPT_IMAGE_2_MODERATION,
+}) {
   if (!isGptImage2Configured()) {
     throw new Error("GPT Image 2 尚未配置完整的 API 信息。");
   }
+
+  const normalizedOutputFormat = normalizeOutputFormat(outputFormat);
+  const normalizedOutputCompression =
+    normalizedOutputFormat === "png" ? null : normalizeOutputCompression(outputCompression);
 
   const result = await postJson(
     buildDeploymentUrl("/images/generations"),
@@ -193,14 +294,26 @@ export async function generateWithGptImage2({ prompt, imageSize = "1:1", num = 1
       prompt: String(prompt || "").trim(),
       size: mapImageSize(imageSize, false),
       n: Math.max(1, Number(num) || 1),
-      quality: GPT_IMAGE_2_QUALITY,
+      quality: normalizeQuality(quality),
+      output_format: normalizedOutputFormat,
+      ...(normalizedOutputCompression !== null ? { output_compression: normalizedOutputCompression } : {}),
+      moderation: normalizeModeration(moderation),
     }
   );
 
-  return extractUrls(result);
+  return extractUrls(result, toMimeType(normalizedOutputFormat));
 }
 
-export async function editWithGptImage2({ prompt, image, imageSize = "1:1", num = 1 }) {
+export async function editWithGptImage2({
+  prompt,
+  image,
+  imageSize = "1:1",
+  num = 1,
+  quality = GPT_IMAGE_2_QUALITY,
+  outputFormat = GPT_IMAGE_2_OUTPUT_FORMAT,
+  outputCompression = GPT_IMAGE_2_OUTPUT_COMPRESSION,
+  moderation = GPT_IMAGE_2_MODERATION,
+}) {
   if (!isGptImage2Configured()) {
     throw new Error("GPT Image 2 尚未配置完整的 API 信息。");
   }
@@ -210,6 +323,10 @@ export async function editWithGptImage2({ prompt, image, imageSize = "1:1", num 
     throw new Error("GPT Image 2 编辑需要至少 1 张参考图。");
   }
 
+  const normalizedOutputFormat = normalizeOutputFormat(outputFormat);
+  const normalizedOutputCompression =
+    normalizedOutputFormat === "png" ? null : normalizeOutputCompression(outputCompression);
+
   const result = await postFormData(
     buildDeploymentUrl("/images/edits"),
     {
@@ -218,9 +335,12 @@ export async function editWithGptImage2({ prompt, image, imageSize = "1:1", num 
       images,
       size: mapImageSize(imageSize, true),
       n: Math.max(1, Number(num) || 1),
-      quality: GPT_IMAGE_2_QUALITY,
+      quality: normalizeQuality(quality),
+      outputFormat: normalizedOutputFormat,
+      outputCompression: normalizedOutputCompression,
+      moderation: normalizeModeration(moderation),
     }
   );
 
-  return extractUrls(result);
+  return extractUrls(result, toMimeType(normalizedOutputFormat));
 }

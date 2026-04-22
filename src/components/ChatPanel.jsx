@@ -88,15 +88,102 @@ const MODEL_TIERS = [
     ],
     maxInputImages: 10,
     extendedRatios: true,
+    customSizes: true,
   },
 ];
 
 const STANDARD_RATIOS = ["auto", "1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "4:5", "5:4"];
 const EXTENDED_RATIOS = ["21:9", "1:4", "4:1", "8:1", "1:8"];
+const GPT_IMAGE_2_PRESET_SIZES = [
+  "1024x1024",
+  "1536x1024",
+  "1024x1536",
+  "2048x2048",
+  "2048x1152",
+  "1152x2048",
+  "3840x2160",
+  "2160x3840",
+];
+const GPT_IMAGE_2_QUALITY_OPTIONS = [
+  { value: "auto", label: "Auto" },
+  { value: "low", label: "低" },
+  { value: "medium", label: "中" },
+  { value: "high", label: "高" },
+];
+const GPT_IMAGE_2_FORMAT_OPTIONS = [
+  { value: "png", label: "PNG" },
+  { value: "jpeg", label: "JPEG" },
+  { value: "webp", label: "WebP" },
+];
+const GPT_IMAGE_2_MODERATION_OPTIONS = [
+  { value: "auto", label: "标准" },
+  { value: "low", label: "较宽松" },
+];
+const RATIO_FALLBACK_CANDIDATES = [
+  [1, 1], [16, 9], [9, 16], [4, 3], [3, 4],
+  [3, 2], [2, 3], [4, 5], [5, 4],
+  [21, 9], [1, 4], [4, 1], [8, 1], [1, 8],
+];
+const EXACT_SIZE_PATTERN = /^(\d{2,4})\s*[xX]\s*(\d{2,4})$/;
+const GPT_IMAGE_2_SIZE_LIMITS = {
+  maxEdge: 3840,
+  minPixels: 655360,
+  maxPixels: 8294400,
+  maxAspectRatio: 3,
+};
 const SERVICE_TIERS = [
   { id: "default", label: "标准", desc: "更省积分" },
   { id: "priority", label: "高优先", desc: "更稳更快" },
 ];
+
+function parseExactSizeValue(value) {
+  const match = String(value || "").trim().match(EXACT_SIZE_PATTERN);
+  if (!match) return null;
+  const width = Number(match[1]);
+  const height = Number(match[2]);
+  if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+    return null;
+  }
+  return { width, height };
+}
+
+function getClosestRatioForSize(value) {
+  const parsed = parseExactSizeValue(value);
+  if (!parsed) return "1:1";
+  const target = parsed.width / parsed.height;
+  let best = RATIO_FALLBACK_CANDIDATES[0];
+  let diff = Math.abs(target - best[0] / best[1]);
+  for (const candidate of RATIO_FALLBACK_CANDIDATES.slice(1)) {
+    const nextDiff = Math.abs(target - candidate[0] / candidate[1]);
+    if (nextDiff < diff) {
+      best = candidate;
+      diff = nextDiff;
+    }
+  }
+  return `${best[0]}:${best[1]}`;
+}
+
+function validateGptImage2CustomSize(width, height) {
+  if (!Number.isInteger(width) || !Number.isInteger(height) || width <= 0 || height <= 0) {
+    return "请输入有效的宽高。";
+  }
+  if (width > GPT_IMAGE_2_SIZE_LIMITS.maxEdge || height > GPT_IMAGE_2_SIZE_LIMITS.maxEdge) {
+    return `最长边不能超过 ${GPT_IMAGE_2_SIZE_LIMITS.maxEdge}px。`;
+  }
+  if (width % 16 !== 0 || height % 16 !== 0) {
+    return "宽高都必须是 16 的倍数。";
+  }
+  const longEdge = Math.max(width, height);
+  const shortEdge = Math.max(1, Math.min(width, height));
+  if (longEdge / shortEdge > GPT_IMAGE_2_SIZE_LIMITS.maxAspectRatio) {
+    return `长宽比不能超过 ${GPT_IMAGE_2_SIZE_LIMITS.maxAspectRatio}:1。`;
+  }
+  const totalPixels = width * height;
+  if (totalPixels < GPT_IMAGE_2_SIZE_LIMITS.minPixels || totalPixels > GPT_IMAGE_2_SIZE_LIMITS.maxPixels) {
+    return `总像素需介于 ${GPT_IMAGE_2_SIZE_LIMITS.minPixels} 和 ${GPT_IMAGE_2_SIZE_LIMITS.maxPixels} 之间。`;
+  }
+  return "";
+}
 
 function getServiceTierLabel(serviceTier) {
   if (serviceTier === "default") return "标准线路";
@@ -390,6 +477,30 @@ function MessageBubble({ message, onRetry, onDownload, onImageClick, onPreview, 
   );
 }
 
+function CollapsibleParamSection({ title, summary, open, onToggle, children }) {
+  return (
+    <div className="rounded-xl border border-border-primary bg-bg-tertiary/55 overflow-hidden">
+      <button
+        type="button"
+        onClick={onToggle}
+        className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-bg-hover/70 transition-all"
+      >
+        <div className="min-w-0 flex-1">
+          <span className="block text-[11px] text-text-primary font-medium">{title}</span>
+          {summary ? (
+            <span className="block text-[10px] text-text-tertiary truncate mt-0.5">{summary}</span>
+          ) : null}
+        </div>
+        <ChevronDown
+          size={14}
+          className={`text-text-tertiary transition-transform ${open ? "rotate-180" : ""}`}
+        />
+      </button>
+      {open && <div className="px-3 pb-3 border-t border-border-primary/70">{children}</div>}
+    </div>
+  );
+}
+
 export default function ChatPanel({
   conversations = [],
   activeConversationId,
@@ -418,6 +529,9 @@ export default function ChatPanel({
   const [showConversationMenu, setShowConversationMenu] = useState(false);
   const [showEntryModeMenu, setShowEntryModeMenu] = useState(false);
   const [conversationSearch, setConversationSearch] = useState("");
+  const [customWidth, setCustomWidth] = useState("");
+  const [customHeight, setCustomHeight] = useState("");
+  const [gptAdvancedOpen, setGptAdvancedOpen] = useState(false);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -445,6 +559,33 @@ export default function ChatPanel({
   const availableRatios = currentTier.extendedRatios ? [...STANDARD_RATIOS, ...EXTENDED_RATIOS] : STANDARD_RATIOS;
   const maxImages = currentTier.maxInputImages;
   const currentServiceTier = params.service_tier === "default" ? "default" : "priority";
+  const isGptImage2Tier = currentTier.id === "chatgpt-image2";
+  const supportsCustomSizes = Boolean(currentTier.customSizes);
+  const exactSize = parseExactSizeValue(params.image_size);
+  const currentGptQuality = isGptImage2Tier ? String(params.quality || "auto").trim().toLowerCase() : "auto";
+  const currentGptFormat = isGptImage2Tier ? String(params.output_format || "png").trim().toLowerCase() : "png";
+  const currentGptModeration = isGptImage2Tier ? String(params.moderation || "auto").trim().toLowerCase() : "auto";
+  const currentGptCompression = Number.isFinite(Number(params.output_compression))
+    ? Math.min(100, Math.max(0, Number(params.output_compression)))
+    : 90;
+  const currentGptQualityLabel =
+    GPT_IMAGE_2_QUALITY_OPTIONS.find((item) => item.value === currentGptQuality)?.label || "Auto";
+  const currentGptFormatLabel =
+    GPT_IMAGE_2_FORMAT_OPTIONS.find((item) => item.value === currentGptFormat)?.label || "PNG";
+  const currentGptModerationLabel =
+    GPT_IMAGE_2_MODERATION_OPTIONS.find((item) => item.value === currentGptModeration)?.label || "标准";
+  const customWidthNumber = Number(customWidth);
+  const customHeightNumber = Number(customHeight);
+  const customSizeValidation =
+    customWidth || customHeight
+      ? validateGptImage2CustomSize(customWidthNumber, customHeightNumber)
+      : "";
+  const canApplyCustomSize = Boolean(
+    supportsCustomSizes
+    && customWidth.trim()
+    && customHeight.trim()
+    && !customSizeValidation
+  );
   const currentEntryMode = entryMode === "quick" ? "quick" : "agent";
   const currentEntryModeLabel = currentEntryMode === "quick" ? "Auto Design" : "Agent";
   const isQuickEntryMode = currentEntryMode === "quick";
@@ -470,6 +611,30 @@ export default function ChatPanel({
       minute: "2-digit",
     });
   }, []);
+
+  useEffect(() => {
+    if (!supportsCustomSizes) {
+      setCustomWidth("");
+      setCustomHeight("");
+      return;
+    }
+    if (!exactSize) return;
+    setCustomWidth(String(exactSize.width));
+    setCustomHeight(String(exactSize.height));
+  }, [supportsCustomSizes, exactSize?.width, exactSize?.height]);
+
+  useEffect(() => {
+    if (!isGptImage2Tier) return;
+    if (params.quality && params.output_format && params.moderation) return;
+    onParamsChange((p) => ({
+      ...p,
+      quality: p.quality || "auto",
+      output_format: p.output_format || "png",
+      moderation: p.moderation || "auto",
+      output_compression:
+        p.output_compression ?? (String(p.output_format || "png").toLowerCase() === "png" ? undefined : 90),
+    }));
+  }, [isGptImage2Tier, onParamsChange, params.quality, params.output_format, params.moderation, params.output_compression]);
 
   /** 固定比例时清除 _autoRatio；选 Auto 时按首张参考图重新识别 */
   const applyRatio = useCallback(
@@ -591,9 +756,28 @@ export default function ChatPanel({
 
   const setTier = (tier) => {
     const defaultVariant = tier.variants.find((v) => v.label === "1K") || tier.variants[0];
-    const newRatio = !tier.extendedRatios && EXTENDED_RATIOS.includes(params.image_size) ? "1:1" : params.image_size;
-    onParamsChange({ ...params, model: defaultVariant.model, image_size: newRatio });
+    let nextImageSize = params.image_size;
+    if (!tier.customSizes && parseExactSizeValue(nextImageSize)) {
+      nextImageSize = getClosestRatioForSize(nextImageSize);
+    }
+    if (!tier.extendedRatios && EXTENDED_RATIOS.includes(nextImageSize)) {
+      nextImageSize = "1:1";
+    }
+    onParamsChange({ ...params, model: defaultVariant.model, image_size: nextImageSize });
   };
+
+  const applyCustomSize = useCallback(() => {
+    const width = Number(customWidth);
+    const height = Number(customHeight);
+    const validation = validateGptImage2CustomSize(width, height);
+    if (validation) return;
+    onParamsChange((p) => ({
+      ...p,
+      image_size: `${width}x${height}`,
+      _autoRatio: undefined,
+      _autoDimensions: undefined,
+    }));
+  }, [customWidth, customHeight, onParamsChange]);
 
   // Resize handle
   const handleResizeStart = useCallback((e) => {
@@ -907,49 +1091,267 @@ export default function ChatPanel({
                   ))}
                 </div>
               </div>
-              <div>
-                <span className="block text-[11px] text-text-tertiary mb-1.5">线路</span>
-                <div className="grid grid-cols-2 gap-1.5">
-                  {SERVICE_TIERS.map((tier) => (
-                    <button
-                      key={tier.id}
-                      type="button"
-                      onClick={() => onParamsChange({ ...params, service_tier: tier.id })}
-                      className={`px-3 py-2 rounded-lg text-left border transition-all ${
-                        params.service_tier === tier.id
-                          ? "bg-accent/10 border-accent/30 text-text-primary"
-                          : "bg-bg-tertiary border-border-primary text-text-secondary hover:bg-bg-hover"
-                      }`}
-                    >
-                      <span className="block text-[11px] font-medium">{tier.label}</span>
-                      <span className="block text-[10px] text-text-tertiary mt-0.5">{tier.desc}</span>
-                    </button>
-                  ))}
+              {!isGptImage2Tier && (
+                <div>
+                  <span className="block text-[11px] text-text-tertiary mb-1.5">线路</span>
+                  <div className="grid grid-cols-2 gap-1.5">
+                    {SERVICE_TIERS.map((tier) => (
+                      <button
+                        key={tier.id}
+                        type="button"
+                        onClick={() => onParamsChange({ ...params, service_tier: tier.id })}
+                        className={`px-3 py-2 rounded-lg text-left border transition-all ${
+                          params.service_tier === tier.id
+                            ? "bg-accent/10 border-accent/30 text-text-primary"
+                            : "bg-bg-tertiary border-border-primary text-text-secondary hover:bg-bg-hover"
+                        }`}
+                      >
+                        <span className="block text-[11px] font-medium">{tier.label}</span>
+                        <span className="block text-[10px] text-text-tertiary mt-0.5">{tier.desc}</span>
+                      </button>
+                    ))}
+                  </div>
                 </div>
-              </div>
-              <div>
-                <span className="block text-[11px] text-text-tertiary mb-1.5">
-                  宽高比{currentTier.extendedRatios && <span className="text-blue-400 ml-1">+ 扩展</span>}
-                </span>
-                <div className="flex gap-1 flex-wrap">
-                  {availableRatios.map((r) => (
-                    <button key={r} onClick={() => void applyRatio(r)}
-                      className={`px-2 py-1 rounded-md text-[10px] font-medium transition-all ${params.image_size === r ? "bg-accent text-white" : r === "auto" ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 hover:bg-emerald-500/20" : EXTENDED_RATIOS.includes(r) ? "bg-blue-500/10 text-blue-400 border border-blue-500/20 hover:bg-blue-500/20" : "bg-bg-tertiary text-text-secondary hover:bg-bg-hover border border-border-primary"}`}>
-                      {r === "auto" ? "Auto" : r}
-                    </button>
-                  ))}
+              )}
+              {isGptImage2Tier ? (
+                <CollapsibleParamSection
+                  title="GPT 高级参数"
+                  summary={[
+                    params.image_size === "auto"
+                      ? `宽高比 Auto`
+                      : `宽高比 ${params.image_size}`,
+                    exactSize ? `精确 ${exactSize.width}x${exactSize.height}` : null,
+                    `质量 ${currentGptQualityLabel}`,
+                    `格式 ${currentGptFormatLabel}`,
+                    `审核 ${currentGptModerationLabel}`,
+                  ].filter(Boolean).join(" · ")}
+                  open={gptAdvancedOpen}
+                  onToggle={() => setGptAdvancedOpen((prev) => !prev)}
+                >
+                  <div className="pt-2 space-y-3">
+                    <div>
+                      <span className="block text-[11px] text-text-tertiary mb-1.5">
+                        宽高比{currentTier.extendedRatios && <span className="text-blue-400 ml-1">+ 扩展</span>}
+                      </span>
+                      <div className="flex gap-1 flex-wrap">
+                        {availableRatios.map((r) => (
+                          <button key={r} onClick={() => void applyRatio(r)}
+                            className={`px-2 py-1 rounded-md text-[10px] font-medium transition-all ${params.image_size === r ? "bg-accent text-white" : r === "auto" ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 hover:bg-emerald-500/20" : EXTENDED_RATIOS.includes(r) ? "bg-blue-500/10 text-blue-400 border border-blue-500/20 hover:bg-blue-500/20" : "bg-bg-tertiary text-text-secondary hover:bg-bg-hover border border-border-primary"}`}>
+                            {r === "auto" ? "Auto" : r}
+                          </button>
+                        ))}
+                      </div>
+                      {params.image_size === "auto" && params._autoDimensions && (
+                        <p className="text-[10px] text-emerald-400 mt-1.5">
+                          已识别: {params._autoDimensions} px
+                        </p>
+                      )}
+                      {params.image_size === "auto" && !params._autoDimensions && (
+                        <p className="text-[10px] text-text-tertiary mt-1.5">
+                          GPT Image 2 将交给 API 自动决定尺寸
+                        </p>
+                      )}
+                    </div>
+                    {supportsCustomSizes && (
+                      <div>
+                        <span className="block text-[11px] text-text-tertiary mb-1.5">精确尺寸</span>
+                        <div className="flex gap-1.5 flex-wrap">
+                          {GPT_IMAGE_2_PRESET_SIZES.map((size) => (
+                            <button
+                              key={size}
+                              type="button"
+                              onClick={() =>
+                                onParamsChange((p) => ({
+                                  ...p,
+                                  image_size: size,
+                                  _autoRatio: undefined,
+                                  _autoDimensions: undefined,
+                                }))
+                              }
+                              className={`px-2.5 py-1.5 rounded-lg text-[11px] font-medium transition-all ${
+                                params.image_size === size
+                                  ? "bg-fuchsia-500/20 text-fuchsia-200 border border-fuchsia-500/30"
+                                  : "bg-bg-tertiary text-text-secondary hover:bg-bg-hover border border-border-primary"
+                              }`}
+                            >
+                              {size}
+                            </button>
+                          ))}
+                        </div>
+                        <div className="flex items-center gap-1.5 mt-2">
+                          <input
+                            type="number"
+                            min={16}
+                            step={16}
+                            value={customWidth}
+                            onChange={(e) => setCustomWidth(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter" && canApplyCustomSize) {
+                                e.preventDefault();
+                                applyCustomSize();
+                              }
+                            }}
+                            placeholder="宽"
+                            className="w-20 px-2 py-1.5 rounded-lg text-[11px] font-medium bg-bg-tertiary border border-border-primary text-text-primary tabular-nums"
+                          />
+                          <span className="text-[11px] text-text-tertiary">×</span>
+                          <input
+                            type="number"
+                            min={16}
+                            step={16}
+                            value={customHeight}
+                            onChange={(e) => setCustomHeight(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter" && canApplyCustomSize) {
+                                e.preventDefault();
+                                applyCustomSize();
+                              }
+                            }}
+                            placeholder="高"
+                            className="w-20 px-2 py-1.5 rounded-lg text-[11px] font-medium bg-bg-tertiary border border-border-primary text-text-primary tabular-nums"
+                          />
+                          <button
+                            type="button"
+                            onClick={applyCustomSize}
+                            disabled={!canApplyCustomSize}
+                            className={`px-3 py-1.5 rounded-lg text-[11px] font-medium transition-all border ${
+                              canApplyCustomSize
+                                ? "bg-accent text-white border-accent"
+                                : "bg-bg-tertiary text-text-tertiary border-border-primary cursor-not-allowed"
+                            }`}
+                          >
+                            应用
+                          </button>
+                        </div>
+                        <p className="text-[10px] text-text-tertiary mt-1.5">
+                          支持到 4K；最长边 ≤ 3840，宽高为 16 的倍数，长宽比 ≤ 3:1。
+                        </p>
+                        {customSizeValidation && (
+                          <p className="text-[10px] text-amber-400 mt-1">{customSizeValidation}</p>
+                        )}
+                      </div>
+                    )}
+                    <div>
+                      <span className="block text-[11px] text-text-tertiary mb-1.5">渲染质量</span>
+                      <div className="flex gap-1.5 flex-wrap">
+                        {GPT_IMAGE_2_QUALITY_OPTIONS.map((item) => (
+                          <button
+                            key={item.value}
+                            type="button"
+                            onClick={() => onParamsChange({ ...params, quality: item.value })}
+                            className={`px-2.5 py-1.5 rounded-lg text-[11px] font-medium transition-all ${
+                              currentGptQuality === item.value
+                                ? "bg-fuchsia-500/20 text-fuchsia-200 border border-fuchsia-500/30"
+                                : "bg-bg-tertiary text-text-secondary hover:bg-bg-hover border border-border-primary"
+                            }`}
+                          >
+                            {item.label}
+                          </button>
+                        ))}
+                      </div>
+                      <p className="text-[10px] text-text-tertiary mt-1.5">
+                        `auto` 让 API 自动取舍速度和画质，`low` 更快，`high` 更适合最终成图。
+                      </p>
+                    </div>
+                    <div>
+                      <span className="block text-[11px] text-text-tertiary mb-1.5">输出格式</span>
+                      <div className="flex gap-1.5 flex-wrap">
+                        {GPT_IMAGE_2_FORMAT_OPTIONS.map((item) => (
+                          <button
+                            key={item.value}
+                            type="button"
+                            onClick={() =>
+                              onParamsChange({
+                                ...params,
+                                output_format: item.value,
+                                ...(item.value === "png" ? { output_compression: undefined } : {}),
+                              })
+                            }
+                            className={`px-2.5 py-1.5 rounded-lg text-[11px] font-medium transition-all ${
+                              currentGptFormat === item.value
+                                ? "bg-fuchsia-500/20 text-fuchsia-200 border border-fuchsia-500/30"
+                                : "bg-bg-tertiary text-text-secondary hover:bg-bg-hover border border-border-primary"
+                            }`}
+                          >
+                            {item.label}
+                          </button>
+                        ))}
+                      </div>
+                      {currentGptFormat !== "png" && (
+                        <div className="flex items-center gap-2 mt-2">
+                          <input
+                            type="range"
+                            min={0}
+                            max={100}
+                            step={1}
+                            value={currentGptCompression}
+                            onChange={(e) =>
+                              onParamsChange({
+                                ...params,
+                                output_format: currentGptFormat,
+                                output_compression: Math.min(100, Math.max(0, Number(e.target.value) || 0)),
+                              })
+                            }
+                            className="flex-1 accent-fuchsia-400"
+                          />
+                          <span className="w-10 text-right text-[10px] text-text-tertiary tabular-nums">
+                            {currentGptCompression}
+                          </span>
+                        </div>
+                      )}
+                      <p className="text-[10px] text-text-tertiary mt-1.5">
+                        PNG 画质最好；JPEG / WebP 支持压缩，通常下载更小、返回更快。
+                      </p>
+                    </div>
+                    <div>
+                      <span className="block text-[11px] text-text-tertiary mb-1.5">审核强度</span>
+                      <div className="flex gap-1.5 flex-wrap">
+                        {GPT_IMAGE_2_MODERATION_OPTIONS.map((item) => (
+                          <button
+                            key={item.value}
+                            type="button"
+                            onClick={() => onParamsChange({ ...params, moderation: item.value })}
+                            className={`px-2.5 py-1.5 rounded-lg text-[11px] font-medium transition-all ${
+                              currentGptModeration === item.value
+                                ? "bg-fuchsia-500/20 text-fuchsia-200 border border-fuchsia-500/30"
+                                : "bg-bg-tertiary text-text-secondary hover:bg-bg-hover border border-border-primary"
+                            }`}
+                          >
+                            {item.label}
+                          </button>
+                        ))}
+                      </div>
+                      <p className="text-[10px] text-text-tertiary mt-1.5">
+                        `low` 会更宽松，但仍然会受到平台内容策略限制。
+                      </p>
+                    </div>
+                  </div>
+                </CollapsibleParamSection>
+              ) : (
+                <div>
+                  <span className="block text-[11px] text-text-tertiary mb-1.5">
+                    宽高比{currentTier.extendedRatios && <span className="text-blue-400 ml-1">+ 扩展</span>}
+                  </span>
+                  <div className="flex gap-1 flex-wrap">
+                    {availableRatios.map((r) => (
+                      <button key={r} onClick={() => void applyRatio(r)}
+                        className={`px-2 py-1 rounded-md text-[10px] font-medium transition-all ${params.image_size === r ? "bg-accent text-white" : r === "auto" ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 hover:bg-emerald-500/20" : EXTENDED_RATIOS.includes(r) ? "bg-blue-500/10 text-blue-400 border border-blue-500/20 hover:bg-blue-500/20" : "bg-bg-tertiary text-text-secondary hover:bg-bg-hover border border-border-primary"}`}>
+                        {r === "auto" ? "Auto" : r}
+                      </button>
+                    ))}
+                  </div>
+                  {params.image_size === "auto" && params._autoDimensions && (
+                    <p className="text-[10px] text-emerald-400 mt-1">
+                      已识别: {params._autoDimensions} px
+                    </p>
+                  )}
+                  {params.image_size === "auto" && !params._autoDimensions && (
+                    <p className="text-[10px] text-text-tertiary mt-1">
+                      上传参考图后显示具体宽高（像素）
+                    </p>
+                  )}
                 </div>
-                {params.image_size === "auto" && params._autoDimensions && (
-                  <p className="text-[10px] text-emerald-400 mt-1">
-                    已识别: {params._autoDimensions} px
-                  </p>
-                )}
-                {params.image_size === "auto" && !params._autoDimensions && (
-                  <p className="text-[10px] text-text-tertiary mt-1">
-                    上传参考图后显示具体宽高（像素）
-                  </p>
-                )}
-              </div>
+              )}
               <div>
                 <span className="block text-[11px] text-text-tertiary mb-1.5">
                   生成数量（1–{MAX_GEN_COUNT}）

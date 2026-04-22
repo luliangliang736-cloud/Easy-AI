@@ -18,7 +18,18 @@ export async function POST(request) {
 
   try {
     const body = await request.json();
-    const { prompt, model, image_size, num, ref_images, service_tier } = body;
+    const {
+      prompt,
+      model,
+      image_size,
+      num,
+      ref_images,
+      service_tier,
+      quality,
+      output_format,
+      output_compression,
+      moderation,
+    } = body;
 
     if (!prompt?.trim()) {
       return NextResponse.json({ error: "Prompt is required" }, { status: 400 });
@@ -29,6 +40,10 @@ export async function POST(request) {
         prompt,
         imageSize: image_size,
         num: Math.min(Math.max(num || 1, 1), MAX_GEN_COUNT),
+        quality,
+        outputFormat: output_format,
+        outputCompression: output_compression,
+        moderation,
       });
       const tasks = urls
         .filter(Boolean)

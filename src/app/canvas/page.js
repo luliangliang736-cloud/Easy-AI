@@ -409,7 +409,9 @@ function resolveAgentParams(baseParams, promptText, refImages = []) {
 
 function parseAspectRatio(imageSize) {
   if (!imageSize || imageSize === "auto") return 1;
-  const [w, h] = String(imageSize).split(":").map(Number);
+  const normalized = String(imageSize).trim().toLowerCase();
+  const separator = normalized.includes("x") ? "x" : ":";
+  const [w, h] = normalized.split(separator).map(Number);
   if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) return 1;
   return w / h;
 }
@@ -1304,11 +1306,16 @@ function HomeInner() {
         })
       );
 
+      const isGptImage2Request = requestParams.model === GPT_IMAGE_2_MODEL;
       const imageSize =
         requestParams.image_size === "auto"
-          ? (requestParams._autoRatio || "1:1")
+          ? (isGptImage2Request ? "auto" : (requestParams._autoRatio || "1:1"))
           : requestParams.image_size;
-      const placeholderAspectRatio = parseAspectRatio(imageSize);
+      const placeholderAspectRatio = parseAspectRatio(
+        requestParams.image_size === "auto"
+          ? (requestParams._autoRatio || (isGptImage2Request ? "1:1" : imageSize))
+          : imageSize
+      );
       const imagePayload =
         preparedImages.length === 1 ? preparedImages[0] : preparedImages;
 
@@ -1372,6 +1379,10 @@ function HomeInner() {
                   num: 1,
                   mode: editMode,
                   service_tier: requestParams.service_tier,
+                  quality: requestParams.quality,
+                  output_format: requestParams.output_format,
+                  output_compression: requestParams.output_compression,
+                  moderation: requestParams.moderation,
                 }),
               }, IMAGE_REQUEST_TIMEOUT_MS);
             } else {
@@ -1385,6 +1396,10 @@ function HomeInner() {
                   image_size: imageSize,
                   num: 1,
                   service_tier: requestParams.service_tier,
+                  quality: requestParams.quality,
+                  output_format: requestParams.output_format,
+                  output_compression: requestParams.output_compression,
+                  moderation: requestParams.moderation,
                   ref_images: preparedImages,
                 }),
               }, IMAGE_REQUEST_TIMEOUT_MS);

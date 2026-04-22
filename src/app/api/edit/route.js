@@ -48,7 +48,19 @@ async function runTrueCutout(image) {
 export async function POST(request) {
   try {
     const body = await request.json();
-    const { prompt, image, model, image_size, num, mode, service_tier } = body;
+    const {
+      prompt,
+      image,
+      model,
+      image_size,
+      num,
+      mode,
+      service_tier,
+      quality,
+      output_format,
+      output_compression,
+      moderation,
+    } = body;
 
     if (!prompt?.trim()) {
       return NextResponse.json({ error: "Prompt is required" }, { status: 400 });
@@ -74,6 +86,10 @@ export async function POST(request) {
         image,
         imageSize: image_size,
         num: Math.min(Math.max(num || 1, 1), MAX_GEN_COUNT),
+        quality,
+        outputFormat: output_format,
+        outputCompression: output_compression,
+        moderation,
       });
       const tasks = urls
         .filter(Boolean)
