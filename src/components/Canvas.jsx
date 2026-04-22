@@ -148,6 +148,7 @@ export default function Canvas({
   onSyncCanvasRefImages,
   onSelectedImageRectChange,
   onSemanticSelectionChange,
+  semanticEditEnabled = true,
 }) {
   const toast = useToast();
   const containerRef = useRef(null);
@@ -432,6 +433,10 @@ export default function Canvas({
   }, []);
 
   useEffect(() => {
+    if (!semanticEditEnabled) {
+      setSemanticPickModifierHeld(false);
+      return undefined;
+    }
     const syncModifierState = (event) => {
       setSemanticPickModifierHeld(Boolean(event.ctrlKey || event.metaKey));
     };
@@ -444,7 +449,7 @@ export default function Canvas({
       window.removeEventListener("keyup", syncModifierState);
       window.removeEventListener("blur", clearModifierState);
     };
-  }, []);
+  }, [semanticEditEnabled]);
 
   /** 工具栏：以视口中心为锚点缩放（线性步进保持与按钮一致） */
   const handleToolbarZoomChange = useCallback(
@@ -816,7 +821,7 @@ export default function Canvas({
       const pos = positionsRef.current[id];
       if (!pos) return;
       const img = images.find((i) => i.id === id);
-      if (isSelectTool && (e.ctrlKey || e.metaKey) && img && !target.closest?.("button")) {
+      if (semanticEditEnabled && isSelectTool && (e.ctrlKey || e.metaKey) && img && !target.closest?.("button")) {
         const imageNode = imgEl.querySelector("img");
         setMultiSelectedImageIds([]);
         setMultiSelectedTextIds([]);
@@ -1300,7 +1305,7 @@ export default function Canvas({
   const isMarquee = action?.type === "marquee";
   const isGroupDrag = action?.type === "group_drag";
   const semanticPickActive =
-    isSelectTool && semanticPickModifierHeld && !isPanning && !isDragging && !isDraggingText && !isGroupDrag && !isMarquee;
+    semanticEditEnabled && isSelectTool && semanticPickModifierHeld && !isPanning && !isDragging && !isDraggingText && !isGroupDrag && !isMarquee;
 
   const spacePanHeld = spacePanHeldRef.current;
   const cursor =
@@ -1321,7 +1326,7 @@ export default function Canvas({
                 : "cursor-default";
 
   const handleSemanticPickCursorMove = useCallback((e) => {
-    if (!isSelectTool || !(e.ctrlKey || e.metaKey)) {
+    if (!semanticEditEnabled || !isSelectTool || !(e.ctrlKey || e.metaKey)) {
       setSemanticPickCursorPos(null);
       return;
     }
@@ -1331,7 +1336,7 @@ export default function Canvas({
       x: e.clientX - rect.left,
       y: e.clientY - rect.top,
     });
-  }, [isSelectTool]);
+  }, [isSelectTool, semanticEditEnabled]);
 
   return (
     <div

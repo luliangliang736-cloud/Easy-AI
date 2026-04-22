@@ -157,7 +157,7 @@ function renderAssistantTextBlock(text, isLightTheme) {
           );
         }
 
-        if (/^(📰|✨|📌|🔎|📍|💡)/.test(line)) {
+        if (/^(📰|✨|📚|🎯|📌|🔎|📍|💡|✅|👉|💬|📝)/.test(line)) {
           return (
             <div
               key={`lead-${index}`}

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { MAX_GEN_COUNT } from "@/lib/genLimits";
 import { resolveNanoServiceTier } from "@/lib/nanoConfig";
+import { generateWithGptImage2, isGptImage2Model } from "@/lib/server/gptImage2";
 
 export const maxDuration = 60;
 
@@ -21,6 +22,21 @@ export async function POST(request) {
 
     if (!prompt?.trim()) {
       return NextResponse.json({ error: "Prompt is required" }, { status: 400 });
+    }
+
+    if (isGptImage2Model(model)) {
+      const urls = await generateWithGptImage2({
+        prompt,
+        imageSize: image_size,
+        num: Math.min(Math.max(num || 1, 1), MAX_GEN_COUNT),
+      });
+      const tasks = urls
+        .filter(Boolean)
+        .map((url, index) => ({ id: `gpt-image-2-${index}`, index, url, status: "completed" }));
+      return NextResponse.json({
+        success: true,
+        data: { urls, tasks },
+      });
     }
 
     const payload = {

@@ -415,10 +415,12 @@ function parseAspectRatio(imageSize) {
 }
 
 const REQUEST_TIMEOUT_MS = 90000;
+const IMAGE_REQUEST_TIMEOUT_MS = 5 * 60 * 1000;
 const MAX_PARALLEL_GENERATIONS = 1;
 const STORAGE_VERSION = "9";
 const DEFAULT_CONVERSATION_TITLE = "新建对话";
 const TEXT_EDIT_ENABLED = false;
+const POINT_IMAGE_EDIT_ENABLED = false;
 const VALID_SERVICE_TIERS = new Set(["default", "priority"]);
 const DEFAULT_COMPOSER_MODE = "agent";
 const DEFAULT_ENTRY_MODE = "agent";
@@ -633,7 +635,10 @@ const MODEL_LABELS = {
   "gemini-3-pro-image-preview": "Pro 1K",
   "gemini-3-pro-image-preview-2k": "Pro 2K",
   "gemini-3-pro-image-preview-4k": "Pro 4K",
+  "gpt-image-2": "GPT Image 2",
 };
+
+const GPT_IMAGE_2_MODEL = "gpt-image-2";
 
 const UPSCALE_MODELS = {
   flash: {
@@ -1097,9 +1102,12 @@ function HomeInner() {
     if (!text || isBusy || !activeConversationId) return;
 
     if (
+      POINT_IMAGE_EDIT_ENABLED
+      && (
       effectiveSemanticSelection?.maskDataUrl
       && effectiveSemanticSelection?.imageUrl
       && !retryPayload?.disableSemanticEdit
+      )
     ) {
       const ts = Date.now();
       const conversationId = activeConversationId;
@@ -1212,15 +1220,17 @@ function HomeInner() {
           _autoDimensions: undefined,
         }
       : effectiveParams;
-    const modelLabel = MODEL_LABELS[resolvedParams.model] || resolvedParams.model;
     const hasImages = effectiveRefImages.length > 0;
+    const shouldUseEditApi = Boolean(editMode) || hasImages;
+    const requestParams = resolvedParams;
+    const modelLabel = MODEL_LABELS[requestParams.model] || requestParams.model;
 
     const messageRefImages = hasImages
       ? await Promise.all(effectiveRefImages.map((img) => makeMessagePreviewImage(img)))
       : [];
 
     const inferred = inferLoopCountFromPrompt(composerText);
-    const isEditLikeRequest = hasImages || Boolean(editMode);
+    const isEditLikeRequest = shouldUseEditApi;
     const requestedCount = isEditLikeRequest
       ? (inferred || 1)
       : Math.max(effectiveParams.num || 1, inferred);
@@ -1229,7 +1239,7 @@ function HomeInner() {
       MAX_GEN_COUNT
     );
     const variantDescriptors = getVariantDescriptors(composerText || text, count);
-    const genParams = { ...resolvedParams, num: count };
+    const genParams = { ...requestParams, num: count };
     const displayText = composerText || "请按识别到的文本替换规则编辑图片中的文字";
 
     const userMsg = {
@@ -1270,7 +1280,6 @@ function HomeInner() {
     if (!preserveComposer) {
       setPrompt("");
     }
-
     try {
       const requestController = new AbortController();
       generationAbortRef.current = requestController;
@@ -1296,9 +1305,9 @@ function HomeInner() {
       );
 
       const imageSize =
-        resolvedParams.image_size === "auto"
-          ? (resolvedParams._autoRatio || "1:1")
-          : resolvedParams.image_size;
+        requestParams.image_size === "auto"
+          ? (requestParams._autoRatio || "1:1")
+          : requestParams.image_size;
       const placeholderAspectRatio = parseAspectRatio(imageSize);
       const imagePayload =
         preparedImages.length === 1 ? preparedImages[0] : preparedImages;
@@ -1350,7 +1359,7 @@ function HomeInner() {
 
           try {
             let res;
-            if (hasImages) {
+            if (shouldUseEditApi) {
               res = await fetchWithTimeout("/api/edit", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
@@ -1358,13 +1367,13 @@ function HomeInner() {
                 body: JSON.stringify({
                   prompt: requestPrompt,
                   image: imagePayload,
-                  model: resolvedParams.model,
+                  model: requestParams.model,
                   image_size: imageSize,
                   num: 1,
                   mode: editMode,
-                  service_tier: resolvedParams.service_tier,
+                  service_tier: requestParams.service_tier,
                 }),
-              });
+              }, IMAGE_REQUEST_TIMEOUT_MS);
             } else {
               res = await fetchWithTimeout("/api/generate", {
                 method: "POST",
@@ -1372,12 +1381,13 @@ function HomeInner() {
                 signal: requestController.signal,
                 body: JSON.stringify({
                   prompt: requestPrompt,
-                  model: resolvedParams.model,
+                  model: requestParams.model,
                   image_size: imageSize,
                   num: 1,
-                  service_tier: resolvedParams.service_tier,
+                  service_tier: requestParams.service_tier,
+                  ref_images: preparedImages,
                 }),
-              });
+              }, IMAGE_REQUEST_TIMEOUT_MS);
             }
 
             const data = await parseApiResponse(res);
@@ -2002,7 +2012,9 @@ function HomeInner() {
     const retryTextEditBlocks = previousUserMessage?.textEditBlocks || [];
     const retryComposerMode = previousUserMessage?.composerMode || msg?.composerMode || "manual";
     const retryEntryMode = previousUserMessage?.entryMode || msg?.entryMode || "agent";
-    const retrySemanticSelection = previousUserMessage?.semanticSelection || null;
+    const retrySemanticSelection = POINT_IMAGE_EDIT_ENABLED
+      ? (previousUserMessage?.semanticSelection || null)
+      : null;
 
     if (!retryText) {
       toast("未找到可重试的提示词", "info", 1500);
@@ -2179,6 +2191,7 @@ function HomeInner() {
         onSyncCanvasRefImages={handleSyncCanvasRefImages}
         onSelectedImageRectChange={handleSelectedImageRectChange}
         onSemanticSelectionChange={setSemanticSelection}
+        semanticEditEnabled={POINT_IMAGE_EDIT_ENABLED}
       />
       {TEXT_EDIT_ENABLED && floatingTextPanelStyle && (
         <div

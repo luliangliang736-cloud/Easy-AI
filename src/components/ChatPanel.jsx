@@ -20,6 +20,7 @@ import {
   Zap,
   Crown,
   Rocket,
+  Sparkles,
   Trash2,
 } from "lucide-react";
 import { compressImage } from "@/lib/imageUtils";
@@ -74,6 +75,19 @@ const MODEL_TIERS = [
     ],
     maxInputImages: 14,
     extendedRatios: false,
+  },
+  {
+    id: "chatgpt-image2",
+    name: "GPT Image 2",
+    icon: Sparkles,
+    desc: "GPT 生图 · 已接入",
+    color: "text-fuchsia-400",
+    bg: "bg-fuchsia-500/15 border-fuchsia-500/30",
+    variants: [
+      { model: "gpt-image-2", label: "1K", credits: { default: 0, priority: 0 } },
+    ],
+    maxInputImages: 10,
+    extendedRatios: true,
   },
 ];
 
@@ -851,13 +865,31 @@ export default function ChatPanel({
                     const Icon = tier.icon;
                     const active = currentTier.id === tier.id;
                     return (
-                      <button key={tier.id} onClick={() => setTier(tier)}
-                        className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-left transition-all border ${active ? tier.bg : "bg-bg-tertiary border-border-primary hover:bg-bg-hover"}`}>
+                      <button
+                        key={tier.id}
+                        type="button"
+                        disabled={tier.disabled}
+                        onClick={() => {
+                          if (!tier.disabled) setTier(tier);
+                        }}
+                        className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-left transition-all border ${
+                          tier.disabled
+                            ? "bg-bg-tertiary/60 border-border-primary opacity-60 cursor-not-allowed"
+                            : active
+                              ? tier.bg
+                              : "bg-bg-tertiary border-border-primary hover:bg-bg-hover"
+                        }`}
+                      >
                         <Icon size={14} className={active ? tier.color : "text-text-tertiary"} />
                         <div className="flex-1 min-w-0">
                           <p className={`text-[11px] font-medium ${active ? "text-text-primary" : "text-text-secondary"}`}>{tier.name}</p>
                           <p className="text-[10px] text-text-tertiary">{tier.desc}</p>
                         </div>
+                        {tier.disabled && (
+                          <span className="rounded-md border border-fuchsia-500/20 bg-fuchsia-500/10 px-1.5 py-0.5 text-[9px] font-medium text-fuchsia-300">
+                            即将接入
+                          </span>
+                        )}
                       </button>
                     );
                   })}

@@ -3,12 +3,24 @@ import { NextResponse } from "next/server";
 export const runtime = "nodejs";
 export const maxDuration = 60;
 
-const OPENAI_API_BASE_RAW = (process.env.OPENAI_API_BASE || "https://api.openai.com/v1").replace(/\/$/, "");
+const OPENAI_API_BASE_RAW = (
+  process.env.FLOATING_ASSISTANT_API_BASE
+  || process.env.OPENAI_API_BASE
+  || "https://api.openai.com/v1"
+).replace(/\/$/, "");
 const OPENAI_API_BASE = /\/v\d+$/i.test(OPENAI_API_BASE_RAW) ? OPENAI_API_BASE_RAW : `${OPENAI_API_BASE_RAW}/v1`;
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
-const OPENAI_API_VERSION = process.env.OPENAI_API_VERSION || "";
-const OPENAI_API_KEY_HEADER = (process.env.OPENAI_API_KEY_HEADER || "authorization").trim().toLowerCase();
-const OPENAI_API_STYLE = (process.env.OPENAI_API_STYLE || "auto").trim().toLowerCase();
+const OPENAI_API_KEY = process.env.FLOATING_ASSISTANT_API_KEY || process.env.OPENAI_API_KEY || "";
+const OPENAI_API_VERSION = process.env.FLOATING_ASSISTANT_API_VERSION || process.env.OPENAI_API_VERSION || "";
+const OPENAI_API_KEY_HEADER = (
+  process.env.FLOATING_ASSISTANT_API_KEY_HEADER
+  || process.env.OPENAI_API_KEY_HEADER
+  || "authorization"
+).trim().toLowerCase();
+const OPENAI_API_STYLE = (
+  process.env.FLOATING_ASSISTANT_API_STYLE
+  || process.env.OPENAI_API_STYLE
+  || "auto"
+).trim().toLowerCase();
 const FLOATING_ASSISTANT_MODEL = process.env.FLOATING_ASSISTANT_MODEL || process.env.OBJECT_PLAN_MODEL || "gpt-4.1-mini";
 const FLOATING_ASSISTANT_TIMEOUT_MS = Number(process.env.FLOATING_ASSISTANT_TIMEOUT_MS || 60 * 1000);
 const RESPONSES_URL = process.env.FLOATING_ASSISTANT_API_URL || `${OPENAI_API_BASE}/responses`;
@@ -210,6 +222,67 @@ function getNumberEmoji(index) {
   return emojis[index] || `${index + 1}.`;
 }
 
+function formatGeneralReplyText(text = "") {
+  let value = String(text || "").replace(/\r/g, "").trim();
+  if (!value) return "";
+
+  value = value
+    .replace(/([。！？])\s*(?=(\d+)\s*[、.])/g, "$1\n\n")
+    .replace(/([：:])\s*(?=(\d+)\s*[、.])/g, "$1\n");
+
+  value = value.replace(/(^|\n)\s*(\d+)\s*[、.]\s*/g, (_, prefix, num) => {
+    const index = Math.max(Number(num) - 1, 0);
+    return `${prefix}${getNumberEmoji(index)} `;
+  });
+
+  value = value.replace(/([，；;])\s*(\d+)\s*[、.]\s*/g, (_, __, num) => {
+    const index = Math.max(Number(num) - 1, 0);
+    return `\n${getNumberEmoji(index)} `;
+  });
+
+  const lines = value.split("\n").map((line) => line.trim());
+  const normalizedLines = [];
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index];
+    if (!line) {
+      normalizedLines.push("");
+      continue;
+    }
+
+    if (
+      index === 0
+      && !/^([1-9]\uFE0F?\u20E3|\d+\.)/.test(line)
+      && !/^(📰|✨|📚|🎯|📌|💡|✅|👉|💬|🔎|📍)/.test(line)
+    ) {
+      normalizedLines.push(`✨ ${line}`);
+      continue;
+    }
+
+    if (/^如果你想/.test(line)) {
+      normalizedLines.push(`💬 ${line}`);
+      continue;
+    }
+
+    if (/^(建议|总结|核心|重点|亮点|适合|理由|推荐理由|做法|方法|步骤|清单|方向|思路|可选项|你可以)/.test(line)) {
+      normalizedLines.push(`📌 ${line}`);
+      continue;
+    }
+
+    if (/^(价值|意义|适用场景|适合人群|适用人群|为什么值得)/.test(line)) {
+      normalizedLines.push(`💡 ${line}`);
+      continue;
+    }
+
+    normalizedLines.push(line);
+  }
+
+  return normalizedLines
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
 function formatWebSearchReply(result = {}) {
   const lead = String(result?.lead || "").trim();
   const items = Array.isArray(result?.items) ? result.items.filter(Boolean).slice(0, 6) : [];
@@ -394,6 +467,10 @@ async function runPlanner({ messages, currentInput, refImages, attachments }) {
     "如果用户附带了参考图，通常优先返回 generate，且 mode 优先为 agent。",
     "generate 时 assistant_text 只需要一句简短自然的话，说明你理解了需求并开始生成。",
     "reply 时 assistant_text 直接给出有帮助的回复或必要的追问。",
+    "普通 reply 请用适合聊天窗口阅读的轻量层级格式输出：首行给一句总结，可少量使用 emoji。",
+    "如果是推荐、总结、步骤、清单类内容，优先换行分点，不要把 3-5 个项目挤在一个长段落里。",
+    "可以使用 1. 2. 3. 或数字 emoji 作为标题项；次级信息可用“核心 / 建议 / 适合 / 理由 / 价值”等短标签。",
+    "避免整段密集大段落，尽量让每个重点单独成行，方便直接在对话框里浏览。",
     "当 action 为 generate 时，你只负责判断模式并给一句自然回复，不要改写、润色、扩写、总结或整理用户原始生图提示词。",
     "mode 只能是 quick 或 agent。quick 适合简单直接的一句话出图；agent 适合带参考图、需要保持风格、对排版构图材质细节要求更高的任务。",
     "只返回 JSON，不要输出额外解释。",
@@ -477,7 +554,9 @@ async function runPlanner({ messages, currentInput, refImages, attachments }) {
   return {
     action: parsed.action === "reply" ? "reply" : "generate",
     mode: parsed.mode === "agent" ? "agent" : "quick",
-    assistantText: String(parsed.assistant_text || "").trim(),
+    assistantText: parsed.action === "reply"
+      ? formatGeneralReplyText(parsed.assistant_text || "")
+      : String(parsed.assistant_text || "").trim(),
     assistantModel: FLOATING_ASSISTANT_MODEL,
   };
 }
