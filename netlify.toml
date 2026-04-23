@@ -3,6 +3,16 @@
 
 [functions]
   external_node_modules = ["@imgly/background-removal-node"]
+  node_bundler = "nft"
+
+[functions."api/generate"]
+  timeout = 300
+
+[functions."api/edit"]
+  timeout = 300
+
+[functions."api/floating-assistant"]
+  timeout = 120
 
 [[headers]]
   for = "/api/*"

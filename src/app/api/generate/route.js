@@ -3,7 +3,7 @@ import { MAX_GEN_COUNT } from "@/lib/genLimits";
 import { resolveNanoServiceTier } from "@/lib/nanoConfig";
 import { generateWithGptImage2, isGptImage2Model } from "@/lib/server/gptImage2";
 
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 const API_BASE = process.env.NANO_API_BASE || "https://api.nanobananaapi.dev";
 const API_KEY = process.env.NANO_API_KEY;

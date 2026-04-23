@@ -7,7 +7,7 @@ const API_BASE = process.env.NANO_API_BASE || "https://api.nanobananaapi.dev";
 const API_KEY = process.env.NANO_API_KEY;
 
 export const runtime = "nodejs";
-export const maxDuration = 60;
+export const maxDuration = 300;
 
 async function normalizeCutoutSource(image) {
   const source = Array.isArray(image) ? image[0] : image;
