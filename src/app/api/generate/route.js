@@ -8,6 +8,17 @@ export const maxDuration = 300;
 const API_BASE = process.env.NANO_API_BASE || "https://api.nanobananaapi.dev";
 const API_KEY = process.env.NANO_API_KEY;
 
+function formatRouteError(err) {
+  const code = err?.cause?.code || err?.code || "";
+  const host = err?.cause?.hostname || "图片服务";
+  if (err?.name === "AbortError") return "图片服务响应超时，请稍后重试。";
+  if (code === "ENOTFOUND" || code === "EAI_AGAIN") return `无法连接图片服务 ${host}，域名解析失败或网络暂时不可用，请稍后重试。`;
+  if (code === "UND_ERR_CONNECT_TIMEOUT" || code === "ETIMEDOUT") return `连接图片服务 ${host} 超时，请稍后重试。`;
+  if (code === "ECONNRESET" || code === "ECONNREFUSED") return `图片服务 ${host} 连接中断，请稍后重试。`;
+  if (err?.message === "fetch failed") return "图片服务连接失败，请稍后重试。";
+  return err?.message || "Internal server error";
+}
+
 export async function POST(request) {
   if (!API_KEY || API_KEY === "sk-your-api-key-here") {
     return NextResponse.json(
@@ -109,7 +120,7 @@ export async function POST(request) {
   } catch (err) {
     console.error("[Generate] Error:", err);
     return NextResponse.json(
-      { error: err.message || "Internal server error" },
+      { error: formatRouteError(err) },
       { status: 500 }
     );
   }

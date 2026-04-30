@@ -2,23 +2,62 @@
 
 import Image from "next/image";
 import { useEffect, useMemo, useRef, useState } from "react";
+import SKILLS from "@/config/skills";
+import IP_ASSETS from "@/config/ipAssets";
+import BrandLogo from "@/components/BrandLogo";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import {
   Check,
+  ChevronUp,
   Copy,
   Download,
   Loader2,
+  Mic,
+  MicOff,
   Minus,
   Minimize2,
   Maximize2,
   Moon,
   Send,
   Plus,
+  Square,
   Sun,
   Trash2,
   X,
 } from "lucide-react";
 
 const BALL_SIZE = 120;
+
+/** 麦克风按钮：点击 = 手动单次对话 / 打断正在进行的对话 */
+function MicButton({ voiceState, onClick }) {
+  const isActive = voiceState === "listening" || voiceState === "thinking" || voiceState === "speaking";
+  const bg = voiceState === "listening"
+    ? "#ef4444"
+    : voiceState === "thinking" || voiceState === "speaking"
+      ? "#f59e0b"
+      : "#16a34a"; // 深绿 = 唤醒常驻
+
+  const title = isActive ? "点击停止" : "点击手动对话（唤醒词也可直接叫「小Q」）";
+
+  return (
+    <button
+      type="button"
+      title={title}
+      onClick={(e) => { e.stopPropagation(); onClick?.(); }}
+      className="absolute flex items-center justify-center rounded-full shadow-lg transition-colors hover:scale-110 active:scale-95"
+      style={{ bottom: 2, right: 2, width: 30, height: 30, background: bg, zIndex: 2 }}
+    >
+      {voiceState === "listening" ? (
+        <Square size={11} className="text-white fill-white" />
+      ) : isActive ? (
+        <Loader2 size={13} className="text-white animate-spin" />
+      ) : (
+        <Mic size={13} className="text-white" />
+      )}
+    </button>
+  );
+}
 const PANEL_WIDTH = 480;
 const PANEL_HEIGHT = 560;
 const VIEWPORT_PADDING = 16;
@@ -132,285 +171,159 @@ function formatHistoryTime(value) {
   }
 }
 
-function parseAssistantLabelLine(line) {
-  const patterns = [
-    { type: "source", regex: /^(?:🗞️\s*)?(?:来源)[:：]\s*(.+)$/ },
-    { type: "summary", regex: /^(?:📌\s*)?(?:核心|摘要)[:：]\s*(.+)$/ },
-    { type: "value", regex: /^(?:💡\s*)?(?:价值|意义|启发)[:：]\s*(.+)$/ },
-    { type: "link", regex: /^(?:🔗\s*)?(?:链接)[:：]\s*(.+)$/ },
-    { type: "trend", regex: /^(?:🔥\s*)?(?:趋势|热点)[:：]\s*(.+)$/ },
-  ];
-
-  for (const pattern of patterns) {
-    const match = line.match(pattern.regex);
-    if (match) {
-      return {
-        type: pattern.type,
-        content: (match[1] || "").trim(),
-      };
-    }
-  }
-
-  return null;
-}
-
-function isAssistantItemTitle(line) {
-  return /^(\d+\.\s|[1-9]\uFE0F?\u20E3\s)/.test(line);
-}
-
-function isAssistantLeadLine(line) {
-  return /^(📰|✨|📚|🎯|🔎|📍|✅|👉|💬|📝)/.test(line) || /Top\s*\d+/i.test(line);
-}
-
-function extractAssistantTitleParts(line) {
-  const match = line.match(/^((?:\d+\.)|(?:[1-9]\uFE0F?\u20E3))\s*(.+)$/);
-  if (!match) {
-    return { marker: "", content: line };
-  }
-
-  return {
-    marker: match[1].trim(),
-    content: (match[2] || "").trim(),
-  };
-}
-
-function isEmojiMarker(marker) {
-  return /\uFE0F|\u20E3/.test(String(marker || ""));
-}
-
-function splitSourceMeta(content) {
-  const parts = String(content || "")
-    .split(/\s+[·•|｜]\s+|，(?=\d{4}-\d{2}-\d{2})/)
-    .map((part) => part.trim())
-    .filter(Boolean);
-
-  return {
-    source: parts[0] || "",
-    meta: parts.slice(1).join(" · "),
-  };
-}
-
-function splitAssistantBlocks(text) {
-  const lines = String(text || "").split("\n");
-  const blocks = [];
-  let currentBlock = [];
-
-  for (const rawLine of lines) {
-    const line = rawLine.trim();
-
-    if (!line) {
-      if (currentBlock.length > 0) {
-        blocks.push(currentBlock);
-        currentBlock = [];
-      }
-      continue;
-    }
-
-    if (isAssistantItemTitle(line) && currentBlock.length > 0) {
-      blocks.push(currentBlock);
-      currentBlock = [line];
-      continue;
-    }
-
-    currentBlock.push(line);
-  }
-
-  if (currentBlock.length > 0) {
-    blocks.push(currentBlock);
-  }
-
-  return blocks;
-}
-
-function renderAssistantLine(line, index, isLightTheme, { isIntro = false } = {}) {
-  const labeledLine = parseAssistantLabelLine(line);
-  if (labeledLine) {
-    const labelMap = {
-      source: "来源",
-      summary: "核心",
-      value: "价值",
-      link: "链接",
-      trend: "趋势",
-    };
-    const labelText = labelMap[labeledLine.type] || "说明";
-
-    if (labeledLine.type === "link") {
-      const url = labeledLine.content;
-      return (
-        <div
-          key={`link-${index}`}
-          className={`text-[14px] leading-6 break-all ${
-            isLightTheme ? "text-[#2563eb]" : "text-[#8ab4ff]"
-          }`}
-        >
-          <span className={`mr-1.5 font-medium ${isLightTheme ? "text-black/45" : "text-white/42"}`}>
-            {labelText}：
-          </span>
-          <a
-            href={url}
-            target="_blank"
-            rel="noreferrer"
-            className={`underline underline-offset-2 ${
-              isLightTheme ? "hover:text-[#1d4ed8]" : "hover:text-[#a8c7ff]"
-            }`}
-          >
-            {url}
-          </a>
-        </div>
-      );
-    }
-
-    if (labeledLine.type === "source") {
-      const { source, meta } = splitSourceMeta(labeledLine.content);
-      return (
-        <div
-          key={`${labeledLine.type}-${index}`}
-          className={`flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] leading-5 ${
-            isLightTheme ? "text-black/52" : "text-white/48"
-          }`}
-        >
-          <span className={`font-medium ${isLightTheme ? "text-black/42" : "text-white/38"}`}>
-            {labelText}
-          </span>
-          {source ? <span>{source}</span> : null}
-          {meta ? <span className={isLightTheme ? "text-black/34" : "text-white/32"}>·</span> : null}
-          {meta ? <span>{meta}</span> : null}
-        </div>
-      );
-    }
-
-    return (
-      <div
-        key={`${labeledLine.type}-${index}`}
-        className={`text-[14px] leading-7 ${
-          isLightTheme ? "text-[#1f1f1f]" : "text-text-primary"
-        }`}
-      >
-        <span className={`mr-1.5 font-medium ${isLightTheme ? "text-black/45" : "text-white/42"}`}>
-          {labelText}：
-        </span>
-        <span>{labeledLine.content}</span>
-      </div>
-    );
-  }
-
-  if (isAssistantItemTitle(line)) {
-    const { marker, content } = extractAssistantTitleParts(line);
-    return (
-      <div
-        key={`title-${index}`}
-        className="flex items-start gap-2.5"
-      >
-        {marker ? (
-          <span
-            className={`mt-0.5 inline-flex items-center justify-center text-[13px] leading-5 ${
-              isEmojiMarker(marker)
-                ? ""
-                : isLightTheme
-                  ? "font-semibold text-black/58"
-                  : "font-semibold text-white/68"
-            }`}
-          >
-            {marker}
-          </span>
-        ) : null}
-        <span
-          className={`min-w-0 flex-1 text-[16px] font-semibold leading-7 tracking-[-0.01em] ${
-            isLightTheme ? "text-[#111111]" : "text-white"
-          }`}
-        >
-          {content}
-        </span>
-      </div>
-    );
-  }
-
-  if (isAssistantLeadLine(line)) {
-    return (
-      <div
-        key={`lead-${index}`}
-        className={`text-[15px] font-medium leading-7 ${
-          isLightTheme ? "text-[#111111]" : "text-white"
-        }`}
-      >
-        {line}
-      </div>
-    );
-  }
-
-  if (/^[-*•]\s+/.test(line)) {
-    const content = line.replace(/^[-*•]\s+/, "").trim();
-    return (
-      <div
-        key={`bullet-${index}`}
-        className={`flex gap-2 text-[14px] leading-7 ${
-          isLightTheme ? "text-[#222222]" : "text-text-primary"
-        }`}
-      >
-        <span className={`mt-[7px] h-1.5 w-1.5 rounded-full ${isLightTheme ? "bg-black/35" : "bg-white/35"}`} />
-        <span className="min-w-0 flex-1">{content}</span>
-      </div>
-    );
-  }
-
-  if (/^(总结|结论|建议|适合|下一步)[:：]/.test(line)) {
-    const [label, ...rest] = line.split(/[:：]/);
-    return (
-      <div
-        key={`section-${index}`}
-        className={`text-[14px] leading-7 ${
-          isLightTheme ? "text-[#1f1f1f]" : "text-text-primary"
-        }`}
-      >
-        <span className={`mr-1.5 font-medium ${isLightTheme ? "text-[#111111]" : "text-white"}`}>
-          {label}：
-        </span>
-        <span>{rest.join("：").trim()}</span>
-      </div>
-    );
-  }
+function MarkdownRenderer({ text, isLightTheme }) {
+  const textColor = isLightTheme ? "text-[#1f1f1f]" : "text-text-primary";
+  const mutedColor = isLightTheme ? "text-black/55" : "text-white/55";
+  const linkColor = isLightTheme ? "text-[#2563eb] hover:text-[#1d4ed8]" : "text-[#8ab4ff] hover:text-[#a8c7ff]";
+  const borderColor = isLightTheme ? "border-black/12" : "border-white/10";
+  const codeBg = isLightTheme ? "bg-black/[0.06] text-[#c7254e]" : "bg-white/[0.08] text-[#f8a5c2]";
+  const codeBlockBg = isLightTheme ? "bg-black/[0.04] border border-black/10" : "bg-white/[0.04] border border-white/8";
+  const blockquoteBorder = isLightTheme ? "border-black/20 text-black/60" : "border-white/20 text-white/60";
 
   return (
-    <div
-      key={`${isIntro ? "intro" : "body"}-${index}`}
-      className={`whitespace-pre-wrap text-[14px] leading-7 ${
-        isIntro
-          ? isLightTheme
-            ? "text-black/70"
-            : "text-white/68"
-          : isLightTheme
-            ? "text-[#222222]"
-            : "text-text-primary"
-      }`}
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm]}
+      components={{
+        p({ children }) {
+          return (
+            <p className={`text-[14px] leading-7 ${textColor} mb-3 last:mb-0`}>
+              {children}
+            </p>
+          );
+        },
+        h1({ children }) {
+          return (
+            <h1 className={`text-[18px] font-bold leading-7 mb-3 mt-5 first:mt-0 ${isLightTheme ? "text-[#111]" : "text-white"}`}>
+              {children}
+            </h1>
+          );
+        },
+        h2({ children }) {
+          return (
+            <h2 className={`text-[16px] font-semibold leading-7 mb-2 mt-5 first:mt-0 ${isLightTheme ? "text-[#111]" : "text-white"}`}>
+              {children}
+            </h2>
+          );
+        },
+        h3({ children }) {
+          return (
+            <h3 className={`text-[15px] font-semibold leading-7 mb-2 mt-4 first:mt-0 ${isLightTheme ? "text-[#111]" : "text-white"}`}>
+              {children}
+            </h3>
+          );
+        },
+        ul({ children }) {
+          return (
+            <ul className={`mb-3 last:mb-0 space-y-1 pl-4 ${isLightTheme ? "[&>li::marker]:text-black/40" : "[&>li::marker]:text-white/40"}`}
+              style={{ listStyleType: "disc" }}
+            >
+              {children}
+            </ul>
+          );
+        },
+        ol({ children }) {
+          return (
+            <ol className={`mb-3 last:mb-0 space-y-1 pl-5 ${isLightTheme ? "[&>li::marker]:text-black/50" : "[&>li::marker]:text-white/50"}`}
+              style={{ listStyleType: "decimal" }}
+            >
+              {children}
+            </ol>
+          );
+        },
+        li({ children }) {
+          return (
+            <li className={`text-[14px] leading-7 pl-1 ${textColor} [&>ul]:mt-1 [&>ol]:mt-1`}>
+              {children}
+            </li>
+          );
+        },
+        a({ href, children }) {
+          return (
+            <a
+              href={href}
+              target="_blank"
+              rel="noreferrer"
+              className={`underline underline-offset-2 break-all ${linkColor}`}
+            >
+              {children}
+            </a>
+          );
+        },
+        strong({ children }) {
+          return (
+            <strong className={`font-semibold ${isLightTheme ? "text-[#111]" : "text-white"}`}>
+              {children}
+            </strong>
+          );
+        },
+        em({ children }) {
+          return (
+            <em className={`italic ${mutedColor}`}>
+              {children}
+            </em>
+          );
+        },
+        code({ inline, children }) {
+          if (inline) {
+            return (
+              <code className={`rounded px-1.5 py-0.5 text-[12.5px] font-mono ${codeBg}`}>
+                {children}
+              </code>
+            );
+          }
+          return (
+            <code className={`block w-full rounded-xl px-4 py-3 text-[12.5px] font-mono leading-6 overflow-x-auto whitespace-pre ${codeBlockBg} ${textColor} mb-3`}>
+              {children}
+            </code>
+          );
+        },
+        pre({ children }) {
+          return <pre className="mb-3 last:mb-0">{children}</pre>;
+        },
+        blockquote({ children }) {
+          return (
+            <blockquote className={`border-l-4 pl-4 my-3 ${blockquoteBorder}`}>
+              {children}
+            </blockquote>
+          );
+        },
+        hr() {
+          return <hr className={`my-5 border-t ${borderColor}`} />;
+        },
+        table({ children }) {
+          return (
+            <div className="overflow-x-auto mb-3">
+              <table className={`w-full text-[13px] border-collapse ${textColor}`}>
+                {children}
+              </table>
+            </div>
+          );
+        },
+        thead({ children }) {
+          return (
+            <thead className={`border-b ${borderColor}`}>
+              {children}
+            </thead>
+          );
+        },
+        th({ children }) {
+          return (
+            <th className={`px-3 py-2 text-left font-semibold ${isLightTheme ? "text-[#111]" : "text-white"}`}>
+              {children}
+            </th>
+          );
+        },
+        td({ children }) {
+          return (
+            <td className={`px-3 py-2 border-b ${borderColor} ${textColor}`}>
+              {children}
+            </td>
+          );
+        },
+      }}
     >
-      {line}
-    </div>
-  );
-}
-
-function renderAssistantTextBlock(text, isLightTheme) {
-  const blocks = splitAssistantBlocks(text);
-
-  return (
-    <div className="space-y-5">
-      {blocks.map((block, blockIndex) => {
-        const isItemBlock = isAssistantItemTitle(block[0] || "");
-        return (
-          <div
-            key={`block-${blockIndex}`}
-            className={`space-y-2.5 ${
-              isItemBlock
-                ? `${blockIndex > 0 ? (isLightTheme ? "border-t border-black/8 pt-5" : "border-t border-white/10 pt-5") : "pt-1"}`
-                : ""
-            }`}
-          >
-            {block.map((line, lineIndex) => renderAssistantLine(line, `${blockIndex}-${lineIndex}`, isLightTheme, {
-              isIntro: !isItemBlock && blockIndex === 0 && lineIndex === 0,
-            }))}
-          </div>
-        );
-      })}
-    </div>
+      {String(text || "")}
+    </ReactMarkdown>
   );
 }
 
@@ -428,6 +341,7 @@ export default function FloatingEntryWidget({
   attachmentItems = [],
   canSubmit = false,
   isSubmitting = false,
+  generationStage = null,
   entryMode = "quick",
   submitLabel = "开始",
   outputError = "",
@@ -437,10 +351,27 @@ export default function FloatingEntryWidget({
   onNewChat,
   onSelectHistory,
   onDeleteHistory,
+  onDeleteMessage,
   onClose,
+  onExpandFullscreen,
 }) {
   const [ready, setReady] = useState(false);
   const [expanded, setExpanded] = useState(defaultExpanded);
+
+  // 语音交互状态: idle | wake | listening | thinking | speaking
+  const [voiceState, setVoiceState] = useState("idle");
+  const [voiceBubbleText, setVoiceBubbleText] = useState("");
+  const [showVoiceBubble, setShowVoiceBubble] = useState(false);
+  // 唤醒词模式始终开启，wakeEnabled 仅用于指示麦克风权限是否已获取
+  const [wakeEnabled, setWakeEnabled] = useState(false);
+  const recognitionRef = useRef(null);     // 指令识别
+  const wakeRecognitionRef = useRef(null); // 唤醒词监听
+  const voiceBubbleTimerRef = useRef(null);
+  const wakeRestartTimerRef = useRef(null);
+  const avatarClickTimerRef = useRef(null);
+  const lastAvatarClickAtRef = useRef(0);
+  const wakeEnabledRef = useRef(false);
+  const voiceStateRef = useRef("idle");
   const [dragOver, setDragOver] = useState(false);
   const [attachments, setAttachments] = useState([]);
   const [viewport, setViewport] = useState(() => (
@@ -459,11 +390,71 @@ export default function FloatingEntryWidget({
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [panelTheme, setPanelTheme] = useState("dark");
   const [isLogoMenuOpen, setIsLogoMenuOpen] = useState(false);
+  const [skillsOpen, setSkillsOpen] = useState(false);
+  const skillsRef = useRef(null);
+
+  // ── 随机问候气泡 ──────────────────────────────────────
+  const GREET_MESSAGES = [
+    "小Q随时为你工作 💼",
+    "快来陪俺玩耍吧 🎮",
+    "我一直在等你 👀",
+    "帮您分忧是小Q的无上使命 🫡",
+    "有什么想创作的，尽管说！ ✨",
+    "今天也要元气满满哦 🌟",
+    "让我来帮你搞定一切 🚀",
+  ];
+  const [greetText, setGreetText] = useState("");
+  const [showGreet, setShowGreet] = useState(false);
+  const greetTimerRef = useRef(null);
+
+  useEffect(() => {
+    function scheduleGreet(delay) {
+      greetTimerRef.current = setTimeout(() => {
+        if (expanded) { scheduleGreet(12000); return; }
+        setGreetText(GREET_MESSAGES[Math.floor(Math.random() * GREET_MESSAGES.length)]);
+        setShowGreet(true);
+        greetTimerRef.current = setTimeout(() => {
+          setShowGreet(false);
+          scheduleGreet(8000 + Math.random() * 7000);
+        }, 4000);
+      }, delay);
+    }
+    scheduleGreet(3000);
+    return () => clearTimeout(greetTimerRef.current);
+  }, [expanded]);
+  // ─────────────────────────────────────────────────────
+
+  async function handleSkillClick(skill) {
+    setSkillsOpen(false);
+    // IP 技能：随机取一张 IP 参考图载入
+    if (skill.ipBased && IP_ASSETS.length > 0) {
+      const pick = IP_ASSETS[Math.floor(Math.random() * IP_ASSETS.length)];
+      try {
+        const res = await fetch(pick.url);
+        const blob = await res.blob();
+        const ext = (pick.url.split(".").pop() || "png").split("?")[0];
+        const file = new File([blob], `ip-ref.${ext}`, { type: blob.type || "image/png" });
+        onFilesAdd?.([file]);
+      } catch {
+        // 加载失败则静默跳过，仍然填入 prompt
+      }
+    } else if (skill.ipBased && IP_ASSETS.length === 0) {
+      // 未配置 IP 资产时给出提示
+      onPromptChange?.("（请先在 src/config/ipAssets.js 中添加您的IP图片）" + skill.prompt);
+      return;
+    }
+    onPromptChange?.(skill.prompt);
+    if (skill.autoSend) setTimeout(() => onSubmit?.(), 80);
+  }
   const [isHistoryPanelOpen, setIsHistoryPanelOpen] = useState(false);
   const outputEndRef = useRef(null);
   const logoMenuRef = useRef(null);
   const currentEntryMode = entryMode === "agent" ? "agent" : "quick";
   const isLightTheme = panelTheme === "light";
+  const activeGenerationStage = generationStage || {
+    label: "正在生成图片",
+    detail: "生成完成后会自动显示",
+  };
 
   useEffect(() => {
     if (typeof window === "undefined") return undefined;
@@ -501,6 +492,32 @@ export default function FloatingEntryWidget({
       window.removeEventListener("resize", handleResize);
     };
   }, [storageKey]);
+
+  // ── 页面加载后自动开启唤醒词监听 ─────────────────────
+  useEffect(() => {
+    if (typeof window === "undefined") return undefined;
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) return undefined;
+
+    // 延迟 1.2s 启动，等页面渲染完成
+    const timer = setTimeout(() => {
+      wakeEnabledRef.current = true;
+      setWakeEnabled(true);
+      setVS("wake");
+      startWakeListening();
+    }, 1200);
+
+    return () => {
+      clearTimeout(timer);
+      clearTimeout(wakeRestartTimerRef.current);
+      clearTimeout(avatarClickTimerRef.current);
+      wakeEnabledRef.current = false;
+      try { wakeRecognitionRef.current?.abort(); } catch {}
+      try { recognitionRef.current?.abort(); } catch {}
+      try { window.speechSynthesis?.cancel(); } catch {}
+    };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const displayAttachments = useMemo(() => {
     const externalImages = (Array.isArray(previewImages) ? previewImages : [])
@@ -554,13 +571,295 @@ export default function FloatingEntryWidget({
   }, [isLogoMenuOpen]);
 
   useEffect(() => {
+    if (!skillsOpen) return undefined;
+    const handler = (e) => {
+      if (skillsRef.current && !skillsRef.current.contains(e.target)) setSkillsOpen(false);
+    };
+    document.addEventListener("pointerdown", handler);
+    return () => document.removeEventListener("pointerdown", handler);
+  }, [skillsOpen]);
+
+  useEffect(() => {
     if (!expanded) {
       setIsLogoMenuOpen(false);
       setIsHistoryPanelOpen(false);
     }
   }, [expanded]);
 
-  const startDragging = (event, { toggleOnClick = false } = {}) => {
+  // ── 语音 / 唤醒词交互逻辑 ────────────────────────────────
+
+  const WAKE_WORDS = ["小Q", "小Q同学", "小Q你好", "嗨小Q"];
+
+  function setVS(state) {
+    voiceStateRef.current = state;
+    setVoiceState(state);
+  }
+
+  function showBubble(text) {
+    clearTimeout(voiceBubbleTimerRef.current);
+    setVoiceBubbleText(text);
+    setShowVoiceBubble(true);
+  }
+
+  function hideBubbleAfter(ms = 4000) {
+    clearTimeout(voiceBubbleTimerRef.current);
+    voiceBubbleTimerRef.current = setTimeout(() => setShowVoiceBubble(false), ms);
+  }
+
+  function abortAllRecognition() {
+    try { recognitionRef.current?.abort(); } catch {}
+    try { wakeRecognitionRef.current?.abort(); } catch {}
+    clearTimeout(wakeRestartTimerRef.current);
+  }
+
+  function stopVoice() {
+    abortAllRecognition();
+    try { window.speechSynthesis?.cancel(); } catch {}
+    setVS("idle");
+    setShowVoiceBubble(false);
+    clearTimeout(voiceBubbleTimerRef.current);
+  }
+
+  async function callVoiceApi(text) {
+    try {
+      const res = await fetch("/api/voice-chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
+      const data = await res.json();
+      return data?.reply || "嗯，我在想～";
+    } catch {
+      return "网络有点卡，稍后再试吧～";
+    }
+  }
+
+  function getCnVoice() {
+    if (typeof window === "undefined" || !window.speechSynthesis) return null;
+    const voices = window.speechSynthesis.getVoices();
+    return (
+      voices.find((v) =>
+        (v.lang === "zh-CN" || v.lang === "zh-TW") &&
+        /female|女|Ting|Xiaoxiao|Yaoyao|Xiaoyi/i.test(v.name)
+      ) || voices.find((v) => v.lang === "zh-CN" || v.lang === "zh-TW") || null
+    );
+  }
+
+  function speakReply(text, onDone) {
+    if (typeof window === "undefined" || !window.speechSynthesis) {
+      hideBubbleAfter(5000);
+      setVS("idle");
+      onDone?.();
+      return;
+    }
+    window.speechSynthesis.cancel();
+    const utter = new SpeechSynthesisUtterance(text);
+    utter.lang = "zh-CN";
+    utter.rate = 1.05;
+    utter.pitch = 1.1;
+    const voice = getCnVoice();
+    if (voice) utter.voice = voice;
+
+    const finish = () => {
+      setVS("idle");
+      hideBubbleAfter(3000);
+      onDone?.();
+    };
+    utter.onend = finish;
+    utter.onerror = finish;
+    window.speechSynthesis.speak(utter);
+  }
+
+  // ── 指令监听（唤醒后 / 手动点击后）─────────────────────
+
+  function startCommandListening(onFinish) {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) return;
+
+    const recognition = new SR();
+    recognition.lang = "zh-CN";
+    recognition.continuous = false;
+    recognition.interimResults = false;
+    recognitionRef.current = recognition;
+
+    recognition.onresult = async (event) => {
+      const transcript = event.results[0]?.[0]?.transcript || "";
+      if (!transcript.trim()) {
+        showBubble("没听清楚，再说一遍？");
+        hideBubbleAfter(2000);
+        setVS("idle");
+        onFinish?.();
+        return;
+      }
+      setVS("thinking");
+      showBubble(`💬 "${transcript}"`);
+      const reply = await callVoiceApi(transcript);
+      setVS("speaking");
+      showBubble(reply);
+      speakReply(reply, onFinish);
+    };
+
+    recognition.onerror = (e) => {
+      const msg = e.error === "no-speech" ? "没听到声音，靠近麦克风再试" : "识别出错，请重试";
+      showBubble(msg);
+      hideBubbleAfter(2000);
+      setVS("idle");
+      onFinish?.();
+    };
+
+    recognition.onend = () => {
+      if (voiceStateRef.current === "listening") {
+        setVS("idle");
+        onFinish?.();
+      }
+    };
+
+    setVS("listening");
+    showBubble("👂 说吧，我在听...");
+    recognition.start();
+  }
+
+  // ── 唤醒词持续监听 ────────────────────────────────────
+
+  function scheduleWakeRestart(delay = 600) {
+    clearTimeout(wakeRestartTimerRef.current);
+    wakeRestartTimerRef.current = setTimeout(() => {
+      if (wakeEnabledRef.current && voiceStateRef.current === "wake") {
+        startWakeListening();
+      }
+    }, delay);
+  }
+
+  function startWakeListening() {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR || !wakeEnabledRef.current) return;
+
+    try { wakeRecognitionRef.current?.abort(); } catch {}
+
+    const recognition = new SR();
+    recognition.lang = "zh-CN";
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    wakeRecognitionRef.current = recognition;
+
+    let wakeTriggered = false;
+
+    recognition.onresult = (event) => {
+      if (wakeTriggered) return;
+      for (let i = event.resultIndex; i < event.results.length; i++) {
+        const text = event.results[i][0].transcript;
+        const hit = WAKE_WORDS.find((w) => text.includes(w));
+        if (hit) {
+          wakeTriggered = true;
+          recognition.abort();
+
+          // 截取唤醒词之后的命令
+          const after = text.slice(text.indexOf(hit) + hit.length).replace(/[，。！？,!?]/g, "").trim();
+
+          showBubble("✨ 诶！我在呢～");
+          setVS("listening");
+
+          if (after) {
+            // 唤醒词和命令在同一句
+            setTimeout(async () => {
+              setVS("thinking");
+              showBubble(`💬 "${after}"`);
+              const reply = await callVoiceApi(after);
+              setVS("speaking");
+              showBubble(reply);
+              speakReply(reply, () => {
+                if (wakeEnabledRef.current) { setVS("wake"); scheduleWakeRestart(800); }
+              });
+            }, 500);
+          } else {
+            // 等待用户说命令
+            setTimeout(() => {
+              startCommandListening(() => {
+                if (wakeEnabledRef.current) { setVS("wake"); scheduleWakeRestart(800); }
+              });
+            }, 600);
+          }
+          break;
+        }
+      }
+    };
+
+    recognition.onend = () => {
+      if (!wakeTriggered) scheduleWakeRestart(400);
+    };
+
+    recognition.onerror = (e) => {
+      if (e.error !== "aborted") scheduleWakeRestart(1000);
+    };
+
+    recognition.start();
+  }
+
+  // ── 麦克风按钮点击：正在进行中则停止，否则手动开始单次对话 ──
+
+  function handleMicClick() {
+    if (typeof window === "undefined") return;
+    const state = voiceStateRef.current;
+
+    // 正在进行中：中断并恢复唤醒待机
+    if (state === "listening" || state === "thinking" || state === "speaking") {
+      abortAllRecognition();
+      try { window.speechSynthesis?.cancel(); } catch {}
+      setVS("wake");
+      setShowVoiceBubble(false);
+      clearTimeout(voiceBubbleTimerRef.current);
+      scheduleWakeRestart(500);
+      return;
+    }
+
+    // 空闲 / 唤醒待机：手动触发单次对话
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) {
+      showBubble("⚠️ 请使用 Chrome 或 Edge");
+      hideBubbleAfter(3000);
+      return;
+    }
+    try { wakeRecognitionRef.current?.abort(); } catch {}
+    clearTimeout(wakeRestartTimerRef.current);
+    startCommandListening(() => {
+      // 对话结束后回到唤醒待机
+      setVS("wake");
+      scheduleWakeRestart(600);
+    });
+  }
+
+  // ─────────────────────────────────────────────────────────
+
+  const openPanelNearBall = () => {
+    setPanelPosition((prev) => {
+      const safePrev = clampPanelPosition(prev, panelSize, viewport);
+      const nearBall = getPanelPositionFromBall(ballPosition, panelSize, viewport);
+      if (safePrev.left === VIEWPORT_PADDING && safePrev.top === VIEWPORT_PADDING) {
+        return nearBall;
+      }
+      return safePrev;
+    });
+    setExpanded((prev) => !prev);
+  };
+
+  const handleAvatarClick = () => {
+    const now = Date.now();
+    const isDoubleClick = now - lastAvatarClickAtRef.current < 280;
+    lastAvatarClickAtRef.current = now;
+
+    clearTimeout(avatarClickTimerRef.current);
+
+    if (isDoubleClick) {
+      openPanelNearBall();
+      return;
+    }
+
+    avatarClickTimerRef.current = setTimeout(() => {
+      handleMicClick();
+    }, 120);
+  };
+
+  const startDragging = (event, { toggleOnClick = false, clickAction = "toggle" } = {}) => {
     event.preventDefault();
     event.stopPropagation();
 
@@ -588,15 +887,11 @@ export default function FloatingEntryWidget({
       window.removeEventListener("pointermove", handleMove);
       window.removeEventListener("pointerup", handleUp);
       if (toggleOnClick && !moved) {
-        setPanelPosition((prev) => {
-          const safePrev = clampPanelPosition(prev, panelSize, viewport);
-          const nearBall = getPanelPositionFromBall(ballPosition, panelSize, viewport);
-          if (safePrev.left === VIEWPORT_PADDING && safePrev.top === VIEWPORT_PADDING) {
-            return nearBall;
-          }
-          return safePrev;
-        });
-        setExpanded((prev) => !prev);
+        if (clickAction === "voice") {
+          handleAvatarClick();
+        } else {
+          openPanelNearBall();
+        }
       }
     };
 
@@ -812,6 +1107,11 @@ export default function FloatingEntryWidget({
   };
 
   const toggleFullscreen = () => {
+    if (onExpandFullscreen) {
+      onExpandFullscreen();
+      return;
+    }
+
     if (isFullscreen) {
       const previousFrame = restorePanelFrameRef.current;
       if (previousFrame) {
@@ -858,9 +1158,7 @@ export default function FloatingEntryWidget({
     onDeleteHistory?.(historyId);
   };
 
-  const placeholder = entryMode === "quick"
-    ? "一句话描述你想生成什么..."
-    : "直接描述目标效果，我来帮你处理思路...";
+  const placeholder = "试试上传一张图片，告诉我你想怎么修改";
 
   if (!ready) {
     return null;
@@ -952,13 +1250,7 @@ export default function FloatingEntryWidget({
                   }`}
                   title="打开会话菜单"
                 >
-                  <Image
-                    src="/images/floating-header-logo.svg"
-                    alt="Easy AI"
-                    width={114}
-                    height={24}
-                    className="floating-logo-image h-6 w-auto object-contain"
-                  />
+                  <BrandLogo className="floating-logo-image h-6" showText={false} />
                 </button>
 
                 {isLogoMenuOpen && (
@@ -1135,7 +1427,7 @@ export default function FloatingEntryWidget({
                           >
                             <div className={message.role === "assistant" ? "" : "whitespace-pre-wrap"}>
                               {message.role === "assistant"
-                                ? renderAssistantTextBlock(message.text, isLightTheme)
+                                ? <MarkdownRenderer text={message.text} isLightTheme={isLightTheme} />
                                 : message.text}
                             </div>
                           </div>
@@ -1163,7 +1455,25 @@ export default function FloatingEntryWidget({
                           </div>
                         )}
 
-                        {message.role === "assistant" && (message.text || message.modelLabel) ? (
+                        {message.role === "user" ? (
+                          <div className="mt-2 flex items-center justify-end gap-2 px-1">
+                            <button
+                              type="button"
+                              onClick={() => onDeleteMessage?.(message.id)}
+                              className={`inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-[11px] transition-all ${
+                                isLightTheme
+                                  ? "text-black/45 hover:bg-red-500/10 hover:text-red-500"
+                                  : "text-text-tertiary hover:bg-red-500/10 hover:text-red-300"
+                              }`}
+                              title="删除这条输入"
+                            >
+                              <Trash2 size={12} />
+                              删除
+                            </button>
+                          </div>
+                        ) : null}
+
+                        {message.role === "assistant" && (message.text || message.modelLabel) && !message.images?.length ? (
                           <div className="mt-2 flex items-center justify-between gap-3 px-1">
                             <div className={`min-w-0 text-[11px] ${isLightTheme ? "text-black/45" : "text-text-tertiary"}`}>
                               {message.modelLabel ? `模型：${message.modelLabel}` : ""}
@@ -1187,58 +1497,79 @@ export default function FloatingEntryWidget({
                         ) : null}
 
                         {message.images?.length > 0 && (
-                          <div className={`mt-2 grid grid-cols-1 gap-3 sm:grid-cols-2 ${message.role === "user" ? "justify-items-end" : ""}`}>
-                            {message.images.map((src, index) => (
-                              <div
-                                key={`${message.id}-img-${index}`}
-                                className={`relative aspect-square w-full overflow-hidden rounded-2xl ${
-                                  isLightTheme
-                                    ? "border border-black/10 bg-black/[0.04]"
-                                    : "border border-border-primary bg-bg-hover"
-                                }`}
-                              >
-                                <button
-                                  type="button"
-                                  className="absolute inset-0"
-                                  onClick={() => setPreviewSrc(src)}
-                                  title="放大查看"
+                          <div className="mt-2">
+                            <div className={`grid grid-cols-1 gap-3 sm:grid-cols-2 ${message.role === "user" ? "justify-items-end" : ""}`}>
+                              {message.images.map((src, index) => (
+                                <div
+                                  key={`${message.id}-img-${index}`}
+                                  className={`relative aspect-square w-full overflow-hidden rounded-2xl ${
+                                    isLightTheme
+                                      ? "border border-black/10 bg-black/[0.04]"
+                                      : "border border-border-primary bg-bg-hover"
+                                  }`}
                                 >
-                                  <Image
-                                    src={src}
-                                    alt={`生成结果 ${index + 1}`}
-                                    fill
-                                    unoptimized
-                                    className="object-cover transition-opacity hover:opacity-95"
-                                  />
-                                </button>
-                                <div className="absolute right-2 top-2 z-10 flex items-center gap-1.5">
                                   <button
                                     type="button"
-                                    onClick={(event) => {
-                                      event.preventDefault();
-                                      event.stopPropagation();
-                                      setPreviewSrc(src);
-                                    }}
-                                    className="rounded-lg bg-black/60 p-1.5 text-white backdrop-blur-sm transition-all hover:bg-black/80"
+                                    className="absolute inset-0"
+                                    onClick={() => setPreviewSrc(src)}
                                     title="放大查看"
                                   >
-                                    <Maximize2 size={14} />
+                                    <Image
+                                      src={src}
+                                      alt={`生成结果 ${index + 1}`}
+                                      fill
+                                      unoptimized
+                                      className="object-cover transition-opacity hover:opacity-95"
+                                    />
                                   </button>
+                                  <div className="absolute right-2 top-2 z-10 flex items-center gap-1.5">
+                                    <button
+                                      type="button"
+                                      onClick={(event) => {
+                                        event.preventDefault();
+                                        event.stopPropagation();
+                                        setPreviewSrc(src);
+                                      }}
+                                      className="rounded-lg bg-black/60 p-1.5 text-white backdrop-blur-sm transition-all hover:bg-black/80"
+                                      title="放大查看"
+                                    >
+                                      <Maximize2 size={14} />
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={(event) => {
+                                        event.preventDefault();
+                                        event.stopPropagation();
+                                        void handleDownloadImage(src, index);
+                                      }}
+                                      className="rounded-lg bg-black/60 p-1.5 text-white backdrop-blur-sm transition-all hover:bg-black/80"
+                                      title="下载图片"
+                                    >
+                                      <Download size={14} />
+                                    </button>
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                            {message.role === "assistant" ? (
+                              <div className="mt-2 flex items-center justify-start gap-2 px-1">
+                                {message.text ? (
                                   <button
                                     type="button"
-                                    onClick={(event) => {
-                                      event.preventDefault();
-                                      event.stopPropagation();
-                                      void handleDownloadImage(src, index);
-                                    }}
-                                    className="rounded-lg bg-black/60 p-1.5 text-white backdrop-blur-sm transition-all hover:bg-black/80"
-                                    title="下载图片"
+                                    onClick={() => void handleCopyText(message)}
+                                    className={`inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-[11px] transition-all ${
+                                      isLightTheme
+                                        ? "text-black/45 hover:bg-black/[0.04] hover:text-black/80"
+                                        : "text-text-tertiary hover:bg-bg-hover hover:text-text-primary"
+                                    }`}
+                                    title="复制文案"
                                   >
-                                    <Download size={14} />
+                                    {copiedMessageId === message.id ? <Check size={12} /> : <Copy size={12} />}
+                                    {copiedMessageId === message.id ? "已复制" : "复制"}
                                   </button>
-                                </div>
+                                ) : null}
                               </div>
-                            ))}
+                            ) : null}
                           </div>
                         )}
                       </div>
@@ -1247,21 +1578,33 @@ export default function FloatingEntryWidget({
 
                   {isSubmitting && (
                     <div className="flex justify-start">
-                      <div className={`max-w-[88%] rounded-2xl rounded-tl-md px-4 py-3 ${
-                        isLightTheme
-                          ? "border border-black/10 bg-black/[0.04]"
-                          : "border border-border-primary bg-bg-hover"
-                      }`}>
-                        <div className="flex items-center gap-3">
-                          <Loader2 size={18} className="text-accent animate-spin" />
-                          <div>
-                            <p className={`text-sm ${isLightTheme ? "text-[#111111]" : "text-text-primary"}`}>
-                              {currentEntryMode === "agent" ? "正在理解你的需求并判断是否需要生图..." : "正在生成内容..."}
-                            </p>
-                            <p className={`mt-0.5 text-xs ${isLightTheme ? "text-black/45" : "text-text-tertiary"}`}>
-                              处理结果会继续显示在这里
-                            </p>
+                      <div className="w-full max-w-[260px]">
+                        <div className={`relative aspect-square overflow-hidden rounded-2xl ${
+                          isLightTheme ? "bg-[#f1f1f1]" : "bg-white/[0.055]"
+                        }`}>
+                          <div className={`absolute inset-0 animate-pulse ${
+                            isLightTheme
+                              ? "bg-gradient-to-br from-black/[0.02] via-white/60 to-black/[0.04]"
+                              : "bg-gradient-to-br from-white/[0.03] via-white/[0.10] to-white/[0.03]"
+                          }`} />
+                          <div className="absolute inset-0 flex items-center justify-center">
+                            <div className="flex max-w-[210px] flex-col items-center gap-3 px-5 text-center">
+                              <Loader2 size={22} className="animate-spin text-accent" />
+                              <div>
+                                <p className={`text-xs font-medium ${isLightTheme ? "text-black/70" : "text-text-primary"}`}>
+                                  {activeGenerationStage.label}
+                                </p>
+                                <p className={`mt-1 text-[11px] leading-5 ${isLightTheme ? "text-black/42" : "text-text-tertiary"}`}>
+                                  {activeGenerationStage.detail}
+                                </p>
+                              </div>
+                            </div>
                           </div>
+                        </div>
+                        <div className="mt-2 flex items-center justify-end px-1">
+                          <span className={`text-[11px] ${isLightTheme ? "text-black/35" : "text-text-tertiary"}`}>
+                            生成完成后会自动显示
+                          </span>
                         </div>
                       </div>
                     </div>
@@ -1287,6 +1630,7 @@ export default function FloatingEntryWidget({
               )}
             </div>
           </div>
+
 
           <div className="px-4 pb-4">
             <input
@@ -1414,9 +1758,68 @@ export default function FloatingEntryWidget({
                 >
                   <Plus size={16} />
                 </button>
+
+                {/* Skills 下拉按钮 */}
+                {SKILLS.length > 0 && (
+                  <div className="relative flex-shrink-0" ref={skillsRef}>
+                    <button
+                      type="button"
+                      onClick={() => setSkillsOpen((v) => !v)}
+                      title="快捷技能"
+                      className={`h-8 px-2.5 rounded-lg flex items-center gap-1 text-[11px] font-medium transition-all ${
+                        skillsOpen
+                          ? isLightTheme
+                            ? "bg-accent/10 text-accent"
+                            : "bg-accent/20 text-accent"
+                          : isLightTheme
+                            ? "text-black/45 hover:bg-black/[0.05] hover:text-black/80"
+                            : "text-text-tertiary hover:bg-bg-hover hover:text-text-primary"
+                      }`}
+                    >
+                      <span>Skills</span>
+                      <ChevronUp size={11} className={`transition-transform ${skillsOpen ? "" : "rotate-180"}`} />
+                    </button>
+
+                    {skillsOpen && (
+                      <div className={`absolute bottom-full left-0 mb-2 w-52 rounded-2xl shadow-xl border overflow-hidden z-50 ${
+                        isLightTheme ? "bg-white border-black/8" : "bg-[#1c1c1c] border-white/10"
+                      }`}>
+                        <div className={`px-3 py-2 text-[10px] font-semibold tracking-widest uppercase ${isLightTheme ? "text-black/30 border-b border-black/6" : "text-white/25 border-b border-white/8"}`}>
+                          Skills
+                        </div>
+                        {SKILLS.map((skill) => (
+                          <button
+                            key={skill.id}
+                            type="button"
+                            onClick={() => handleSkillClick(skill)}
+                            className={`w-full flex items-center gap-2.5 px-3 py-2.5 text-left text-[13px] transition-colors ${
+                              isLightTheme ? "hover:bg-black/[0.04] text-[#111]" : "hover:bg-white/[0.06] text-white"
+                            }`}
+                          >
+                            <span className="text-base leading-none">{skill.icon}</span>
+                            <div className="flex-1 min-w-0">
+                              <div className="font-medium">{skill.label}</div>
+                              <div className={`text-[11px] truncate mt-0.5 ${isLightTheme ? "text-black/35" : "text-white/35"}`}>
+                                {skill.ipBased && IP_ASSETS.length > 0
+                                  ? `将随机选取 ${IP_ASSETS.length} 张IP图之一作参考`
+                                  : skill.prompt.slice(0, 36) + "…"}
+                              </div>
+                            </div>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
                 <textarea
                   value={prompt}
                   onChange={(event) => onPromptChange?.(event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" && !event.shiftKey) {
+                      event.preventDefault();
+                      void handleSubmit();
+                    }
+                  }}
                   rows={1}
                   placeholder={dragOver ? "松手添加文件或图片..." : placeholder}
                   className={`flex-1 min-h-[24px] max-h-28 py-1 bg-transparent text-sm outline-none resize-none leading-6 overflow-y-auto ${
@@ -1445,27 +1848,106 @@ export default function FloatingEntryWidget({
       )}
 
       {!expanded && (
-        <button
-          type="button"
-          className="pointer-events-auto fixed bg-transparent transition-all hover:scale-[1.03] active:scale-[0.98] flex items-center justify-center"
-          style={{
-            left: ballPosition.x,
-            top: ballPosition.y,
-            width: BALL_SIZE,
-            height: BALL_SIZE,
-          }}
-          onPointerDown={(event) => startDragging(event, { toggleOnClick: true })}
-          title="打开悬浮生成入口"
+        <div
+          className="pointer-events-auto fixed"
+          style={{ left: ballPosition.x, top: ballPosition.y, width: BALL_SIZE, height: BALL_SIZE }}
         >
-          <Image
-            src="/images/floating-greeting.svg"
-            alt=""
-            width={112}
-            height={112}
-            className="relative w-[112px] h-[112px] object-contain"
-            aria-hidden="true"
-          />
-        </button>
+
+          {/* 聆听时的脉冲光环 */}
+          {voiceState === "listening" && (
+            <>
+              <span className="absolute inset-0 rounded-full animate-ping"
+                style={{ background: "rgba(34,197,94,0.20)", animationDuration: "1s", borderRadius: "50%", transform: "scale(1.35)" }} />
+              <span className="absolute inset-0 rounded-full animate-ping"
+                style={{ background: "rgba(34,197,94,0.12)", animationDuration: "1.7s", borderRadius: "50%", transform: "scale(1.7)" }} />
+            </>
+          )}
+
+          {/* 思考/说话时的慢速光晕 */}
+          {(voiceState === "thinking" || voiceState === "speaking") && (
+            <span className="absolute inset-0 rounded-full"
+              style={{
+                background: voiceState === "speaking" ? "rgba(34,197,94,0.16)" : "rgba(250,204,21,0.20)",
+                borderRadius: "50%",
+                transform: "scale(1.35)",
+                animation: "pulse 1.5s ease-in-out infinite",
+              }} />
+          )}
+
+          {/* 问候气泡 */}
+          {showGreet && !showVoiceBubble && (
+            <div
+              className="absolute"
+              style={{ bottom: "calc(100% + 14px)", left: "50%", transform: "translateX(-50%)", zIndex: 10, minWidth: 160, maxWidth: 240,
+                opacity: showGreet ? 1 : 0, transition: "opacity 0.35s ease" }}
+            >
+              <div
+                className="text-[14px] font-semibold whitespace-nowrap text-center"
+                style={{ color: "#fff" }}
+              >
+                {greetText}
+              </div>
+            </div>
+          )}
+
+          {/* 语音气泡 */}
+          {showVoiceBubble && voiceBubbleText && (
+            <div
+              className="absolute"
+              style={{ bottom: "calc(100% + 14px)", left: "50%", transform: "translateX(-50%)", zIndex: 10, minWidth: 160, maxWidth: 220 }}
+            >
+              <div
+                className="rounded-2xl px-3 py-2 text-[13px] leading-snug shadow-xl"
+                style={{
+                  background: voiceState === "speaking" ? "linear-gradient(135deg,#f0fdf4,#dcfce7)" : "#fff",
+                  color: "#1a2e1a",
+                  border: voiceState === "listening" ? "1.5px solid #4ade80" : "1px solid #e5e7eb",
+                  textAlign: "center",
+                  whiteSpace: "pre-wrap",
+                  wordBreak: "break-word",
+                }}
+              >
+                {voiceState === "thinking" && (
+                  <span className="inline-flex gap-0.5 mr-1 align-middle">
+                    <span className="w-1.5 h-1.5 rounded-full bg-gray-400 inline-block" style={{ animation: "bounce 0.8s 0s infinite" }} />
+                    <span className="w-1.5 h-1.5 rounded-full bg-gray-400 inline-block" style={{ animation: "bounce 0.8s 0.15s infinite" }} />
+                    <span className="w-1.5 h-1.5 rounded-full bg-gray-400 inline-block" style={{ animation: "bounce 0.8s 0.3s infinite" }} />
+                  </span>
+                )}
+                {voiceBubbleText}
+              </div>
+              {/* 气泡小三角 */}
+              <div className="absolute left-1/2 -translate-x-1/2"
+                style={{ bottom: -7, width: 14, height: 14, background: voiceState === "speaking" ? "#dcfce7" : "#fff", borderRight: "1px solid #e5e7eb", borderBottom: "1px solid #e5e7eb", transform: "translateX(-50%) rotate(45deg)" }} />
+            </div>
+          )}
+
+          {/* 主球体按钮（拖拽 + 点击展开） */}
+          <button
+            type="button"
+            className="absolute inset-0 bg-transparent transition-all hover:scale-[1.03] active:scale-[0.98] flex items-center justify-center"
+            onPointerDown={(event) => startDragging(event, { toggleOnClick: true, clickAction: "voice" })}
+            title="点击语音对话，双击打开输入面板"
+          >
+            <Image
+              src="/images/floating-avatar-v2.png"
+              alt=""
+              width={132}
+              height={132}
+              className="relative w-[132px] h-[132px] object-contain"
+              aria-hidden="true"
+            />
+          </button>
+
+          {/* 麦克风按钮（点击 = 单次对话 / 唤醒中点击 = 关闭；长按 = 开启/关闭唤醒词） */}
+          {/* 只在有语音活动时才显示麦克风按钮 */}
+          {voiceState !== "idle" && voiceState !== "wake" && (
+            <MicButton
+              voiceState={voiceState}
+              onClick={handleMicClick}
+            />
+          )}
+        </div>
       )}
 
       {previewSrc && <ImageLightbox src={previewSrc} onClose={() => setPreviewSrc(null)} />}
@@ -1479,6 +1961,16 @@ export default function FloatingEntryWidget({
 
         .floating-logo-image {
           display: block;
+        }
+
+        @keyframes bounce {
+          0%, 100% { transform: translateY(0); opacity: 0.5; }
+          50% { transform: translateY(-4px); opacity: 1; }
+        }
+
+        @keyframes pulse {
+          0%, 100% { opacity: 0.6; }
+          50% { opacity: 1; }
         }
       `}</style>
     </div>

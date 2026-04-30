@@ -1,17 +1,31 @@
 const GPT_IMAGE_2_API_BASE_RAW = (
   process.env.GPT_IMAGE_2_API_BASE
   || process.env.FLOATING_ASSISTANT_API_BASE
-  || ""
+  || process.env.OPENAI_API_BASE
+  || "https://api.openai.com/v1"
 ).replace(/\/$/, "");
-const GPT_IMAGE_2_API_KEY = process.env.GPT_IMAGE_2_API_KEY || process.env.FLOATING_ASSISTANT_API_KEY || "";
-const GPT_IMAGE_2_API_VERSION = process.env.GPT_IMAGE_2_API_VERSION || process.env.FLOATING_ASSISTANT_API_VERSION || "";
+const GPT_IMAGE_2_API_KEY = (
+  process.env.GPT_IMAGE_2_API_KEY
+  || process.env.FLOATING_ASSISTANT_API_KEY
+  || process.env.OPENAI_API_KEY
+  || ""
+);
+const GPT_IMAGE_2_API_VERSION = (
+  process.env.GPT_IMAGE_2_API_VERSION
+  || process.env.FLOATING_ASSISTANT_API_VERSION
+  || process.env.OPENAI_API_VERSION
+  || ""
+);
 const GPT_IMAGE_2_API_KEY_HEADER = (
   process.env.GPT_IMAGE_2_API_KEY_HEADER
   || process.env.FLOATING_ASSISTANT_API_KEY_HEADER
-  || "api-key"
+  || process.env.OPENAI_API_KEY_HEADER
+  || "authorization"
 ).trim().toLowerCase();
 const GPT_IMAGE_2_MODEL = process.env.GPT_IMAGE_2_MODEL || "gpt-image-2";
 const GPT_IMAGE_2_TIMEOUT_MS = Number(process.env.GPT_IMAGE_2_TIMEOUT_MS || 10 * 60 * 1000);
+const GPT_IMAGE_2_RETRY_COUNT = Math.max(0, Number(process.env.GPT_IMAGE_2_RETRY_COUNT || 1) || 0);
+const GPT_IMAGE_2_RETRY_DELAY_MS = Math.max(0, Number(process.env.GPT_IMAGE_2_RETRY_DELAY_MS || 800) || 0);
 const GPT_IMAGE_2_QUALITY = normalizeQuality(process.env.GPT_IMAGE_2_QUALITY || "medium");
 const GPT_IMAGE_2_OUTPUT_FORMAT = normalizeOutputFormat(process.env.GPT_IMAGE_2_OUTPUT_FORMAT || "png");
 const GPT_IMAGE_2_OUTPUT_COMPRESSION = normalizeOutputCompression(
@@ -23,6 +37,9 @@ const GPT_IMAGE_2_MIN_PIXELS = 655360;
 const GPT_IMAGE_2_MAX_PIXELS = 8294400;
 const GPT_IMAGE_2_MAX_ASPECT_RATIO = 3;
 const EXACT_SIZE_PATTERN = /^(\d{2,4})\s*[xX]\s*(\d{2,4})$/;
+const GPT_IMAGE_2_STANDARD_API_BASE = /\/v\d+$/i.test(GPT_IMAGE_2_API_BASE_RAW)
+  ? GPT_IMAGE_2_API_BASE_RAW
+  : `${GPT_IMAGE_2_API_BASE_RAW}/v1`;
 
 function withApiVersion(url) {
   if (!GPT_IMAGE_2_API_VERSION) {
@@ -35,22 +52,32 @@ function withApiVersion(url) {
   return nextUrl.toString();
 }
 
+// 有 API_VERSION → Azure deployment 风格；否则 → 标准 OpenAI /v1 风格
+const IS_AZURE = Boolean(GPT_IMAGE_2_API_VERSION);
+
 function buildAuthHeaders() {
   if (!GPT_IMAGE_2_API_KEY) {
     return {};
   }
-  const headers = {
-    Authorization: `Bearer ${GPT_IMAGE_2_API_KEY}`,
-    "api-key": GPT_IMAGE_2_API_KEY,
-  };
-  if (GPT_IMAGE_2_API_KEY_HEADER === "x-api-key") {
-    headers["x-api-key"] = GPT_IMAGE_2_API_KEY;
+  if (IS_AZURE) {
+    return {
+      Authorization: `Bearer ${GPT_IMAGE_2_API_KEY}`,
+      "api-key": GPT_IMAGE_2_API_KEY,
+    };
   }
-  return headers;
+  // 标准 OpenAI / 云雾等 sk- 格式
+  if (GPT_IMAGE_2_API_KEY_HEADER === "api-key" || GPT_IMAGE_2_API_KEY_HEADER === "x-api-key") {
+    return { [GPT_IMAGE_2_API_KEY_HEADER]: GPT_IMAGE_2_API_KEY };
+  }
+  return { Authorization: `Bearer ${GPT_IMAGE_2_API_KEY}` };
 }
 
 function buildDeploymentUrl(pathSuffix) {
-  return `${GPT_IMAGE_2_API_BASE_RAW}/openai/deployments/${encodeURIComponent(GPT_IMAGE_2_MODEL)}${pathSuffix}`;
+  if (IS_AZURE) {
+    return `${GPT_IMAGE_2_API_BASE_RAW}/openai/deployments/${encodeURIComponent(GPT_IMAGE_2_MODEL)}${pathSuffix}`;
+  }
+  // 标准 OpenAI 格式：/v1/images/generations 或 /v1/images/edits
+  return `${GPT_IMAGE_2_STANDARD_API_BASE}${pathSuffix}`;
 }
 
 function normalizeImageInput(image) {
@@ -160,11 +187,68 @@ async function parseJsonSafely(response) {
   }
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function getErrorCode(error) {
+  return error?.cause?.code || error?.code || "";
+}
+
+function getUpstreamHost(url) {
+  try {
+    return new URL(url).hostname;
+  } catch {
+    return "上游图片服务";
+  }
+}
+
+function isTransientFetchError(error) {
+  const code = getErrorCode(error);
+  return (
+    error?.message === "fetch failed"
+    || ["UND_ERR_CONNECT_TIMEOUT", "ENOTFOUND", "EAI_AGAIN", "ETIMEDOUT", "ECONNRESET", "ECONNREFUSED"].includes(code)
+  );
+}
+
+function formatFetchError(error, url) {
+  if (error?.name === "AbortError") {
+    return "图片服务响应超时，请稍后重试。";
+  }
+  const code = getErrorCode(error);
+  const host = error?.cause?.hostname || getUpstreamHost(url);
+  if (code === "ENOTFOUND" || code === "EAI_AGAIN") {
+    return `无法连接图片服务 ${host}，域名解析失败或网络暂时不可用，请稍后重试。`;
+  }
+  if (code === "UND_ERR_CONNECT_TIMEOUT" || code === "ETIMEDOUT") {
+    return `连接图片服务 ${host} 超时，请稍后重试。`;
+  }
+  if (code === "ECONNRESET" || code === "ECONNREFUSED") {
+    return `图片服务 ${host} 连接中断，请稍后重试。`;
+  }
+  return error?.message || "图片服务请求失败，请稍后重试。";
+}
+
+async function fetchWithRetry(url, options) {
+  const requestUrl = withApiVersion(url);
+  let lastError = null;
+  for (let attempt = 0; attempt <= GPT_IMAGE_2_RETRY_COUNT; attempt += 1) {
+    try {
+      return await fetch(requestUrl, options);
+    } catch (error) {
+      lastError = error;
+      if (!isTransientFetchError(error) || attempt >= GPT_IMAGE_2_RETRY_COUNT) break;
+      await sleep(GPT_IMAGE_2_RETRY_DELAY_MS * (attempt + 1));
+    }
+  }
+  throw new Error(formatFetchError(lastError, requestUrl));
+}
+
 async function postJson(url, payload) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), GPT_IMAGE_2_TIMEOUT_MS);
   try {
-    const res = await fetch(withApiVersion(url), {
+    const res = await fetchWithRetry(url, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -196,6 +280,17 @@ function base64ToBlob(dataUrl) {
   return { blob: new Blob([buffer], { type: "image/png" }), mimeType: "image/png" };
 }
 
+async function imgSrcToBlob(imgSrc) {
+  if (typeof imgSrc === "string" && /^https?:\/\//i.test(imgSrc)) {
+    const res = await fetch(imgSrc);
+    if (!res.ok) throw new Error(`Failed to fetch reference image (${res.status}): ${imgSrc}`);
+    const arrayBuf = await res.arrayBuffer();
+    const mimeType = res.headers.get("content-type")?.split(";")[0]?.trim() || "image/png";
+    return { blob: new Blob([Buffer.from(arrayBuf)], { type: mimeType }), mimeType };
+  }
+  return base64ToBlob(imgSrc);
+}
+
 async function postFormData(url, {
   model,
   prompt,
@@ -211,6 +306,8 @@ async function postFormData(url, {
   const timer = setTimeout(() => controller.abort(), GPT_IMAGE_2_TIMEOUT_MS);
   try {
     const formData = new FormData();
+    // 标准 OpenAI 格式需要在 body 里传 model，Azure 格式 model 在 URL 里
+    if (!IS_AZURE) formData.append("model", model);
     formData.append("prompt", prompt);
     formData.append("n", String(n));
     formData.append("size", size);
@@ -222,12 +319,12 @@ async function postFormData(url, {
     if (moderation) formData.append("moderation", moderation);
 
     for (const imgSrc of images) {
-      const { blob, mimeType } = base64ToBlob(imgSrc);
+      const { blob, mimeType } = await imgSrcToBlob(imgSrc);
       const ext = mimeType.split("/")[1] || "png";
       formData.append("image[]", blob, `image.${ext}`);
     }
 
-    const res = await fetch(withApiVersion(url), {
+    const res = await fetchWithRetry(url, {
       method: "POST",
       headers: buildAuthHeaders(),
       signal: controller.signal,

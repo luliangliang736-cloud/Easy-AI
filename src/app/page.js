@@ -1,14 +1,23 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
+import { useRouter } from "next/navigation";
+import IP_ASSETS from "@/config/ipAssets";
 import Link from "next/link";
 import {
   Sparkles, ArrowRight, Wand2, Image as ImageIcon,
   Layers, Zap, Crown, Rocket, PenTool,
-  Palette, RefreshCw, Download, MousePointer2, Sun, Moon,
+  Palette, RefreshCw, Download, MousePointer2, Sun, Moon, Bot, LayoutGrid,
 } from "lucide-react";
 import { useTheme } from "@/lib/useTheme";
 import { compressImage } from "@/lib/imageUtils";
+import { getGenerationStageCopy } from "@/lib/generationStages";
+import {
+  detectOneClickEntryMode,
+  getLatestGeneratedImages,
+  isObviousOneClickGenerateRequest,
+  shouldReusePreviousGeneratedImages,
+} from "@/lib/oneClickCreationRules";
 import BrandLogo from "@/components/BrandLogo";
 import FloatingEntryWidget from "@/components/FloatingEntryWidget";
 
@@ -18,9 +27,16 @@ const FLOATING_AGENT_DEFAULT_MODEL = "gemini-3.1-flash-image-preview";
 const FLOATING_AGENT_DEFAULT_SERVICE_TIER = "priority";
 const FLOATING_EDIT_MODEL = "gpt-image-2";
 const FLOATING_HISTORY_STORAGE_KEY = "lovart-floating-entry-home-history";
+const GENERATION_STAGE_MIN_MS = 650;
+const GENERATION_SAVING_STAGE_MS = 350;
+
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 const HERO_LAYOUT_PRESETS = {
   desktop: {
-    container: "pb-24 lg:pb-32",
+    container: "pb-10 lg:pb-14",
     title: "text-4xl lg:text-6xl leading-tight mb-5",
     description: "text-base lg:text-lg max-w-2xl mb-10",
     actions: "gap-4",
@@ -28,7 +44,7 @@ const HERO_LAYOUT_PRESETS = {
     secondaryButton: "h-12 px-8",
   },
   mac13: {
-    container: "pb-12 sm:pb-14 lg:pb-16",
+    container: "pb-8 sm:pb-9 lg:pb-10",
     title: "text-3xl sm:text-[34px] lg:text-[44px] leading-[1.06] mb-3.5",
     description: "text-sm sm:text-[15px] lg:text-base max-w-lg mb-7",
     actions: "gap-3",
@@ -36,7 +52,7 @@ const HERO_LAYOUT_PRESETS = {
     secondaryButton: "h-10 px-6 text-sm",
   },
   mac14: {
-    container: "pb-14 sm:pb-16 lg:pb-20",
+    container: "pb-8 sm:pb-10 lg:pb-12",
     title: "text-3xl sm:text-4xl lg:text-5xl leading-[1.08] mb-4",
     description: "text-sm sm:text-base lg:text-[17px] max-w-xl mb-8",
     actions: "gap-3 sm:gap-4",
@@ -44,7 +60,7 @@ const HERO_LAYOUT_PRESETS = {
     secondaryButton: "h-11 px-7 text-sm",
   },
   mac16: {
-    container: "pb-[4.5rem] sm:pb-20 lg:pb-24",
+    container: "pb-10 sm:pb-12 lg:pb-14",
     title: "text-[34px] sm:text-[40px] lg:text-[54px] leading-[1.08] mb-[18px]",
     description: "text-base lg:text-lg max-w-xl mb-9",
     actions: "gap-4",
@@ -187,6 +203,43 @@ async function parseApiResponse(res) {
   }
 }
 
+/** 根据参考图真实像素尺寸，计算 GPT Image 2 edit 合法的精确输出尺寸 */
+function computeGptImage2EditSize(width, height) {
+  if (!width || !height || width <= 0 || height <= 0) return "auto";
+  const MAX_EDGE = 3840;
+  const MAX_RATIO = 3;
+  const MIN_PIXELS = 655360;
+  const MAX_PIXELS = 8294400;
+  const MULTIPLE = 16;
+
+  let w = width;
+  let h = height;
+
+  const longEdge = Math.max(w, h);
+  const shortEdge = Math.min(w, h);
+  if (shortEdge === 0 || longEdge / shortEdge > MAX_RATIO) return "auto";
+
+  if (w * h < MIN_PIXELS) {
+    const scale = Math.sqrt(MIN_PIXELS / (w * h));
+    w = Math.ceil(w * scale);
+    h = Math.ceil(h * scale);
+  }
+
+  const maxEdge = Math.max(w, h);
+  if (maxEdge > MAX_EDGE) {
+    const scale = MAX_EDGE / maxEdge;
+    w = Math.round(w * scale);
+    h = Math.round(h * scale);
+  }
+
+  w = Math.round(w / MULTIPLE) * MULTIPLE || MULTIPLE;
+  h = Math.round(h / MULTIPLE) * MULTIPLE || MULTIPLE;
+
+  if (Math.max(w, h) > MAX_EDGE || w * h > MAX_PIXELS || w * h < MIN_PIXELS) return "auto";
+
+  return `${w}x${h}`;
+}
+
 function findClosestAspectRatio(width, height) {
   const candidates = [
     ["1:1", 1],
@@ -196,6 +249,8 @@ function findClosestAspectRatio(width, height) {
     ["3:4", 3 / 4],
     ["3:2", 3 / 2],
     ["2:3", 2 / 3],
+    ["2:1", 2 / 1],
+    ["1:2", 1 / 2],
     ["4:5", 4 / 5],
     ["5:4", 5 / 4],
     ["21:9", 21 / 9],
@@ -293,93 +348,8 @@ function resolveAgentParams(baseParams, promptText, refImages = []) {
 }
 
 function resolveFloatingGenerationModel({ hasImages = false, isAgentMode = false, agentParams = {} } = {}) {
-  if (hasImages) {
-    return FLOATING_EDIT_MODEL;
-  }
-  return isAgentMode ? agentParams.model : FLOATING_DEFAULT_MODEL;
-}
-
-function detectFloatingEntryMode(promptText, refImages = []) {
-  if (Array.isArray(refImages) && refImages.length > 0) {
-    return "agent";
-  }
-
-  const text = String(promptText || "").trim();
-  if (!text) {
-    return "quick";
-  }
-
-  const compact = text.toLowerCase().replace(/\s+/g, "");
-  const agentSignals = [
-    "海报", "poster", "品牌", "branding", "logo", "字体", "排版", "版式", "包装",
-    "banner", "kv", "主视觉", "电商", "详情页", "详情图", "产品图", "广告",
-    "营销", "视觉规范", "延展", "物料", "画册", "封面", "构图", "镜头", "景别",
-    "光影", "材质", "质感", "高级感", "高细节", "高清", "风格统一",
-  ];
-  if (agentSignals.some((keyword) => compact.includes(keyword))) {
-    return "agent";
-  }
-
-  const structuredPrompt =
-    text.length >= 48 ||
-    /[，。；：\n]/.test(text) ||
-    /(保持|保留|突出|强调|避免|不要|并且|同时|需要|要求)/.test(text);
-
-  return structuredPrompt ? "agent" : "quick";
-}
-
-function getLatestGeneratedImages(messages = []) {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (message?.role === "assistant" && Array.isArray(message.images) && message.images.length > 0) {
-      return message.images.filter((src) => typeof src === "string" && src);
-    }
-  }
-  return [];
-}
-
-function shouldReusePreviousGeneratedImages(promptText, explicitRefImages = []) {
-  if (Array.isArray(explicitRefImages) && explicitRefImages.length > 0) {
-    return false;
-  }
-
-  const text = String(promptText || "").trim().toLowerCase();
-  if (!text) {
-    return false;
-  }
-
-  const editOrGenerateIntent =
-    /(换|改|继续|再来|重做|延续|保留|参考|基于|按照|照着|生成|出图|做一版|来一版|来一组|另一套|不同的|同风格|同款|变成)/.test(text);
-  const contextualTarget =
-    /(这张|这个|这套|上一张|上一个|刚才|前面|之前|上次)/.test(text);
-  const shortFollowup =
-    /(再来一版|再来一个|换一组|换一版|继续改|继续做|换个配色|换个服装|再换套)/.test(text);
-
-  return shortFollowup || (editOrGenerateIntent && contextualTarget) || /参考这个/.test(text);
-}
-
-function isObviousFloatingGenerateRequest(promptText, refImages = [], attachments = []) {
-  const text = String(promptText || "").trim().toLowerCase();
-  if (!text) return false;
-
-  if (Array.isArray(attachments) && attachments.length > 0) {
-    return false;
-  }
-
-  const explicitQuestionIntent =
-    /(是什么|为什么|怎么|如何|分析|总结|解释|提取|读取|新闻|资讯|内容|文案|正文|描述|介绍|建议|推荐|帮我看看)/.test(text);
-
-  const directGenerateIntent =
-    /(生成|生图|出图|画一张|画个|绘制|渲染|做一张|做个|做一版|来一张|来一版|给我一张|创建一张|设计一张)/.test(text);
-
-  const directEditIntent =
-    /(改成|变成|换成|换一版|换一组|继续改|继续做|重做|延展|参考这个|照着这个|按照这个|其它保持不变)/.test(text);
-
-  if (Array.isArray(refImages) && refImages.length > 0) {
-    return directEditIntent || directGenerateIntent;
-  }
-
-  return directGenerateIntent && !explicitQuestionIntent;
+  // 有参考图走 edit，无参考图走 generate，两条路都用 gpt-image-2
+  return FLOATING_EDIT_MODEL;
 }
 
 const FEATURES = [
@@ -398,21 +368,33 @@ const MODELS = [
 ];
 
 export default function HomePage() {
+  const router = useRouter();
   const [mounted, setMounted] = useState(false);
-  const [navVisible, setNavVisible] = useState(false);
   const [heroLayoutPreset, setHeroLayoutPreset] = useState("desktop");
   const [floatingPrompt, setFloatingPrompt] = useState("");
   const [floatingRefImages, setFloatingRefImages] = useState([]);
   const [floatingAttachments, setFloatingAttachments] = useState([]);
   const [floatingIsGenerating, setFloatingIsGenerating] = useState(false);
+  const [floatingGenerationStage, setFloatingGenerationStage] = useState("understanding");
   const [floatingOutputError, setFloatingOutputError] = useState("");
   const [floatingMessages, setFloatingMessages] = useState([]);
   const [floatingHistory, setFloatingHistory] = useState([]);
   const [floatingRuntimeMode, setFloatingRuntimeMode] = useState("quick");
+  const [isModeMenuOpen, setIsModeMenuOpen] = useState(false);
   const { theme, toggleTheme } = useTheme("dark");
   const floatingEntryMode = floatingIsGenerating
     ? floatingRuntimeMode
-    : detectFloatingEntryMode(floatingPrompt, floatingRefImages);
+    : detectOneClickEntryMode(floatingPrompt, floatingRefImages);
+  const showFloatingGenerationStage = useCallback(async (stage, duration = GENERATION_STAGE_MIN_MS, signal = null) => {
+    setFloatingGenerationStage(stage);
+    if (duration > 0) await wait(duration);
+    if (signal?.aborted) {
+      const error = new Error("Aborted");
+      error.name = "AbortError";
+      throw error;
+    }
+  }, []);
+
   useEffect(() => {
     const frameId = window.requestAnimationFrame(() => setMounted(true));
     return () => window.cancelAnimationFrame(frameId);
@@ -484,6 +466,7 @@ export default function HomePage() {
     setFloatingMessages([]);
     setFloatingOutputError("");
     setFloatingRuntimeMode("quick");
+    setFloatingGenerationStage("understanding");
   };
 
   const archiveFloatingConversation = () => {
@@ -522,6 +505,21 @@ export default function HomePage() {
     if (floatingIsGenerating) return;
     setFloatingHistory((prev) => prev.filter((entry) => entry.id !== historyId));
   };
+
+  const handleExpandFullscreen = useCallback(() => {
+    try {
+      const session = {
+        messages: floatingMessages,
+        prompt: floatingPrompt,
+        refImages: floatingRefImages,
+        attachments: floatingAttachments,
+        runtimeMode: floatingRuntimeMode,
+        history: floatingHistory,
+      };
+      window.localStorage.setItem("lovart-chat-fullscreen-session", JSON.stringify(session));
+    } catch {}
+    router.push("/chat");
+  }, [floatingMessages, floatingPrompt, floatingRefImages, floatingAttachments, floatingRuntimeMode, floatingHistory, router]);
 
   const handleFloatingFilesAdd = async (files) => {
     const imageFiles = files.filter((file) => file.type?.startsWith("image/"));
@@ -579,23 +577,56 @@ export default function HomePage() {
     setFloatingAttachments((prev) => prev.filter((item) => item.id !== attachmentId));
   };
 
+  const handleFloatingDeleteMessage = (messageId) => {
+    setFloatingMessages((prev) => prev.filter((message) => message.id !== messageId));
+  };
+
   const handleFloatingSubmit = async () => {
     const prompt = String(floatingPrompt || "").trim();
     if (!prompt && floatingRefImages.length === 0) return;
 
+    // ── EasyFamily 关键词自动触发 IP 参考图 ─────────────────
+    let autoIpImage = null;
+    let apiPromptText = prompt; // 对 API 使用的 prompt（场景二会被增强）
+    const hasIpTrigger = /easyfamily/i.test(prompt);
+
+    if (hasIpTrigger && IP_ASSETS.length > 0) {
+      const pick = IP_ASSETS[Math.floor(Math.random() * IP_ASSETS.length)];
+      try {
+        const res = await fetch(pick.url);
+        const blob = await res.blob();
+        autoIpImage = await new Promise((resolve) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result);
+          reader.onerror = () => resolve(null);
+          reader.readAsDataURL(blob);
+        });
+        // 场景二：用户有参考图 + EasyFamily → IP 图作为第二张参考，prompt 保持原样
+      } catch { /* 静默跳过 */ }
+    }
+    // ─────────────────────────────────────────────────────
+
     const inheritedImages = shouldReusePreviousGeneratedImages(prompt, floatingRefImages)
       ? getLatestGeneratedImages(floatingMessages)
       : [];
-    const submittedImages = [...floatingRefImages, ...inheritedImages];
+
+    // 场景一：无参考图 → IP 图单独作为参考
+    // 场景二：有参考图 → [用户参考图, IP图]
+    // 无触发：正常使用 floatingRefImages
+    const submittedImages = autoIpImage
+      ? (floatingRefImages.length > 0 ? [...floatingRefImages, autoIpImage] : [autoIpImage, ...inheritedImages])
+      : [...floatingRefImages, ...inheritedImages];
     const submittedAttachments = [...floatingAttachments];
-    const predictedMode = detectFloatingEntryMode(prompt, submittedImages);
-    const bypassPlannerForDirectGenerate = isObviousFloatingGenerateRequest(
-      prompt,
+    const predictedMode = detectOneClickEntryMode(apiPromptText, submittedImages);
+    const bypassPlannerForDirectGenerate = Boolean(autoIpImage) || isObviousOneClickGenerateRequest(
+      apiPromptText,
       submittedImages,
       submittedAttachments
     );
+    // autoIpImage 只用于生成，不在气泡里展示参考图
+    const displayRefImages = autoIpImage ? floatingRefImages : submittedImages;
     const nextUserMessage = createFloatingMessage("user", prompt, {
-      refImages: submittedImages,
+      refImages: displayRefImages,
       attachments: submittedAttachments,
     });
     const historyForAssistant = [...floatingMessages, nextUserMessage].map((message) => ({
@@ -611,10 +642,12 @@ export default function HomePage() {
     setFloatingRefImages([]);
     setFloatingAttachments([]);
     setFloatingRuntimeMode(predictedMode);
+    setFloatingGenerationStage("understanding");
     setFloatingIsGenerating(true);
     setFloatingOutputError("");
 
     try {
+      await showFloatingGenerationStage("understanding");
       const plan = bypassPlannerForDirectGenerate
         ? {
             action: "generate",
@@ -630,7 +663,7 @@ export default function HomePage() {
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
                 messages: historyForAssistant,
-                currentInput: prompt,
+                currentInput: apiPromptText,
                 refImages: submittedImages,
                 attachments: submittedAttachments,
               }),
@@ -655,9 +688,10 @@ export default function HomePage() {
         return;
       }
 
+      await showFloatingGenerationStage("preparing");
       const hasImages = submittedImages.length > 0;
       const isAgentMode = resolvedMode === "agent";
-      const generationPrompt = prompt;
+      const generationPrompt = apiPromptText; // 场景二已增强，含人物替换指令
       const firstRefMeta = hasImages ? await detectRefImageMeta(submittedImages[0]) : null;
       const quickImageSize = hasImages
         ? (firstRefMeta?.ratio || "1:1")
@@ -672,14 +706,14 @@ export default function HomePage() {
         generationPrompt,
         submittedImages
       );
-      const imageSize = isAgentMode
-        ? (agentParams.image_size === "auto" ? (firstRefMeta?.ratio || "1:1") : agentParams.image_size)
-        : quickImageSize;
-      const generationModel = resolveFloatingGenerationModel({
-        hasImages,
-        isAgentMode,
-        agentParams,
-      });
+      const generationModel = resolveFloatingGenerationModel({ hasImages, isAgentMode, agentParams });
+      // GPT Image 2 传精确像素尺寸以保持原图比例；其他模型传比例字符串
+      const isGpt2 = generationModel === "gpt-image-2";
+      const imageSize = hasImages
+        ? (isGpt2 ? computeGptImage2EditSize(firstRefMeta?.width, firstRefMeta?.height) : (firstRefMeta?.ratio || "1:1"))
+        : isAgentMode
+          ? (agentParams.image_size === "auto" ? (firstRefMeta?.ratio || "1:1") : agentParams.image_size)
+          : quickImageSize;
       const endpoint = hasImages ? "/api/edit" : "/api/generate";
       const finalPrompt = isAgentMode ? buildAgentPrompt(generationPrompt, submittedImages) : generationPrompt;
       const payload = hasImages
@@ -700,6 +734,7 @@ export default function HomePage() {
             service_tier: isAgentMode ? agentParams.service_tier : FLOATING_DEFAULT_SERVICE_TIER,
           };
 
+      setFloatingGenerationStage("generating");
       const res = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -715,6 +750,7 @@ export default function HomePage() {
         throw new Error("未返回结果图片");
       }
 
+      await showFloatingGenerationStage("saving", GENERATION_SAVING_STAGE_MS);
       setFloatingMessages((prev) => [
         ...prev,
         createFloatingMessage(
@@ -734,88 +770,93 @@ export default function HomePage() {
       setFloatingOutputError("");
     } finally {
       setFloatingIsGenerating(false);
+      setFloatingGenerationStage("understanding");
     }
   };
 
   return (
     <div className="min-h-screen bg-bg-primary overflow-x-hidden overflow-y-auto">
-      <div
-        className="fixed top-0 left-0 right-0 z-40 h-6"
-        onMouseEnter={() => setNavVisible(true)}
-      />
       {/* Nav */}
       <nav
-        className={`fixed top-0 left-0 right-0 z-50 flex items-center justify-between px-6 lg:px-12 py-4 bg-bg-primary/70 backdrop-blur-xl border-b border-border-primary/60 transition-all duration-200 ${
-          navVisible ? "opacity-100 translate-y-0" : "opacity-0 -translate-y-full pointer-events-none"
-        }`}
-        onMouseEnter={() => setNavVisible(true)}
-        onMouseLeave={() => setNavVisible(false)}
+        className="fixed top-0 left-0 right-0 z-50 flex items-center justify-between px-6 lg:px-12 py-4 bg-bg-primary/70 backdrop-blur-xl border-b border-border-primary/60"
       >
-        <div className="flex items-center gap-3">
-          <div className="w-9 h-9 rounded-xl bg-accent flex items-center justify-center">
-            <BrandLogo className="w-5 h-5 text-white" />
-          </div>
-          <span className="text-lg font-semibold text-text-primary tracking-tight">Easy AI</span>
+        <div className="flex items-center">
+          <BrandLogo
+            className="h-9"
+            wordmarkOffsetClassName={`translate-y-[2px] ${theme === "light" ? "invert" : ""}`}
+          />
         </div>
         <div className="flex items-center gap-2">
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => setIsModeMenuOpen((prev) => !prev)}
+              className="w-9 h-9 rounded-xl bg-bg-secondary text-text-secondary hover:text-[#3FCA58] hover:bg-bg-hover transition-all flex items-center justify-center"
+              title="选择模式"
+              aria-label="选择模式"
+            >
+              <LayoutGrid size={16} />
+            </button>
+            {isModeMenuOpen && (
+              <div className="absolute right-0 top-[calc(100%+16px)] z-50 w-44 overflow-hidden rounded-2xl border border-border-primary bg-bg-secondary/95 p-1.5 shadow-2xl backdrop-blur-xl">
+                <Link
+                  href="/chat"
+                  className="flex items-center justify-between rounded-xl px-3 py-2.5 text-sm text-text-secondary transition-all hover:text-[#3FCA58]"
+                >
+                  一键创作模式
+                  <ArrowRight size={14} />
+                </Link>
+                <Link
+                  href="/canvas"
+                  className="mt-1 flex items-center justify-between rounded-xl px-3 py-2.5 text-sm text-text-secondary transition-all hover:text-[#3FCA58]"
+                >
+                  工作台模式
+                  <ArrowRight size={14} />
+                </Link>
+              </div>
+            )}
+          </div>
           <button
             onClick={toggleTheme}
-            className="w-9 h-9 rounded-xl bg-bg-secondary text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-all flex items-center justify-center"
+            className="w-9 h-9 rounded-xl bg-bg-secondary text-text-secondary hover:text-[#3FCA58] hover:bg-bg-hover transition-all flex items-center justify-center"
             title={theme === "dark" ? "切换到浅色" : "切换到深色"}
           >
             {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
           </button>
-          <Link
-            href="/canvas"
-            className="h-9 px-5 rounded-xl bg-bg-secondary text-sm text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-all flex items-center gap-2"
-          >
-            进入工作台
-            <ArrowRight size={14} />
-          </Link>
         </div>
       </nav>
 
-      {/* Hero with video */}
+      {/* Hero */}
       <section className="relative w-full h-screen min-h-[600px] overflow-hidden">
-        <video
-          autoPlay
-          muted
-          loop
-          playsInline
-          preload="auto"
+        <img
+          src="/images/home-hero-person-5.jpg"
+          alt="EasyAI 创作首页封面"
           className="absolute inset-0 w-full h-full object-cover"
-          src="/videos/hero.mp4"
         />
-        <div className="absolute inset-0 bg-gradient-to-t from-bg-primary/38 via-bg-primary/14 to-transparent" />
+      </section>
 
-        <div className={`absolute inset-0 flex flex-col items-center justify-end px-6 text-center transition-all duration-700 ${heroPreset.container} ${mounted ? "opacity-100 translate-y-0" : "opacity-0 translate-y-8"}`}>
-          <h1 className={`font-bold text-text-primary tracking-tight ${heroPreset.title}`}>
+      {/* Hero copy */}
+      <section className={`relative z-10 px-6 lg:px-12 max-w-5xl mx-auto pt-32 lg:pt-40 pb-24 lg:pb-32 text-center transition-all duration-700 ${mounted ? "opacity-100 translate-y-0" : "opacity-0 translate-y-8"}`}>
+        <h1 className={`font-bold text-text-primary tracking-tight ${heroPreset.title}`}>
             用 <span style={{ color: "#3FCA58" }}>AI</span> 释放
             <br />你的创意想象力
-          </h1>
-          <p className={`text-text-secondary mx-auto leading-relaxed ${heroPreset.description}`}>
-            输入文字描述，AI 即刻生成高质量图片。支持多图参考、风格迁移、材质替换，在交互式画布上自由编排你的创作。
-          </p>
-          <div className={`flex items-center justify-center ${heroPreset.actions}`}>
-            <Link
-              href="/canvas"
-              className={`rounded-full bg-white text-black font-medium flex items-center gap-2.5 transition-all hover:bg-white/90 hover:scale-[1.02] active:scale-[0.98] ${heroPreset.primaryButton}`}
-            >
-              <MousePointer2 size={18} />
-              开始创作
-            </Link>
-            <a
-              href="#features"
-              className={`rounded-full bg-bg-secondary/80 text-text-secondary hover:text-text-primary hover:bg-bg-hover font-medium flex items-center gap-2 transition-all ${heroPreset.secondaryButton}`}
-            >
-              了解更多
-            </a>
-          </div>
+        </h1>
+        <p className={`text-text-secondary mx-auto leading-relaxed ${heroPreset.description}`}>
+          输入文字描述，AI 即刻生成高质量图片。支持多图参考、风格迁移、材质替换，在交互式画布上自由编排你的创作。
+        </p>
+        <div className={`flex items-center justify-center ${heroPreset.actions}`}>
+          <Link
+            href="/chat"
+            className={`rounded-full bg-[#3FCA58] text-white font-medium flex items-center gap-2.5 transition-all hover:bg-[#3FCA58]/90 hover:scale-[1.02] active:scale-[0.98] ${heroPreset.primaryButton}`}
+          >
+            一键创作模式
+            <ArrowRight size={16} />
+          </Link>
         </div>
       </section>
 
       {/* Features */}
-      <section id="features" className={`relative z-10 px-6 lg:px-12 max-w-5xl mx-auto pt-24 pb-20 transition-all duration-700 delay-300 ${mounted ? "opacity-100 translate-y-0" : "opacity-0 translate-y-8"}`}>
+      <section id="features" className={`relative z-10 px-6 lg:px-12 max-w-5xl mx-auto pt-10 lg:pt-12 pb-20 transition-all duration-700 delay-300 ${mounted ? "opacity-100 translate-y-0" : "opacity-0 translate-y-8"}`}>
         <div className="text-center mb-14">
           <h2 className="text-2xl lg:text-3xl font-bold text-text-primary mb-3">强大功能</h2>
           <p className="text-sm text-text-secondary">从生成到编辑，一站式 AI 创作体验</p>
@@ -826,9 +867,13 @@ export default function HomePage() {
             return (
               <div
                 key={i}
-                className="rounded-2xl bg-bg-secondary p-6 hover:bg-bg-hover transition-all duration-300 ease-out hover:scale-[1.04] hover:shadow-lg hover:shadow-black/20 origin-center will-change-transform"
+                className={`rounded-2xl p-6 transition-all duration-300 ease-out hover:scale-[1.04] origin-center will-change-transform ${
+                  theme === "light"
+                    ? "bg-white border border-black/[0.04] shadow-[0_10px_30px_rgba(15,23,42,0.035)] hover:border-black/[0.06] hover:shadow-[0_16px_36px_rgba(15,23,42,0.055)]"
+                    : "bg-bg-secondary hover:bg-bg-hover hover:shadow-lg hover:shadow-black/20"
+                }`}
               >
-                <div className={`w-10 h-10 rounded-xl bg-bg-tertiary flex items-center justify-center mb-4 ${f.iconColor}`}>
+                <div className={`w-10 h-10 rounded-xl flex items-center justify-center mb-4 ${theme === "light" ? "bg-slate-50" : "bg-bg-tertiary"} ${f.iconColor}`}>
                   <Icon size={20} />
                 </div>
                 <h3 className="text-sm font-semibold text-text-primary mb-2">{f.title}</h3>
@@ -839,8 +884,29 @@ export default function HomePage() {
         </div>
       </section>
 
+      {/* Parallax showcase */}
+      <section className="relative z-10 bg-bg-primary py-20 lg:py-28 overflow-hidden">
+        <div className="mx-auto max-w-3xl px-6 text-center mb-10 lg:mb-14">
+          <h2 className="mb-5 text-2xl lg:text-3xl font-semibold tracking-tight text-text-primary">
+            一站式创作
+          </h2>
+          <p className="text-xs lg:text-sm text-text-secondary leading-relaxed">
+            从灵感、草图到完整视觉表达，让 Easy AI 帮你把脑海中的画面快速呈现。
+          </p>
+        </div>
+        <div className="h-[24vh] min-h-[160px] overflow-hidden lg:h-[30vh]">
+          <div
+            className="h-full w-full bg-cover bg-center bg-no-repeat"
+            style={{
+              backgroundImage: "url('/images/home-section-person-6.jpg')",
+              backgroundAttachment: "fixed",
+            }}
+          />
+        </div>
+      </section>
+
       {/* Models */}
-      <section className={`relative z-10 px-6 lg:px-12 max-w-5xl mx-auto pb-24 transition-all duration-700 delay-400 ${mounted ? "opacity-100 translate-y-0" : "opacity-0 translate-y-8"}`}>
+      <section className={`relative z-10 px-6 lg:px-12 max-w-5xl mx-auto pt-16 lg:pt-24 pb-40 lg:pb-52 transition-all duration-700 delay-400 ${mounted ? "opacity-100 translate-y-0" : "opacity-0 translate-y-8"}`}>
         <div className="text-center mb-14">
           <h2 className="text-2xl lg:text-3xl font-bold text-text-primary mb-3">模型选择</h2>
           <p className="text-sm text-text-secondary">三档算力，灵活匹配你的创作需求</p>
@@ -851,9 +917,13 @@ export default function HomePage() {
             return (
               <div
                 key={i}
-                className="rounded-2xl bg-bg-secondary p-8 text-center hover:bg-bg-hover transition-all duration-300 ease-out hover:scale-[1.04] hover:shadow-lg hover:shadow-black/20 origin-center will-change-transform"
+                className={`rounded-2xl p-8 text-center transition-all duration-300 ease-out hover:scale-[1.04] origin-center will-change-transform ${
+                  theme === "light"
+                    ? "bg-white border border-black/[0.04] shadow-[0_10px_30px_rgba(15,23,42,0.035)] hover:border-black/[0.06] hover:shadow-[0_16px_36px_rgba(15,23,42,0.055)]"
+                    : "bg-bg-secondary hover:bg-bg-hover hover:shadow-lg hover:shadow-black/20"
+                }`}
               >
-                <div className={`w-14 h-14 rounded-2xl bg-bg-tertiary flex items-center justify-center mx-auto mb-5 ${m.color}`}>
+                <div className={`w-14 h-14 rounded-2xl flex items-center justify-center mx-auto mb-5 ${theme === "light" ? "bg-slate-50" : "bg-bg-tertiary"} ${m.color}`}>
                   <Icon size={26} />
                 </div>
                 <h3 className="text-base font-semibold text-text-primary mb-2">{m.name}</h3>
@@ -864,34 +934,43 @@ export default function HomePage() {
         </div>
       </section>
 
-      {/* CTA */}
-      <section className={`relative z-10 px-6 lg:px-12 max-w-5xl mx-auto pb-20 transition-all duration-700 delay-500 ${mounted ? "opacity-100 translate-y-0" : "opacity-0 translate-y-8"}`}>
-        <div className="rounded-3xl bg-bg-secondary p-12 lg:p-16 text-center">
-          <h2 className="text-2xl lg:text-3xl font-bold text-text-primary mb-4">准备好开始了吗？</h2>
-          <p className="text-sm text-text-secondary mb-8 max-w-lg mx-auto">
-            无需注册，打开画布即刻开始 AI 创作
-          </p>
-          <Link
-            href="/canvas"
-            className="inline-flex items-center gap-2.5 h-12 px-8 rounded-2xl bg-white text-black font-medium transition-all hover:bg-white/90 hover:scale-[1.02] active:scale-[0.98]"
-          >
-            <Sparkles size={18} />
-            立即开始
-            <ArrowRight size={16} />
-          </Link>
-        </div>
-      </section>
-
       {/* Footer */}
-      <footer className="relative z-10 border-t border-border-primary px-6 lg:px-12 py-8">
-        <div className="max-w-5xl mx-auto flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="w-6 h-6 rounded-lg bg-accent flex items-center justify-center">
-              <BrandLogo className="w-3.5 h-3.5 text-white" />
+      <footer className="relative z-10 bg-black text-white overflow-hidden">
+        <div className="relative overflow-hidden">
+          <div
+            className="absolute inset-0 opacity-[0.675] bg-cover bg-[center_28%] bg-fixed"
+            style={{ backgroundImage: "url('/images/home-section-person-6.jpg')" }}
+          />
+          <div className="absolute inset-0 bg-gradient-to-r from-black/50 via-black/20 to-black/50" />
+          <div className="relative mx-auto max-w-5xl px-6 py-8 lg:px-0">
+            <div className="grid min-h-32 grid-cols-1 items-center gap-10 md:grid-cols-[1fr_1fr]">
+              <div>
+                <div className="mb-4 flex items-center">
+                  <BrandLogo className="h-7" />
+                </div>
+                <p className="max-w-[220px] text-xs leading-relaxed text-white/55">
+                  Easy AI产品持续优化中
+                </p>
+              </div>
+
+              <div className="md:justify-self-end">
+                <h3 className="mb-4 text-xs font-medium text-white/85">联系我</h3>
+                <ul className="space-y-2 text-xs text-white/45">
+                  <li>邮箱：15638439536@163.com</li>
+                  <li>微信：15638439536</li>
+                </ul>
+              </div>
             </div>
-            <span className="text-xs text-text-tertiary">Easy AI</span>
+
+            <div className="mt-4 flex flex-col gap-3 text-[11px] text-white/35 md:flex-row md:items-center md:justify-between">
+              <span>© 2026 Easy AI. All rights reserved.</span>
+              <div className="flex items-center gap-5">
+                <span>HOME</span>
+                <span>CANVAS</span>
+                <span>DESIGN</span>
+              </div>
+            </div>
           </div>
-          <span className="text-xs text-text-tertiary">Powered by Nano Banana API</span>
         </div>
       </footer>
 
@@ -905,6 +984,7 @@ export default function HomePage() {
         onSubmit={handleFloatingSubmit}
         canSubmit={Boolean(String(floatingPrompt || "").trim())}
         isSubmitting={floatingIsGenerating}
+        generationStage={getGenerationStageCopy(floatingGenerationStage)}
         entryMode={floatingEntryMode}
         messages={floatingMessages}
         historyItems={floatingHistory}
@@ -913,6 +993,8 @@ export default function HomePage() {
         onNewChat={handleFloatingNewChat}
         onSelectHistory={handleSelectFloatingHistory}
         onDeleteHistory={handleDeleteFloatingHistory}
+        onDeleteMessage={handleFloatingDeleteMessage}
+        onExpandFullscreen={handleExpandFullscreen}
         outputError={floatingOutputError}
         outputIdleText={
           floatingEntryMode === "agent"
@@ -921,6 +1003,7 @@ export default function HomePage() {
         }
         submitLabel="去生成"
       />
+
     </div>
   );
 }

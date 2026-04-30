@@ -12,7 +12,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata = {
-  title: "Easy AI",
+  title: "X-AI",
   description: "AI-powered image generation tool",
 };
 

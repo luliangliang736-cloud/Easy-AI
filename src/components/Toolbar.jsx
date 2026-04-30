@@ -6,7 +6,6 @@ import {
   Square,
   Circle,
   Type,
-  Image as ImageIcon,
   Minus,
   Plus,
 } from "lucide-react";
@@ -16,7 +15,6 @@ const TOOLS = [
   { id: "hand", icon: Hand, label: "手型：平移画布 (H)" },
   { id: "shape", icon: Square, label: "形状：拖拽绘制矩形/圆形（先选圆或方）" },
   { id: "text", icon: Type, label: "文字：点击空白画布直接输入" },
-  { id: "image", icon: ImageIcon, label: "图片" },
 ];
 
 export default function Toolbar({
@@ -34,6 +32,7 @@ export default function Toolbar({
         const isActive = activeTool === tool.id;
         return (
           <button
+            type="button"
             key={tool.id}
             onClick={() => onToolChange(tool.id)}
             title={tool.label}
@@ -80,6 +79,7 @@ export default function Toolbar({
       <div className="w-px h-6 bg-border-primary mx-1" />
 
       <button
+            type="button"
         onClick={() => onZoomChange((z) => Math.max(z - 10, 1))}
         className="w-8 h-8 rounded-lg flex items-center justify-center text-text-tertiary hover:text-text-primary hover:bg-bg-hover transition-all"
         title="缩小"
@@ -87,6 +87,7 @@ export default function Toolbar({
         <Minus size={14} />
       </button>
       <button
+        type="button"
         onClick={() => onZoomChange(100)}
         className="px-1.5 h-8 rounded-lg flex items-center justify-center text-[11px] text-text-tertiary hover:text-text-primary hover:bg-bg-hover font-mono transition-all min-w-[42px]"
         title="重置缩放"
@@ -94,6 +95,7 @@ export default function Toolbar({
         {Math.round(zoom)}%
       </button>
       <button
+        type="button"
         onClick={() => onZoomChange((z) => Math.min(z + 10, 800))}
         className="w-8 h-8 rounded-lg flex items-center justify-center text-text-tertiary hover:text-text-primary hover:bg-bg-hover transition-all"
         title="放大"

@@ -1,4 +1,4 @@
-import { NextResponse } from "next/server";
+﻿import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -125,12 +125,12 @@ function extractChatCompletionsText(data) {
 
 function normalizeMessages(messages) {
   return (Array.isArray(messages) ? messages : [])
-    .slice(-8)
+    .slice(-16)
     .map((message) => ({
       role: message?.role === "assistant" ? "assistant" : "user",
       text: String(message?.text || "").trim(),
-      images: Array.isArray(message?.images) ? message.images.filter(Boolean).slice(0, 3) : [],
-      refImages: Array.isArray(message?.refImages) ? message.refImages.filter(Boolean).slice(0, 3) : [],
+      images: Array.isArray(message?.images) ? message.images.filter(Boolean).slice(0, 2) : [],
+      refImages: Array.isArray(message?.refImages) ? message.refImages.filter(Boolean).slice(0, 2) : [],
       attachments: Array.isArray(message?.attachments) ? message.attachments.slice(0, 4) : [],
     }))
     .filter((message) => (
@@ -141,74 +141,87 @@ function normalizeMessages(messages) {
     ));
 }
 
-function buildUserText({ messages, currentInput, refImages, attachments }) {
-  const normalizedMessages = normalizeMessages(messages);
-  const historyText = normalizedMessages.length > 0
-    ? normalizedMessages
-        .map((message, index) => {
-          const imageInfo = message.images.length > 0 ? `生成图: ${message.images.join(" | ")}` : "";
-          const refImageInfo = message.refImages.length > 0 ? `参考图: ${message.refImages.join(" | ")}` : "";
-          const attachmentInfo = message.attachments.length > 0
-            ? `附件: ${message.attachments.map((item) => {
-                const excerpt = String(item?.excerpt || "").trim();
-                return excerpt
-                  ? `${item.name}（摘要: ${excerpt.slice(0, 240)}）`
-                  : `${item.name}`;
-              }).join(" | ")}`
-            : "";
-          const suffix = [refImageInfo, imageInfo, attachmentInfo].filter(Boolean).join("；");
-          return `${index + 1}. ${message.role === "assistant" ? "AI" : "用户"}：${message.text || "(无文本)"}${suffix ? ` [${suffix}]` : ""}`;
-        })
-        .join("\n")
-    : "无历史消息";
+function buildAttachmentText(attachments = [], maxExcerpt = 400) {
+  return attachments
+    .map((item) => {
+      const excerpt = String(item?.excerpt || "").trim();
+      return excerpt ? `[附件: ${item.name}，摘要: ${excerpt.slice(0, maxExcerpt)}]` : `[附件: ${item.name}]`;
+    })
+    .join(" ");
+}
 
-  const currentAttachmentText = (Array.isArray(attachments) ? attachments : []).length > 0
-    ? (attachments || [])
-        .map((item) => {
-          const excerpt = String(item?.excerpt || "").trim();
-          return excerpt
-            ? `${item.name}（摘要: ${excerpt.slice(0, 400)}）`
-            : `${item.name}`;
-        })
-        .join(" | ")
-    : "无";
+/**
+ * 前端传入的 messages 已包含当前用户消息（historyForApi = [...prev, userMsg]）。
+ * 为避免重复，历史部分取 messages 去掉最后一条，当前消息单独用 currentInput + refImages 构建。
+ */
+function buildMultiTurnInput({ messages, currentInput, refImages, attachments }) {
+  // 历史：去掉最后一条（已是当前消息的副本）
+  const history = normalizeMessages(messages).slice(0, -1);
+  const turns = history.map((msg) => {
+    const textParts = [msg.text || "(无文本)"];
+    if (msg.attachments.length > 0) textParts.push(buildAttachmentText(msg.attachments));
+    if (msg.role === "assistant") {
+      // /responses 端点：assistant 消息 content 类型必须是 output_text
+      return {
+        role: "assistant",
+        content: [{ type: "output_text", text: textParts.filter(Boolean).join("\n") }],
+      };
+    }
+    // user 消息
+    const content = [{ type: "input_text", text: textParts.filter(Boolean).join("\n") }];
+    for (const src of msg.refImages.slice(0, 2)) {
+      content.push({ type: "input_image", image_url: src });
+    }
+    return { role: "user", content };
+  });
+
+  // 当前轮（包含完整 refImages，比 messages 末尾更准确）
+  const currentTextParts = [String(currentInput || "").trim()];
+  if (Array.isArray(attachments) && attachments.length > 0) {
+    currentTextParts.push(buildAttachmentText(attachments));
+  }
+  const currentContent = [{ type: "input_text", text: currentTextParts.filter(Boolean).join("\n") }];
+  for (const src of (Array.isArray(refImages) ? refImages.filter(Boolean).slice(0, 3) : [])) {
+    currentContent.push({ type: "input_image", image_url: src });
+  }
+
+  return [...turns, { role: "user", content: currentContent }];
+}
+
+/** 构建真正的多轮 messages 数组（用于 /chat/completions 端点） */
+function buildChatMultiTurnMessages({ systemText, messages, currentInput, refImages, attachments }) {
+  const history = normalizeMessages(messages).slice(0, -1);
+  const turns = history.map((msg) => {
+    const textParts = [msg.text || "(无文本)"];
+    if (msg.attachments.length > 0) textParts.push(buildAttachmentText(msg.attachments));
+    const content = [{ type: "text", text: textParts.filter(Boolean).join("\n") }];
+    const imagePool = msg.role === "assistant"
+      ? msg.images.slice(0, 2)
+      : msg.refImages.slice(0, 2);
+    for (const src of imagePool) {
+      content.push({ type: "image_url", image_url: { url: src } });
+    }
+    return { role: msg.role, content: content.length === 1 ? content[0].text : content };
+  });
+
+  const currentTextParts = [String(currentInput || "").trim()];
+  if (Array.isArray(attachments) && attachments.length > 0) {
+    currentTextParts.push(buildAttachmentText(attachments));
+  }
+  const currentContent = [{ type: "text", text: currentTextParts.filter(Boolean).join("\n") }];
+  for (const src of (Array.isArray(refImages) ? refImages.filter(Boolean).slice(0, 3) : [])) {
+    currentContent.push({ type: "image_url", image_url: { url: src } });
+  }
+  const currentMessage = {
+    role: "user",
+    content: currentContent.length === 1 ? currentContent[0].text : currentContent,
+  };
 
   return [
-    `最近对话：\n${historyText}`,
-    `当前输入：${String(currentInput || "").trim()}`,
-    `当前参考图：${Array.isArray(refImages) && refImages.length > 0 ? refImages.join(" | ") : "无"}`,
-    `当前附件：${currentAttachmentText}`,
-  ].join("\n\n");
-}
-
-function buildUserContent({ userText, messages, refImages }) {
-  const content = [{ type: "input_text", text: userText }];
-  const currentImages = Array.isArray(refImages) ? refImages.filter(Boolean).slice(0, 3) : [];
-  const latestGeneratedImages = normalizeMessages(messages)
-    .reverse()
-    .find((message) => message.images.length > 0)?.images || [];
-  const imagePool = currentImages.length > 0 ? currentImages : latestGeneratedImages.slice(0, 2);
-
-  for (const src of imagePool) {
-    content.push({ type: "input_image", image_url: src });
-  }
-
-  return content;
-}
-
-function buildChatUserContent({ userText, messages, refImages }) {
-  const content = [{ type: "text", text: userText }];
-  const currentImages = Array.isArray(refImages) ? refImages.filter(Boolean).slice(0, 3) : [];
-  const latestGeneratedImages = normalizeMessages(messages)
-    .reverse()
-    .find((message) => message.images.length > 0)?.images || [];
-  const imagePool = currentImages.length > 0 ? currentImages : latestGeneratedImages.slice(0, 2);
-
-  for (const src of imagePool) {
-    content.push({ type: "image_url", image_url: { url: src } });
-  }
-
-  return content;
+    { role: "system", content: systemText },
+    ...turns,
+    currentMessage,
+  ];
 }
 
 function isWebSearchIntent(input = "") {
@@ -217,70 +230,8 @@ function isWebSearchIntent(input = "") {
   return /(最新|最近|近日|近期|今天|今日|本周|本月|新闻|资讯|动态|热点|趋势|盘点|汇总|收集|搜一下|查一下|发生了什么|进展)/.test(text);
 }
 
-function getNumberEmoji(index) {
-  const emojis = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣"];
-  return emojis[index] || `${index + 1}.`;
-}
-
 function formatGeneralReplyText(text = "") {
-  let value = String(text || "").replace(/\r/g, "").trim();
-  if (!value) return "";
-
-  value = value
-    .replace(/([。！？])\s*(?=(\d+)\s*[、.])/g, "$1\n\n")
-    .replace(/([：:])\s*(?=(\d+)\s*[、.])/g, "$1\n");
-
-  value = value.replace(/(^|\n)\s*(\d+)\s*[、.]\s*/g, (_, prefix, num) => {
-    const index = Math.max(Number(num) - 1, 0);
-    return `${prefix}${getNumberEmoji(index)} `;
-  });
-
-  value = value.replace(/([，；;])\s*(\d+)\s*[、.]\s*/g, (_, __, num) => {
-    const index = Math.max(Number(num) - 1, 0);
-    return `\n${getNumberEmoji(index)} `;
-  });
-
-  const lines = value.split("\n").map((line) => line.trim());
-  const normalizedLines = [];
-
-  for (let index = 0; index < lines.length; index += 1) {
-    const line = lines[index];
-    if (!line) {
-      normalizedLines.push("");
-      continue;
-    }
-
-    if (
-      index === 0
-      && !/^([1-9]\uFE0F?\u20E3|\d+\.)/.test(line)
-      && !/^(📰|✨|📚|🎯|📌|💡|✅|👉|💬|🔎|📍)/.test(line)
-    ) {
-      normalizedLines.push(`✨ ${line}`);
-      continue;
-    }
-
-    if (/^如果你想/.test(line)) {
-      normalizedLines.push(`💬 ${line}`);
-      continue;
-    }
-
-    if (/^(建议|总结|核心|重点|亮点|适合|理由|推荐理由|做法|方法|步骤|清单|方向|思路|可选项|你可以)/.test(line)) {
-      normalizedLines.push(`📌 ${line}`);
-      continue;
-    }
-
-    if (/^(价值|意义|适用场景|适合人群|适用人群|为什么值得)/.test(line)) {
-      normalizedLines.push(`💡 ${line}`);
-      continue;
-    }
-
-    normalizedLines.push(line);
-  }
-
-  return normalizedLines
-    .join("\n")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
+  return String(text || "").replace(/\r/g, "").trim();
 }
 
 function formatWebSearchReply(result = {}) {
@@ -295,19 +246,22 @@ function formatWebSearchReply(result = {}) {
     const summary = String(item?.summary || "").trim();
     const whyItMatters = String(item?.why_it_matters || "").trim();
     const url = String(item?.url || "").trim();
+    const sourceMeta = [source, publishedAt].filter(Boolean).join(" · ");
 
+    const numEmojis = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣"];
+    const numEmoji = numEmojis[index] || `${index + 1}.`;
     return [
-      `${getNumberEmoji(index)} ${title}`,
-      source || publishedAt ? `🗞️ 来源：${[source, publishedAt].filter(Boolean).join(" · ")}` : "",
-      summary ? `📌 核心：${summary}` : "",
-      whyItMatters ? `💡 价值：${whyItMatters}` : "",
-      url ? `🔗 链接：${url}` : "",
-    ].filter(Boolean).join("\n");
+      `### ${numEmoji} ${title}`,
+      sourceMeta ? `*📰 ${sourceMeta}*` : "",
+      summary ? `**核心：** ${summary}` : "",
+      whyItMatters ? `**💡 价值：** ${whyItMatters}` : "",
+      url ? `🔗 [查看原文](${url})` : "",
+    ].filter(Boolean).join("\n\n");
   });
 
   return [
-    lead || `📰 我基于实时联网结果，整理了一版更值得快速浏览的摘要（${items.length || 0} 条）`,
-    sections.join("\n\n"),
+    lead || `今日 ${items.length || 0} 条 AI 设计 新闻`,
+    sections.join("\n\n---\n\n"),
     closing || "如果你愿意，我还可以继续按 OpenAI、Google、AI Agent、投融资 等主题再细分一版。",
   ].filter(Boolean).join("\n\n");
 }
@@ -460,23 +414,21 @@ async function runPlanner({ messages, currentInput, refImages, attachments }) {
   }
 
   const systemText = [
-    "你是 Easy AI 首页悬浮窗里的智能助手。",
+    "你是 X-AI 首页悬浮窗里的智能助手。",
     "你的任务是判断当前用户这轮输入更适合：1) 直接给建议回复；2) 进入图片生成。",
     "如果用户是在问思路、创意建议、文案建议、设计建议、怎么做、是否合适、如何优化、给我建议、帮我分析，应该返回 reply。",
     "如果用户明确要求生成图片、设计海报、出图、做封面、做 banner、做 logo、改图、延展图、风格参考生成，应该返回 generate。",
     "如果用户附带了参考图，通常优先返回 generate，且 mode 优先为 agent。",
     "generate 时 assistant_text 只需要一句简短自然的话，说明你理解了需求并开始生成。",
-    "reply 时 assistant_text 直接给出有帮助的回复或必要的追问。",
-    "普通 reply 请用适合聊天窗口阅读的轻量层级格式输出：首行给一句总结，可少量使用 emoji。",
-    "如果是推荐、总结、步骤、清单类内容，优先换行分点，不要把 3-5 个项目挤在一个长段落里。",
-    "可以使用 1. 2. 3. 或数字 emoji 作为标题项；次级信息可用“核心 / 建议 / 适合 / 理由 / 价值”等短标签。",
-    "避免整段密集大段落，尽量让每个重点单独成行，方便直接在对话框里浏览。",
+    "reply 时 assistant_text 直接给出有帮助的回复或必要的追问，使用标准 Markdown 格式。",
+    "reply 时 请用标准 Markdown 格式输出，允许在 ## 标题前加 emoji 点缀，正文列表项适当使用 emoji，整体风格参考 ChatGPT 输出样式。",
+    "推荐、总结、步骤、清单类内容请用有序或无序列表分点展示，不要把多个要点挤在一个段落里。",
+    "如果是对话类回复，不需要标题，直接用段落和列表即可。",
+    "避免密集大段落，保持清晰易读。",
     "当 action 为 generate 时，你只负责判断模式并给一句自然回复，不要改写、润色、扩写、总结或整理用户原始生图提示词。",
     "mode 只能是 quick 或 agent。quick 适合简单直接的一句话出图；agent 适合带参考图、需要保持风格、对排版构图材质细节要求更高的任务。",
     "只返回 JSON，不要输出额外解释。",
   ].join(" ");
-
-  const userText = buildUserText({ messages, currentInput, refImages, attachments });
 
   const responseSchema = {
     type: "object",
@@ -489,6 +441,8 @@ async function runPlanner({ messages, currentInput, refImages, attachments }) {
     required: ["action", "mode", "assistant_text"],
   };
 
+  const multiTurnInput = buildMultiTurnInput({ messages, currentInput, refImages, attachments });
+
   let rawText = "";
   if (OPENAI_API_STYLE !== "azure") {
     try {
@@ -498,7 +452,7 @@ async function runPlanner({ messages, currentInput, refImages, attachments }) {
           model: FLOATING_ASSISTANT_MODEL,
           input: [
             { role: "system", content: [{ type: "input_text", text: systemText }] },
-            { role: "user", content: buildUserContent({ userText, messages, refImages }) },
+            ...multiTurnInput,
           ],
           text: {
             format: {
@@ -527,10 +481,7 @@ async function runPlanner({ messages, currentInput, refImages, attachments }) {
     const data = await postJsonWithTimeout(
       chatUrl,
       {
-        messages: [
-          { role: "system", content: systemText },
-          { role: "user", content: buildChatUserContent({ userText, messages, refImages }) },
-        ],
+        messages: buildChatMultiTurnMessages({ systemText, messages, currentInput, refImages, attachments }),
         ...(OPENAI_API_STYLE === "azure" ? {} : { model: FLOATING_ASSISTANT_MODEL }),
         response_format: {
           type: "json_schema",

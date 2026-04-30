@@ -24,8 +24,8 @@ export default function TopBar({
   return (
     <div className="h-12 bg-bg-secondary border-b border-border-primary flex items-center justify-between px-4 flex-shrink-0">
       <div className="flex items-center gap-3">
-        <Link href="/" className="w-7 h-7 rounded-lg bg-accent flex items-center justify-center hover:bg-accent-hover transition-all" title="返回首页">
-          <BrandLogo className="w-3.5 h-3.5 text-white" />
+        <Link href="/" className="transition-all hover:opacity-90" title="返回首页">
+          <BrandLogo className="h-7 w-auto" />
         </Link>
         <span className="text-sm font-medium text-text-primary">
           {projectName || "未命名项目"}

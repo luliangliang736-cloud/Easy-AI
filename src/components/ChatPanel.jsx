@@ -4,10 +4,12 @@ import { useRef, useEffect, useState, useCallback } from "react";
 import {
   Send,
   ImagePlus,
+  ImageIcon,
   X,
   Plus,
   Sun,
   Moon,
+  Clock,
   Settings2,
   ChevronDown,
   Search,
@@ -319,9 +321,7 @@ function MessageBubble({ message, onRetry, onDownload, onImageClick, onPreview, 
     <div className="flex justify-start animate-fade-in">
       <div className="max-w-[85%] w-full group/message">
         <div className="flex items-center gap-2 mb-2">
-          <div className="w-6 h-6 rounded-full bg-accent flex items-center justify-center flex-shrink-0">
-            <BrandLogo className="w-3.5 h-3.5 text-white" />
-          </div>
+          <BrandLogo className="h-6 w-auto flex-shrink-0" />
           <span className="text-xs text-text-secondary font-medium">AI Agent</span>
           <button
             type="button"
@@ -515,22 +515,25 @@ export default function ChatPanel({
   showTextEditPanelInline = true,
   onRetry, onDownload, onImageClick,
   onPauseGenerate,
-  entryMode = "agent", onEntryModeChange,
+  entryMode = "agent",
   composerMode = "agent", onComposerModeChange,
   theme, onToggleTheme,
   width, onWidthChange,
+  canvasHistoryMessages = [],
+  onSelectCanvasHistory,
+  onClearCanvasHistory,
+  canvasHistorySearch = "",
+  onCanvasHistorySearchChange,
 }) {
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null);
   const conversationMenuRef = useRef(null);
-  const entryModeMenuRef = useRef(null);
+  const canvasHistoryMenuRef = useRef(null);
   const [dragOver, setDragOver] = useState(false);
   const [previewSrc, setPreviewSrc] = useState(null);
   const [showConversationMenu, setShowConversationMenu] = useState(false);
-  const [showEntryModeMenu, setShowEntryModeMenu] = useState(false);
+  const [showCanvasHistoryMenu, setShowCanvasHistoryMenu] = useState(false);
   const [conversationSearch, setConversationSearch] = useState("");
-  const [customWidth, setCustomWidth] = useState("");
-  const [customHeight, setCustomHeight] = useState("");
   const [gptAdvancedOpen, setGptAdvancedOpen] = useState(false);
 
   useEffect(() => {
@@ -538,7 +541,7 @@ export default function ChatPanel({
   }, [messages]);
 
   useEffect(() => {
-    if (!showConversationMenu && !showEntryModeMenu) {
+    if (!showConversationMenu && !showCanvasHistoryMenu) {
       return undefined;
     }
 
@@ -546,21 +549,20 @@ export default function ChatPanel({
       if (!conversationMenuRef.current?.contains(event.target)) {
         setShowConversationMenu(false);
       }
-      if (!entryModeMenuRef.current?.contains(event.target)) {
-        setShowEntryModeMenu(false);
+      if (!canvasHistoryMenuRef.current?.contains(event.target)) {
+        setShowCanvasHistoryMenu(false);
       }
     };
 
     window.addEventListener("pointerdown", handlePointerDown);
     return () => window.removeEventListener("pointerdown", handlePointerDown);
-  }, [showConversationMenu, showEntryModeMenu]);
+  }, [showConversationMenu, showCanvasHistoryMenu]);
 
   const currentTier = MODEL_TIERS.find((t) => t.variants.some((v) => v.model === params.model)) || MODEL_TIERS[1];
   const availableRatios = currentTier.extendedRatios ? [...STANDARD_RATIOS, ...EXTENDED_RATIOS] : STANDARD_RATIOS;
   const maxImages = currentTier.maxInputImages;
   const currentServiceTier = params.service_tier === "default" ? "default" : "priority";
   const isGptImage2Tier = currentTier.id === "chatgpt-image2";
-  const supportsCustomSizes = Boolean(currentTier.customSizes);
   const exactSize = parseExactSizeValue(params.image_size);
   const currentGptQuality = isGptImage2Tier ? String(params.quality || "auto").trim().toLowerCase() : "auto";
   const currentGptFormat = isGptImage2Tier ? String(params.output_format || "png").trim().toLowerCase() : "png";
@@ -574,21 +576,9 @@ export default function ChatPanel({
     GPT_IMAGE_2_FORMAT_OPTIONS.find((item) => item.value === currentGptFormat)?.label || "PNG";
   const currentGptModerationLabel =
     GPT_IMAGE_2_MODERATION_OPTIONS.find((item) => item.value === currentGptModeration)?.label || "标准";
-  const customWidthNumber = Number(customWidth);
-  const customHeightNumber = Number(customHeight);
-  const customSizeValidation =
-    customWidth || customHeight
-      ? validateGptImage2CustomSize(customWidthNumber, customHeightNumber)
-      : "";
-  const canApplyCustomSize = Boolean(
-    supportsCustomSizes
-    && customWidth.trim()
-    && customHeight.trim()
-    && !customSizeValidation
-  );
-  const currentEntryMode = entryMode === "quick" ? "quick" : "agent";
-  const currentEntryModeLabel = currentEntryMode === "quick" ? "Auto Design" : "Agent";
-  const isQuickEntryMode = currentEntryMode === "quick";
+  const currentEntryMode = "agent";
+  const currentEntryModeLabel = "Agent";
+  const isQuickEntryMode = false;
   const filteredConversations = conversations
     .filter((conversation) => {
       const query = conversationSearch.trim().toLowerCase();
@@ -601,6 +591,16 @@ export default function ChatPanel({
     })
     .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
   const activeConversation = conversations.find((conversation) => conversation.id === activeConversationId);
+  const canvasCompletedHistory = canvasHistoryMessages.filter(
+    (message) => message.role === "assistant" && message.status === "completed" && message.urls?.length > 0
+  );
+  const filteredCanvasHistory = (canvasHistorySearch || "").trim()
+    ? canvasCompletedHistory.filter((message) =>
+        message.text?.toLowerCase().includes(canvasHistorySearch.toLowerCase()) ||
+        message.modelLabel?.toLowerCase().includes(canvasHistorySearch.toLowerCase())
+      )
+    : canvasCompletedHistory;
+  const reversedCanvasHistory = [...filteredCanvasHistory].reverse();
 
   const formatConversationTime = useCallback((timestamp) => {
     if (!timestamp) return "";
@@ -612,16 +612,6 @@ export default function ChatPanel({
     });
   }, []);
 
-  useEffect(() => {
-    if (!supportsCustomSizes) {
-      setCustomWidth("");
-      setCustomHeight("");
-      return;
-    }
-    if (!exactSize) return;
-    setCustomWidth(String(exactSize.width));
-    setCustomHeight(String(exactSize.height));
-  }, [supportsCustomSizes, exactSize?.width, exactSize?.height]);
 
   useEffect(() => {
     if (!isGptImage2Tier) return;
@@ -757,27 +747,12 @@ export default function ChatPanel({
   const setTier = (tier) => {
     const defaultVariant = tier.variants.find((v) => v.label === "1K") || tier.variants[0];
     let nextImageSize = params.image_size;
-    if (!tier.customSizes && parseExactSizeValue(nextImageSize)) {
-      nextImageSize = getClosestRatioForSize(nextImageSize);
-    }
     if (!tier.extendedRatios && EXTENDED_RATIOS.includes(nextImageSize)) {
       nextImageSize = "1:1";
     }
     onParamsChange({ ...params, model: defaultVariant.model, image_size: nextImageSize });
   };
 
-  const applyCustomSize = useCallback(() => {
-    const width = Number(customWidth);
-    const height = Number(customHeight);
-    const validation = validateGptImage2CustomSize(width, height);
-    if (validation) return;
-    onParamsChange((p) => ({
-      ...p,
-      image_size: `${width}x${height}`,
-      _autoRatio: undefined,
-      _autoDimensions: undefined,
-    }));
-  }, [customWidth, customHeight, onParamsChange]);
 
   // Resize handle
   const handleResizeStart = useCallback((e) => {
@@ -811,51 +786,142 @@ export default function ChatPanel({
         {/* Header */}
         <div className="h-12 px-4 flex items-center justify-between border-b border-border-primary flex-shrink-0">
           <div className="flex items-center gap-2 min-w-0">
-            <div className="w-6 h-6 rounded-full bg-accent flex items-center justify-center">
-              <BrandLogo className="w-3.5 h-3.5 text-white" />
-            </div>
-            <div className="relative" ref={entryModeMenuRef}>
+            <BrandLogo className="h-6 w-auto" showText={false} />
+            <span className="px-1 py-1 text-sm font-medium text-text-primary">{currentEntryModeLabel}</span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <div className="relative" ref={canvasHistoryMenuRef}>
               <button
                 type="button"
-                onClick={() => setShowEntryModeMenu((prev) => !prev)}
-                className="flex items-center gap-1.5 px-1 py-1 text-text-primary hover:text-accent transition-all"
+                onClick={() => {
+                  setShowCanvasHistoryMenu((prev) => !prev);
+                  setShowConversationMenu(false);
+                }}
+                className={`w-8 h-8 rounded-lg flex items-center justify-center transition-all ${
+                  showCanvasHistoryMenu
+                    ? "text-accent bg-accent/10"
+                    : "text-text-tertiary hover:text-text-primary hover:bg-bg-hover"
+                }`}
+                title="历史记录"
+                aria-label="历史记录"
               >
-                <span className="text-sm font-medium">{currentEntryModeLabel}</span>
-                <ChevronDown size={14} className={`text-text-tertiary transition-transform ${showEntryModeMenu ? "rotate-180" : ""}`} />
+                <ImageIcon size={16} />
               </button>
-              {showEntryModeMenu && (
-                <div className="absolute left-0 top-[calc(100%+8px)] min-w-[132px] rounded-2xl border border-border-primary bg-bg-secondary/95 backdrop-blur-xl shadow-2xl p-1.5 z-30 animate-fade-in">
-                  {[
-                    { id: "agent", label: "Agent", desc: "适合有设计基础" },
-                    { id: "quick", label: "Auto Design", desc: "适合非设计人员" },
-                  ].map((mode) => {
-                    const active = currentEntryMode === mode.id;
-                    return (
+
+              {showCanvasHistoryMenu && (
+                <div className="absolute right-0 top-[calc(100%+8px)] w-[320px] rounded-2xl border border-border-primary bg-bg-secondary/95 backdrop-blur-xl shadow-2xl overflow-hidden z-30 animate-fade-in">
+                  <div className="flex items-center justify-between gap-2 border-b border-border-primary px-3 py-2">
+                    <div className="flex items-center gap-2">
+                      <Clock size={14} className="text-text-tertiary" />
+                      <span className="text-sm font-medium text-text-primary">历史记录</span>
+                      {canvasCompletedHistory.length > 0 && (
+                        <span className="rounded-md bg-bg-tertiary px-1.5 py-0.5 text-[10px] text-text-tertiary">
+                          {canvasCompletedHistory.length}
+                        </span>
+                      )}
+                    </div>
+                    {canvasCompletedHistory.length > 0 && (
                       <button
-                        key={mode.id}
                         type="button"
-                        onClick={() => {
-                          onEntryModeChange?.(mode.id);
-                          setShowEntryModeMenu(false);
-                        }}
-                        className={`w-full text-left px-3 py-2 rounded-xl transition-all ${
-                          active ? "bg-accent/10 text-text-primary" : "text-text-secondary hover:bg-bg-hover"
-                        }`}
+                        onClick={onClearCanvasHistory}
+                        className="rounded-lg px-2 py-1 text-[11px] text-text-tertiary transition-all hover:bg-red-500/10 hover:text-red-400"
                       >
-                        <span className="block text-sm font-medium">{mode.label}</span>
-                        <span className="block text-[10px] text-text-tertiary mt-0.5">{mode.desc}</span>
+                        清空
                       </button>
-                    );
-                  })}
+                    )}
+                  </div>
+
+                  {canvasCompletedHistory.length > 3 && (
+                    <div className="px-3 py-2">
+                      <div className="flex items-center gap-1.5 rounded-lg border border-border-primary bg-bg-tertiary px-2 py-1.5">
+                        <Search size={12} className="flex-shrink-0 text-text-tertiary" />
+                        <input
+                          type="text"
+                          value={canvasHistorySearch}
+                          onChange={(event) => onCanvasHistorySearchChange?.(event.target.value)}
+                          placeholder="搜索历史..."
+                          className="flex-1 bg-transparent text-[11px] text-text-primary outline-none placeholder-text-tertiary"
+                        />
+                        {canvasHistorySearch && (
+                          <button
+                            type="button"
+                            onClick={() => onCanvasHistorySearchChange?.("")}
+                            className="text-text-tertiary hover:text-text-primary"
+                          >
+                            <X size={10} />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="max-h-[420px] overflow-y-auto px-2 py-2 space-y-1.5 scrollbar-thin">
+                    {reversedCanvasHistory.length === 0 && (
+                      <div className="flex flex-col items-center justify-center px-4 py-10 text-center">
+                        <ImageIcon size={24} className="mb-2 text-text-tertiary opacity-30" />
+                        <p className="text-[11px] text-text-tertiary opacity-60">
+                          {canvasHistorySearch ? "没有匹配的记录" : "暂无生图记录"}
+                        </p>
+                      </div>
+                    )}
+
+                    {reversedCanvasHistory.map((message) => {
+                      const firstUrl = message.urls?.[0];
+                      const time = message.id ? new Date(parseInt(message.id.replace("ai-", ""), 10)).toLocaleString("zh-CN", {
+                        month: "numeric",
+                        day: "numeric",
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      }) : "";
+
+                      return (
+                        <button
+                          key={message.id}
+                          type="button"
+                          onClick={() => {
+                            setShowCanvasHistoryMenu(false);
+                            onSelectCanvasHistory?.(message);
+                          }}
+                          className="w-full overflow-hidden rounded-xl border border-border-primary bg-bg-tertiary text-left transition-all hover:border-accent/30 group"
+                        >
+                          <div className="flex gap-2 p-2">
+                            {firstUrl && (
+                              <div className="relative h-14 w-14 flex-shrink-0 overflow-hidden rounded-lg bg-bg-hover">
+                                <img
+                                  src={firstUrl}
+                                  alt={message.text}
+                                  className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
+                                  loading="lazy"
+                                />
+                              </div>
+                            )}
+                            <div className="min-w-0 flex-1 py-0.5">
+                              <p className="line-clamp-2 text-[11px] leading-snug text-text-primary">
+                                {message.text}
+                              </p>
+                              <div className="mt-1 flex items-center gap-1.5">
+                                <span className="truncate text-[9px] text-text-tertiary">{message.modelLabel}</span>
+                                {message.urls?.length > 1 && (
+                                  <span className="text-[9px] text-accent">{message.urls.length}张</span>
+                                )}
+                                <span className="ml-auto flex-shrink-0 text-[9px] text-text-tertiary">{time}</span>
+                              </div>
+                            </div>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
               )}
             </div>
-          </div>
-          <div className="flex items-center gap-1.5">
             <div className="relative" ref={conversationMenuRef}>
               <button
                 type="button"
-                onClick={() => setShowConversationMenu((prev) => !prev)}
+                onClick={() => {
+                  setShowConversationMenu((prev) => !prev);
+                  setShowCanvasHistoryMenu(false);
+                }}
                 className="w-8 h-8 rounded-lg flex items-center justify-center text-text-tertiary hover:text-text-primary hover:bg-bg-hover transition-all"
                 title={activeConversation?.title || "当前对话"}
               >
@@ -961,10 +1027,7 @@ export default function ChatPanel({
         <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4 min-h-0">
           {messages.length === 0 && (
             <div className="flex flex-col items-center justify-center h-full text-center px-4">
-              <div className="w-14 h-14 rounded-2xl bg-bg-tertiary border border-border-primary flex items-center justify-center mb-4">
-                <BrandLogo className="w-7 h-7 text-accent" />
-              </div>
-              <h3 className="text-sm font-medium text-text-primary mb-2">AI 图片生成</h3>
+              <h3 className="text-sm font-medium text-text-primary mb-2">快速制作好想法</h3>
               <p className="text-xs text-text-tertiary leading-relaxed mb-4">
                 支持拖拽多张图片进行参考或编辑
               </p>
@@ -1015,7 +1078,7 @@ export default function ChatPanel({
                       : "text-text-secondary hover:text-text-primary"
                   }`}
                 >
-                  Agent
+                  自动
                 </button>
                 <button
                   type="button"
@@ -1152,85 +1215,6 @@ export default function ChatPanel({
                         </p>
                       )}
                     </div>
-                    {supportsCustomSizes && (
-                      <div>
-                        <span className="block text-[11px] text-text-tertiary mb-1.5">精确尺寸</span>
-                        <div className="flex gap-1.5 flex-wrap">
-                          {GPT_IMAGE_2_PRESET_SIZES.map((size) => (
-                            <button
-                              key={size}
-                              type="button"
-                              onClick={() =>
-                                onParamsChange((p) => ({
-                                  ...p,
-                                  image_size: size,
-                                  _autoRatio: undefined,
-                                  _autoDimensions: undefined,
-                                }))
-                              }
-                              className={`px-2.5 py-1.5 rounded-lg text-[11px] font-medium transition-all ${
-                                params.image_size === size
-                                  ? "bg-fuchsia-500/20 text-fuchsia-200 border border-fuchsia-500/30"
-                                  : "bg-bg-tertiary text-text-secondary hover:bg-bg-hover border border-border-primary"
-                              }`}
-                            >
-                              {size}
-                            </button>
-                          ))}
-                        </div>
-                        <div className="flex items-center gap-1.5 mt-2">
-                          <input
-                            type="number"
-                            min={16}
-                            step={16}
-                            value={customWidth}
-                            onChange={(e) => setCustomWidth(e.target.value)}
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter" && canApplyCustomSize) {
-                                e.preventDefault();
-                                applyCustomSize();
-                              }
-                            }}
-                            placeholder="宽"
-                            className="w-20 px-2 py-1.5 rounded-lg text-[11px] font-medium bg-bg-tertiary border border-border-primary text-text-primary tabular-nums"
-                          />
-                          <span className="text-[11px] text-text-tertiary">×</span>
-                          <input
-                            type="number"
-                            min={16}
-                            step={16}
-                            value={customHeight}
-                            onChange={(e) => setCustomHeight(e.target.value)}
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter" && canApplyCustomSize) {
-                                e.preventDefault();
-                                applyCustomSize();
-                              }
-                            }}
-                            placeholder="高"
-                            className="w-20 px-2 py-1.5 rounded-lg text-[11px] font-medium bg-bg-tertiary border border-border-primary text-text-primary tabular-nums"
-                          />
-                          <button
-                            type="button"
-                            onClick={applyCustomSize}
-                            disabled={!canApplyCustomSize}
-                            className={`px-3 py-1.5 rounded-lg text-[11px] font-medium transition-all border ${
-                              canApplyCustomSize
-                                ? "bg-accent text-white border-accent"
-                                : "bg-bg-tertiary text-text-tertiary border-border-primary cursor-not-allowed"
-                            }`}
-                          >
-                            应用
-                          </button>
-                        </div>
-                        <p className="text-[10px] text-text-tertiary mt-1.5">
-                          支持到 4K；最长边 ≤ 3840，宽高为 16 的倍数，长宽比 ≤ 3:1。
-                        </p>
-                        {customSizeValidation && (
-                          <p className="text-[10px] text-amber-400 mt-1">{customSizeValidation}</p>
-                        )}
-                      </div>
-                    )}
                     <div>
                       <span className="block text-[11px] text-text-tertiary mb-1.5">渲染质量</span>
                       <div className="flex gap-1.5 flex-wrap">
@@ -1241,7 +1225,7 @@ export default function ChatPanel({
                             onClick={() => onParamsChange({ ...params, quality: item.value })}
                             className={`px-2.5 py-1.5 rounded-lg text-[11px] font-medium transition-all ${
                               currentGptQuality === item.value
-                                ? "bg-fuchsia-500/20 text-fuchsia-200 border border-fuchsia-500/30"
+                                ? "bg-fuchsia-500/15 text-fuchsia-700 border border-fuchsia-400/40 dark:bg-fuchsia-500/20 dark:text-fuchsia-200 dark:border-fuchsia-500/30"
                                 : "bg-bg-tertiary text-text-secondary hover:bg-bg-hover border border-border-primary"
                             }`}
                           >
@@ -1269,7 +1253,7 @@ export default function ChatPanel({
                             }
                             className={`px-2.5 py-1.5 rounded-lg text-[11px] font-medium transition-all ${
                               currentGptFormat === item.value
-                                ? "bg-fuchsia-500/20 text-fuchsia-200 border border-fuchsia-500/30"
+                                ? "bg-fuchsia-500/15 text-fuchsia-700 border border-fuchsia-400/40 dark:bg-fuchsia-500/20 dark:text-fuchsia-200 dark:border-fuchsia-500/30"
                                 : "bg-bg-tertiary text-text-secondary hover:bg-bg-hover border border-border-primary"
                             }`}
                           >
@@ -1313,7 +1297,7 @@ export default function ChatPanel({
                             onClick={() => onParamsChange({ ...params, moderation: item.value })}
                             className={`px-2.5 py-1.5 rounded-lg text-[11px] font-medium transition-all ${
                               currentGptModeration === item.value
-                                ? "bg-fuchsia-500/20 text-fuchsia-200 border border-fuchsia-500/30"
+                                ? "bg-fuchsia-500/15 text-fuchsia-700 border border-fuchsia-400/40 dark:bg-fuchsia-500/20 dark:text-fuchsia-200 dark:border-fuchsia-500/30"
                                 : "bg-bg-tertiary text-text-secondary hover:bg-bg-hover border border-border-primary"
                             }`}
                           >

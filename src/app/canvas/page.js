@@ -4,7 +4,6 @@ import { useState, useCallback, useEffect, useRef } from "react";
 import Link from "next/link";
 import Canvas from "@/components/Canvas";
 import ChatPanel from "@/components/ChatPanel";
-import HistoryPanel from "@/components/HistoryPanel";
 import TextEditBlocksPanel from "@/components/TextEditBlocksPanel";
 import { ToastProvider, useToast } from "@/components/Toast";
 import BrandLogo from "@/components/BrandLogo";
@@ -81,6 +80,48 @@ const ASPECT_RATIO_RULES = [
   { value: "21:9", score: 6, keywords: ["21:9", "21：9", "21比9"] },
   { value: "21:9", score: 5, keywords: ["超宽", "电影感宽屏", "电影横幅", "cinematic", "ultrawide"] },
 ];
+
+/** 根据参考图真实像素尺寸，计算 GPT Image 2 edit 合法的精确输出尺寸 */
+function computeGptImage2EditSize(width, height) {
+  if (!width || !height || width <= 0 || height <= 0) return "auto";
+  const MAX_EDGE = 3840;
+  const MAX_RATIO = 3;
+  const MIN_PIXELS = 655360;
+  const MAX_PIXELS = 8294400;
+  const MULTIPLE = 16;
+
+  let w = width;
+  let h = height;
+
+  // 长宽比超过 3:1 则让 API 自行决定
+  const longEdge = Math.max(w, h);
+  const shortEdge = Math.min(w, h);
+  if (shortEdge === 0 || longEdge / shortEdge > MAX_RATIO) return "auto";
+
+  // 像素不足则等比放大
+  if (w * h < MIN_PIXELS) {
+    const scale = Math.sqrt(MIN_PIXELS / (w * h));
+    w = Math.ceil(w * scale);
+    h = Math.ceil(h * scale);
+  }
+
+  // 最长边超限则等比缩小
+  const maxEdge = Math.max(w, h);
+  if (maxEdge > MAX_EDGE) {
+    const scale = MAX_EDGE / maxEdge;
+    w = Math.round(w * scale);
+    h = Math.round(h * scale);
+  }
+
+  // 四舍五入到 16 的倍数
+  w = Math.round(w / MULTIPLE) * MULTIPLE || MULTIPLE;
+  h = Math.round(h / MULTIPLE) * MULTIPLE || MULTIPLE;
+
+  // 最终校验
+  if (Math.max(w, h) > MAX_EDGE || w * h > MAX_PIXELS || w * h < MIN_PIXELS) return "auto";
+
+  return `${w}x${h}`;
+}
 
 function findClosestAspectRatio(width, height) {
   if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
@@ -528,19 +569,26 @@ function detectRefImageMeta(src) {
   });
 }
 
+function isHttpsUrl(url) {
+  return typeof url === "string" && /^https?:\/\//i.test(url);
+}
+
+function sanitizeUrlList(urls) {
+  if (!Array.isArray(urls)) return [];
+  return urls.filter(isHttpsUrl);
+}
+
 function sanitizeMessagesForStorage(messages) {
   return messages.slice(0, 200).map((msg) => {
-    const hasRefImages = Array.isArray(msg.refImages) && msg.refImages.length > 0;
-    const hasRequestRefImages = Array.isArray(msg.requestRefImages) && msg.requestRefImages.length > 0;
-
-    if (!hasRefImages && !hasRequestRefImages) {
-      return msg;
-    }
-
     return {
       ...msg,
       refImages: sanitizeStoredImageList(msg.refImages),
       requestRefImages: sanitizeStoredImageList(msg.requestRefImages),
+      // 只保留 HTTPS URL，base64 生成图不存入 localStorage（太大会溢出）
+      urls: sanitizeUrlList(msg.urls),
+      tasks: Array.isArray(msg.tasks)
+        ? msg.tasks.map((t) => ({ ...t, url: isHttpsUrl(t.url) ? t.url : null }))
+        : msg.tasks,
     };
   });
 }
@@ -550,6 +598,12 @@ function sanitizeConversationsForStorage(conversations) {
     ...conversation,
     messages: sanitizeMessagesForStorage(conversation.messages || []),
   }));
+}
+
+function sanitizeCanvasImagesForStorage(items) {
+  if (!Array.isArray(items)) return [];
+  // base64 图片太大，只保留 HTTPS URL（Nano API / CDN 链接）
+  return items.filter((item) => item && isHttpsUrl(item.image_url));
 }
 
 async function parseApiResponse(res) {
@@ -802,11 +856,12 @@ function HomeInner() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [isTextEditing, setIsTextEditing] = useState(false);
   const [panelWidth, setPanelWidth] = useState(340);
-  const [historyCollapsed, setHistoryCollapsed] = useState(true);
   const [historySearch, setHistorySearch] = useState("");
   const canvasRef = useRef(null);
   const generationAbortRef = useRef(null);
   const activeGenerationRef = useRef(null);
+  // 标记 localStorage 已加载完毕，加载前禁止持久化 effect 写入（避免覆盖已保存的数据）
+  const persistReadyRef = useRef(false);
   const activeConversation = conversations.find((conversation) => conversation.id === activeConversationId) || conversations[0];
   const messages = activeConversation?.messages || [];
   const isBusy = isGenerating || isTextEditing;
@@ -857,6 +912,7 @@ function HomeInner() {
           setActiveConversationId(migratedConversation.id);
           localStorage.removeItem("lovart-messages");
         }
+        persistReadyRef.current = true;
         return;
       }
       const saved = localStorage.getItem("lovart-conversations");
@@ -893,11 +949,15 @@ function HomeInner() {
         }
       }
     } catch {
-      localStorage.removeItem("lovart-conversations");
-      localStorage.removeItem("lovart-active-conversation");
-      localStorage.removeItem("lovart-canvas-images");
-      localStorage.removeItem("lovart-canvas-texts");
-      localStorage.removeItem("lovart-canvas-shapes");
+      // 读取失败时只清除损坏的数据，逐项尝试避免全部丢失
+      try { localStorage.removeItem("lovart-conversations"); } catch {}
+      try { localStorage.removeItem("lovart-active-conversation"); } catch {}
+      try { localStorage.removeItem("lovart-canvas-images"); } catch {}
+      try { localStorage.removeItem("lovart-canvas-texts"); } catch {}
+      try { localStorage.removeItem("lovart-canvas-shapes"); } catch {}
+    } finally {
+      // 无论成功或失败，标记加载完成，之后的持久化 effect 才允许写入
+      persistReadyRef.current = true;
     }
   }, []);
 
@@ -927,12 +987,14 @@ function HomeInner() {
 
   // Persist conversations
   useEffect(() => {
+    if (!persistReadyRef.current) return;
     try {
       localStorage.setItem("lovart-conversations", JSON.stringify(sanitizeConversationsForStorage(conversations)));
       localStorage.setItem("lovart-active-conversation", activeConversationId || "");
     } catch {
-      localStorage.removeItem("lovart-conversations");
-      localStorage.removeItem("lovart-active-conversation");
+      // 写入失败时只清空对话，不波及 canvas 图片
+      try { localStorage.removeItem("lovart-conversations"); } catch {}
+      try { localStorage.removeItem("lovart-active-conversation"); } catch {}
     }
   }, [activeConversationId, conversations]);
 
@@ -956,6 +1018,8 @@ function HomeInner() {
         image_size: "auto",
         _autoRatio: meta.ratio,
         _autoDimensions: meta.dimensionsLabel || undefined,
+        _autoWidth: meta.width || undefined,
+        _autoHeight: meta.height || undefined,
       }));
     });
 
@@ -971,14 +1035,16 @@ function HomeInner() {
 
   // Persist canvas images
   useEffect(() => {
+    if (!persistReadyRef.current) return;
     try {
-      localStorage.setItem("lovart-canvas-images", JSON.stringify(canvasImages.slice(0, 100)));
+      localStorage.setItem("lovart-canvas-images", JSON.stringify(sanitizeCanvasImagesForStorage(canvasImages).slice(0, 100)));
     } catch {
       localStorage.removeItem("lovart-canvas-images");
     }
   }, [canvasImages]);
 
   useEffect(() => {
+    if (!persistReadyRef.current) return;
     try {
       localStorage.setItem("lovart-canvas-texts", JSON.stringify(canvasTexts.slice(0, 100)));
     } catch {
@@ -987,6 +1053,7 @@ function HomeInner() {
   }, [canvasTexts]);
 
   useEffect(() => {
+    if (!persistReadyRef.current) return;
     try {
       localStorage.setItem("lovart-canvas-shapes", JSON.stringify(canvasShapes.slice(0, 200)));
     } catch {
@@ -1005,9 +1072,12 @@ function HomeInner() {
   }, [canvasTextsHistory]);
 
   const handleDeleteCanvasText = useCallback((id) => {
+    const item = canvasTexts.find((t) => t.id === id);
     canvasTextsHistory.push((prev) => prev.filter((t) => t.id !== id));
-    toast("已删除文案", "info", 1200);
-  }, [canvasTextsHistory, toast]);
+    if (String(item?.text || "").trim() && !item?.isDraft) {
+      toast("已删除文案", "info", 1200);
+    }
+  }, [canvasTexts, canvasTextsHistory, toast]);
 
   const handleAddCanvasShape = useCallback((item) => {
     canvasShapesHistory.push((prev) => [...prev, item]);
@@ -1309,7 +1379,9 @@ function HomeInner() {
       const isGptImage2Request = requestParams.model === GPT_IMAGE_2_MODEL;
       const imageSize =
         requestParams.image_size === "auto"
-          ? (isGptImage2Request ? "auto" : (requestParams._autoRatio || "1:1"))
+          ? (isGptImage2Request
+              ? computeGptImage2EditSize(requestParams._autoWidth, requestParams._autoHeight)
+              : (requestParams._autoRatio || "1:1"))
           : requestParams.image_size;
       const placeholderAspectRatio = parseAspectRatio(
         requestParams.image_size === "auto"
@@ -2151,30 +2223,19 @@ function HomeInner() {
     toast("记录已删除", "info", 1200);
   }, [activeConversationId, isBusy, toast, updateConversationMessages]);
 
-  const historyWidth = historyCollapsed ? 40 : 220;
-
   return (
     <div className="h-screen flex overflow-hidden">
       <Link
         href="/"
-        className="absolute top-3 z-30 flex items-center gap-2.5 px-3 py-2 rounded-2xl bg-bg-secondary/90 backdrop-blur-xl border border-border-primary hover:bg-bg-hover transition-all"
-        style={{ left: historyWidth + 8 }}
+        className="absolute top-3 z-30 flex items-center px-0.5 py-0.5 transition-opacity hover:opacity-80"
+        style={{ left: 12 }}
         title="返回首页"
       >
-        <div className="w-8 h-8 rounded-xl bg-accent flex items-center justify-center">
-          <BrandLogo className="w-4 h-4 text-white" />
-        </div>
-        <span className="text-lg font-semibold text-text-primary tracking-tight">Easy AI</span>
+        <BrandLogo
+          className="h-7"
+          wordmarkOffsetClassName={`translate-y-[2px] ${theme === "light" ? "invert" : ""}`}
+        />
       </Link>
-      <HistoryPanel
-        messages={historyMessages}
-        onSelectHistory={handleSelectHistory}
-        onClearHistory={handleClearHistory}
-        collapsed={historyCollapsed}
-        onCollapsedChange={setHistoryCollapsed}
-        search={historySearch}
-        onSearchChange={setHistorySearch}
-      />
       <Canvas
         ref={canvasRef}
         images={canvasImages}
@@ -2207,6 +2268,7 @@ function HomeInner() {
         onSelectedImageRectChange={handleSelectedImageRectChange}
         onSemanticSelectionChange={setSemanticSelection}
         semanticEditEnabled={POINT_IMAGE_EDIT_ENABLED}
+        theme={theme}
       />
       {TEXT_EDIT_ENABLED && floatingTextPanelStyle && (
         <div
@@ -2259,6 +2321,11 @@ function HomeInner() {
         onToggleTheme={toggleTheme}
         width={panelWidth}
         onWidthChange={setPanelWidth}
+        canvasHistoryMessages={historyMessages}
+        onSelectCanvasHistory={handleSelectHistory}
+        onClearCanvasHistory={handleClearHistory}
+        canvasHistorySearch={historySearch}
+        onCanvasHistorySearchChange={setHistorySearch}
       />
     </div>
   );

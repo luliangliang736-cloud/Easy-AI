@@ -14,11 +14,190 @@ import { useToast } from "@/components/Toast";
 import Toolbar from "@/components/Toolbar";
 
 const INITIAL_IMG_WIDTH = 280;
-const DEFAULT_TEXT_FONT = 16;
+const DEFAULT_TEXT_FONT = 24;
 const MIN_TEXT_FONT = 10;
 const MAX_TEXT_FONT = 96;
 const MIN_SHAPE_PIXELS = 4;
 const CANVAS_IMAGE_MIME = "application/x-easy-ai-canvas-image";
+const TEXT_COLOR_PRESETS = ["#ffffff", "#111827", "#9CFF3F", "#60A5FA", "#F97316", "#EF4444"];
+const SHAPE_COLOR_PRESETS = ["rgba(63, 202, 88, 0.18)", "rgba(255, 255, 255, 0.16)", "rgba(17, 24, 39, 0.14)", "rgba(96, 165, 250, 0.22)", "rgba(249, 115, 22, 0.22)", "rgba(239, 68, 68, 0.22)"];
+
+function clampNumber(value, min, max) {
+  return Math.min(max, Math.max(min, Number(value) || 0));
+}
+
+function rgbToHex({ r, g, b }) {
+  return [r, g, b].map((value) => clampNumber(value, 0, 255).toString(16).padStart(2, "0")).join("").toUpperCase();
+}
+
+function hexToRgb(hex) {
+  const normalized = String(hex || "").replace("#", "").trim();
+  if (!/^[0-9a-fA-F]{6}$/.test(normalized)) return null;
+  return {
+    r: parseInt(normalized.slice(0, 2), 16),
+    g: parseInt(normalized.slice(2, 4), 16),
+    b: parseInt(normalized.slice(4, 6), 16),
+  };
+}
+
+function rgbToHsv({ r, g, b }) {
+  const nr = r / 255;
+  const ng = g / 255;
+  const nb = b / 255;
+  const max = Math.max(nr, ng, nb);
+  const min = Math.min(nr, ng, nb);
+  const delta = max - min;
+  let h = 0;
+  if (delta !== 0) {
+    if (max === nr) h = ((ng - nb) / delta) % 6;
+    else if (max === ng) h = (nb - nr) / delta + 2;
+    else h = (nr - ng) / delta + 4;
+    h *= 60;
+    if (h < 0) h += 360;
+  }
+  return {
+    h,
+    s: max === 0 ? 0 : delta / max,
+    v: max,
+  };
+}
+
+function hsvToRgb({ h, s, v }) {
+  const chroma = v * s;
+  const x = chroma * (1 - Math.abs(((h / 60) % 2) - 1));
+  const m = v - chroma;
+  let r = 0;
+  let g = 0;
+  let b = 0;
+  if (h < 60) [r, g, b] = [chroma, x, 0];
+  else if (h < 120) [r, g, b] = [x, chroma, 0];
+  else if (h < 180) [r, g, b] = [0, chroma, x];
+  else if (h < 240) [r, g, b] = [0, x, chroma];
+  else if (h < 300) [r, g, b] = [x, 0, chroma];
+  else [r, g, b] = [chroma, 0, x];
+  return {
+    r: Math.round((r + m) * 255),
+    g: Math.round((g + m) * 255),
+    b: Math.round((b + m) * 255),
+  };
+}
+
+function parseCssColor(color) {
+  if (!color) return { r: 63, g: 202, b: 88, a: 0.18 };
+  const hex = hexToRgb(color);
+  if (hex) return { ...hex, a: 1 };
+  const match = String(color).match(/rgba?\(([^)]+)\)/i);
+  if (!match) return { r: 63, g: 202, b: 88, a: 0.18 };
+  const parts = match[1].split(",").map((part) => part.trim());
+  return {
+    r: clampNumber(parts[0], 0, 255),
+    g: clampNumber(parts[1], 0, 255),
+    b: clampNumber(parts[2], 0, 255),
+    a: parts[3] === undefined ? 1 : clampNumber(parts[3], 0, 1),
+  };
+}
+
+function rgbaToCss({ r, g, b, a }) {
+  return `rgba(${Math.round(r)}, ${Math.round(g)}, ${Math.round(b)}, ${clampNumber(a, 0, 1).toFixed(2)})`;
+}
+
+function ShapeColorPicker({ value, onChange }) {
+  const initial = useMemo(() => {
+    const rgba = parseCssColor(value);
+    return { ...rgbToHsv(rgba), a: rgba.a };
+  }, [value]);
+  const [color, setColor] = useState(initial);
+  const rgb = hsvToRgb(color);
+  const hex = rgbToHex(rgb);
+  const hueRgb = hsvToRgb({ h: color.h, s: 1, v: 1 });
+  const hueCss = `rgb(${hueRgb.r}, ${hueRgb.g}, ${hueRgb.b})`;
+
+  useEffect(() => {
+    setColor(initial);
+  }, [initial]);
+
+  const applyColor = useCallback((nextColor) => {
+    setColor(nextColor);
+    onChange?.(rgbaToCss({ ...hsvToRgb(nextColor), a: nextColor.a }));
+  }, [onChange]);
+
+  const updateFromSquare = (event) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    const s = clampNumber((event.clientX - rect.left) / rect.width, 0, 1);
+    const v = 1 - clampNumber((event.clientY - rect.top) / rect.height, 0, 1);
+    applyColor({ ...color, s, v });
+  };
+
+  return (
+    <div className="w-72 rounded-2xl border border-border-primary bg-bg-secondary/98 p-3 shadow-2xl backdrop-blur-xl">
+      <div
+        className="relative h-44 w-full cursor-crosshair overflow-hidden rounded-xl"
+        style={{
+          backgroundColor: hueCss,
+          backgroundImage: "linear-gradient(90deg,#fff,rgba(255,255,255,0)),linear-gradient(0deg,#000,rgba(0,0,0,0))",
+        }}
+        onPointerDown={(event) => {
+          event.currentTarget.setPointerCapture(event.pointerId);
+          updateFromSquare(event);
+        }}
+        onPointerMove={(event) => {
+          if (event.buttons === 1) updateFromSquare(event);
+        }}
+      >
+        <span
+          className="absolute h-4 w-4 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white shadow-md"
+          style={{ left: `${color.s * 100}%`, top: `${(1 - color.v) * 100}%` }}
+        />
+      </div>
+
+      <div className="mt-3 space-y-2">
+        <input
+          type="range"
+          min="0"
+          max="360"
+          value={Math.round(color.h)}
+          onChange={(event) => applyColor({ ...color, h: Number(event.target.value) })}
+          className="h-3 w-full cursor-pointer appearance-none rounded-full"
+          style={{ background: "linear-gradient(90deg,#f00,#ff0,#0f0,#0ff,#00f,#f0f,#f00)" }}
+        />
+        <input
+          type="range"
+          min="0"
+          max="100"
+          value={Math.round(color.a * 100)}
+          onChange={(event) => applyColor({ ...color, a: Number(event.target.value) / 100 })}
+          className="h-3 w-full cursor-pointer appearance-none rounded-full"
+          style={{
+            backgroundImage: `linear-gradient(90deg, rgba(${rgb.r},${rgb.g},${rgb.b},0), rgba(${rgb.r},${rgb.g},${rgb.b},1)), linear-gradient(45deg,#ddd 25%,transparent 25%), linear-gradient(-45deg,#ddd 25%,transparent 25%), linear-gradient(45deg,transparent 75%,#ddd 75%), linear-gradient(-45deg,transparent 75%,#ddd 75%)`,
+            backgroundSize: "100% 100%,12px 12px,12px 12px,12px 12px,12px 12px",
+            backgroundPosition: "0 0,0 0,0 6px,6px -6px,-6px 0",
+          }}
+        />
+      </div>
+
+      <div className="mt-3 grid grid-cols-[74px_1fr_64px] overflow-hidden rounded-lg border border-border-primary bg-bg-tertiary text-sm">
+        <div className="border-r border-border-primary px-3 py-2 text-text-primary">Hex</div>
+        <input
+          value={hex}
+          onChange={(event) => {
+            const rgbValue = hexToRgb(event.target.value);
+            if (!rgbValue) return;
+            applyColor({ ...rgbToHsv(rgbValue), a: color.a });
+          }}
+          className="min-w-0 bg-transparent px-3 py-2 text-text-primary outline-none"
+        />
+        <div className="flex items-center border-l border-border-primary">
+          <input
+            value={Math.round(color.a * 100)}
+            onChange={(event) => applyColor({ ...color, a: clampNumber(event.target.value, 0, 100) / 100 })}
+            className="w-10 bg-transparent py-2 text-right text-text-primary outline-none"
+          />
+          <span className="px-1 text-text-tertiary">%</span>
+        </div>
+      </div>
+    </div>
+  );
+}
 
 /** 缩放：1%–800%，指数曲线（Figma 风格） */
 const MIN_ZOOM_PCT = 1;
@@ -149,6 +328,7 @@ export default function Canvas({
   onSelectedImageRectChange,
   onSemanticSelectionChange,
   semanticEditEnabled = true,
+  theme = "dark",
 }) {
   const toast = useToast();
   const containerRef = useRef(null);
@@ -167,9 +347,12 @@ export default function Canvas({
   const [fileDragOver, setFileDragOver] = useState(false);
   const [selectedTextId, setSelectedTextId] = useState(null);
   const [editingTextId, setEditingTextId] = useState(null);
+  const [editingTextDraft, setEditingTextDraft] = useState("");
+  const [textEditorOverlay, setTextEditorOverlay] = useState(null);
   const [multiSelectedImageIds, setMultiSelectedImageIds] = useState([]);
   const [multiSelectedTextIds, setMultiSelectedTextIds] = useState([]);
   const [selectedShapeId, setSelectedShapeId] = useState(null);
+  const [activeShapeColorPickerId, setActiveShapeColorPickerId] = useState(null);
   const [semanticSelection, setSemanticSelection] = useState(null);
   const [semanticSelectingImageId, setSemanticSelectingImageId] = useState(null);
   const [semanticPickModifierHeld, setSemanticPickModifierHeld] = useState(false);
@@ -178,6 +361,8 @@ export default function Canvas({
   const spacePanHeldRef = useRef(false);
   /** 画布内 Ctrl/Cmd+C 复制后的数据（系统剪贴板失败时仍可粘贴） */
   const canvasClipboardRef = useRef(null);
+  const focusedTextEditorIdRef = useRef(null);
+  const textEditorOverlayRef = useRef(null);
 
   actionRef.current = action;
 
@@ -503,20 +688,127 @@ export default function Canvas({
     return () => el.removeEventListener("wheel", handleWheel);
   }, [handleWheel]);
 
+  const focusTextEditor = useCallback((id, { select = false } = {}) => {
+    const escapedId = String(id).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+    const focus = () => {
+      const el = document.querySelector(`textarea[data-text-editor="${escapedId}"]`);
+      if (!(el instanceof HTMLTextAreaElement)) return false;
+      el.focus();
+      if (select) {
+        el.select();
+      } else {
+        const end = el.value.length;
+        el.setSelectionRange(end, end);
+      }
+      el.style.height = "auto";
+      el.style.height = `${el.scrollHeight}px`;
+      focusedTextEditorIdRef.current = id;
+      return true;
+    };
+    if (!focus()) {
+      requestAnimationFrame(() => {
+        if (!focus()) window.setTimeout(focus, 0);
+      });
+    }
+  }, []);
+
+  const enterTextEditing = useCallback((itemOrId, { select = false } = {}) => {
+    const id = typeof itemOrId === "string" ? itemOrId : itemOrId?.id;
+    if (!id) return;
+    const source = typeof itemOrId === "string"
+      ? textItems.find((item) => item.id === id)
+      : itemOrId;
+    setEditingTextDraft(String(source?.text || ""));
+    focusedTextEditorIdRef.current = null;
+    setEditingTextId(id);
+    focusTextEditor(id, { select });
+  }, [focusTextEditor, textItems]);
+
+  const openTextEditorOverlay = useCallback((item, { select = false, isNew = false } = {}) => {
+    if (!item?.id || !containerRef.current) return;
+    const cam = cameraRef.current;
+    const scale = cam.zoom / 100;
+    const width = Math.min(900, Math.max(80, item.width ?? 240));
+    const fontSize = Math.min(MAX_TEXT_FONT, Math.max(MIN_TEXT_FONT, item.fontSize ?? DEFAULT_TEXT_FONT));
+    setSelectedTextId(item.id);
+    setEditingTextId(null);
+    setEditingTextDraft(String(item.text || "输入文字"));
+    setTextEditorOverlay({
+      id: item.id,
+      isNew,
+      select,
+      left: cam.x + item.x * scale,
+      top: cam.y + item.y * scale,
+      width: width * scale,
+      worldWidth: width,
+      fontSize: fontSize * scale,
+      color: item.color || "",
+    });
+  }, []);
+
+  const commitTextEditorOverlay = useCallback(() => {
+    const overlay = textEditorOverlay;
+    if (!overlay) return;
+    const nextText = String(editingTextDraft || "").replace(/\n$/, "");
+    const isEmptyDraft = !nextText.trim();
+    if (isEmptyDraft) {
+      onDeleteText?.(overlay.id);
+    } else {
+      const scale = cameraRef.current.zoom / 100;
+      const nodeWidth = textEditorOverlayRef.current?.offsetWidth;
+      onUpdateText?.(overlay.id, {
+        text: nextText,
+        isDraft: false,
+        width: nodeWidth ? Math.min(900, Math.max(80, nodeWidth / scale)) : overlay.worldWidth,
+      });
+    }
+    setTextEditorOverlay(null);
+    setEditingTextDraft("");
+    setEditingTextId(null);
+  }, [editingTextDraft, onDeleteText, onUpdateText, textEditorOverlay]);
+
+  useEffect(() => {
+    if (!textEditorOverlay) return;
+    const focus = () => {
+      const node = textEditorOverlayRef.current;
+      if (!(node instanceof HTMLTextAreaElement)) return false;
+      node.focus();
+      if (textEditorOverlay.select) {
+        node.select();
+      } else {
+        const end = node.value.length;
+        node.setSelectionRange(end, end);
+      }
+      node.style.height = "auto";
+      node.style.height = `${node.scrollHeight}px`;
+      return true;
+    };
+    if (!focus()) {
+      requestAnimationFrame(() => {
+        if (!focus()) window.setTimeout(focus, 0);
+      });
+    }
+  }, [textEditorOverlay]);
+
   /** 新建文案后父级 select-none 会导致 textarea 无法选字/输入，需强制 select-text 并拉焦点 */
   useEffect(() => {
-    if (!editingTextId) return;
-    const id = String(editingTextId).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
-    const el = document.querySelector(`textarea[data-text-editor="${id}"]`);
-    if (el instanceof HTMLTextAreaElement) {
-      el.focus();
+    if (!editingTextId) {
+      focusedTextEditorIdRef.current = null;
+      return;
     }
-  }, [editingTextId, textItems]);
+    if (focusedTextEditorIdRef.current === editingTextId) return;
+    const item = textItems.find((textItem) => textItem.id === editingTextId);
+    if (item && editingTextDraft === "" && item.text) {
+      setEditingTextDraft(String(item.text));
+    }
+    focusTextEditor(editingTextId, { select: Boolean(item?.isDraft) });
+  }, [editingTextDraft, editingTextId, focusTextEditor, textItems]);
 
   const isHandTool = activeTool === "hand";
   const isTextTool = activeTool === "text";
   const isSelectTool = activeTool === "select";
   const isShapeTool = activeTool === "shape";
+  const isLightTheme = theme === "light";
   const quickEditActions = [
     { id: "cutout", label: "抠图", icon: Scissors },
     { id: "upscale", label: "高清放大", icon: Maximize2 },
@@ -687,7 +979,7 @@ export default function Canvas({
       onSelectImage(null);
       setSelectedTextId(t.id);
       if (isTextTool) {
-        setEditingTextId(t.id);
+        openTextEditorOverlay(t, { select: Boolean(t.isDraft) });
         return;
       }
       const startX = e.clientX;
@@ -722,7 +1014,7 @@ export default function Canvas({
       window.addEventListener("pointerup", onUp);
     },
     [
-      isHandTool, isShapeTool, isTextTool, isSelectTool, onSelectImage,
+      isHandTool, isShapeTool, isTextTool, isSelectTool, onSelectImage, openTextEditorOverlay,
       multiSelectedImageIds, multiSelectedTextIds, textItems,
     ]
   );
@@ -767,31 +1059,8 @@ export default function Canvas({
       return;
     }
 
-    if (isShapeTool && onAddShape) {
-      setEditingTextId(null);
-      setSelectedShapeId(null);
-      onSelectImage(null);
-      setSelectedTextId(null);
-      setMultiSelectedImageIds([]);
-      setMultiSelectedTextIds([]);
-      const rect = containerRef.current?.getBoundingClientRect();
-      if (!rect) return;
-      const worldX = (e.clientX - rect.left - cam.x) / scale;
-      const worldY = (e.clientY - rect.top - cam.y) / scale;
-      setAction({
-        type: "shape_draw",
-        kind: shapeMode === "ellipse" ? "ellipse" : "rect",
-        sx: worldX,
-        sy: worldY,
-        cx: worldX,
-        cy: worldY,
-      });
-      e.currentTarget.setPointerCapture(e.pointerId);
-      return;
-    }
-
     const shapeHit = target.closest("[data-shape-item]");
-    if (shapeHit && isSelectTool) {
+    if (shapeHit && (isSelectTool || isShapeTool)) {
       setEditingTextId(null);
       setSemanticSelection(null);
       const sid = shapeHit.dataset.shapeItem;
@@ -809,6 +1078,30 @@ export default function Canvas({
         startY: e.clientY,
         origX: sh.x,
         origY: sh.y,
+      });
+      e.currentTarget.setPointerCapture(e.pointerId);
+      return;
+    }
+
+    if (isShapeTool && onAddShape) {
+      setEditingTextId(null);
+      setSelectedShapeId(null);
+      onSelectImage(null);
+      setSelectedTextId(null);
+      setMultiSelectedImageIds([]);
+      setMultiSelectedTextIds([]);
+      setSemanticSelection(null);
+      const rect = containerRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const worldX = (e.clientX - rect.left - cam.x) / scale;
+      const worldY = (e.clientY - rect.top - cam.y) / scale;
+      setAction({
+        type: "shape_draw",
+        kind: shapeMode === "ellipse" ? "ellipse" : "rect",
+        sx: worldX,
+        sy: worldY,
+        cx: worldX,
+        cy: worldY,
       });
       e.currentTarget.setPointerCapture(e.pointerId);
       return;
@@ -910,10 +1203,26 @@ export default function Canvas({
       const nid = `text-${Date.now()}`;
       // 同步写入父级文案列表，再进入编辑，否则首帧 textItems 尚未含 nid，无法立刻出现输入框
       flushSync(() => {
-        onAddText({ id: nid, text: "", x: worldX, y: worldY, fontSize: DEFAULT_TEXT_FONT });
+        onAddText({
+          id: nid,
+          text: "输入文字",
+          x: worldX,
+          y: worldY,
+          fontSize: DEFAULT_TEXT_FONT,
+          width: 240,
+          isDraft: true,
+        });
       });
       setSelectedTextId(nid);
-      setEditingTextId(nid);
+      openTextEditorOverlay({
+        id: nid,
+        text: "输入文字",
+        x: worldX,
+        y: worldY,
+        fontSize: DEFAULT_TEXT_FONT,
+        width: 240,
+        isDraft: true,
+      }, { select: true, isNew: true });
       return;
     }
 
@@ -947,7 +1256,7 @@ export default function Canvas({
     setAction("pan");
     e.currentTarget.setPointerCapture(e.pointerId);
   }, [
-    images, selectedImage, onSelectImage, isHandTool, isTextTool, isSelectTool, isShapeTool, onAddText,
+    images, selectedImage, onSelectImage, isHandTool, isTextTool, isSelectTool, isShapeTool, onAddText, openTextEditorOverlay,
     multiSelectedImageIds, multiSelectedTextIds, textItems,
     shapeItems, shapeMode,
   ]);
@@ -971,6 +1280,32 @@ export default function Canvas({
       const dx = (e.clientX - act.startX) / scale;
       const dy = (e.clientY - act.startY) / scale;
       onUpdateShape(act.id, { x: act.origX + dx, y: act.origY + dy });
+    } else if (act.type === "shape_resize" && onUpdateShape) {
+      const dx = (e.clientX - act.startX) / scale;
+      const dy = (e.clientY - act.startY) / scale;
+      let nextX = act.origX;
+      let nextY = act.origY;
+      let nextW = act.origW;
+      let nextH = act.origH;
+      if (act.handle.includes("e")) nextW = act.origW + dx;
+      if (act.handle.includes("s")) nextH = act.origH + dy;
+      if (act.handle.includes("w")) {
+        nextX = act.origX + dx;
+        nextW = act.origW - dx;
+      }
+      if (act.handle.includes("n")) {
+        nextY = act.origY + dy;
+        nextH = act.origH - dy;
+      }
+      if (nextW < MIN_SHAPE_PIXELS) {
+        nextX = act.handle.includes("w") ? act.origX + act.origW - MIN_SHAPE_PIXELS : nextX;
+        nextW = MIN_SHAPE_PIXELS;
+      }
+      if (nextH < MIN_SHAPE_PIXELS) {
+        nextY = act.handle.includes("n") ? act.origY + act.origH - MIN_SHAPE_PIXELS : nextY;
+        nextH = MIN_SHAPE_PIXELS;
+      }
+      onUpdateShape(act.id, { x: nextX, y: nextY, w: nextW, h: nextH });
     } else if (act.type === "marquee") {
       const rect = containerRef.current?.getBoundingClientRect();
       if (!rect) return;
@@ -1008,6 +1343,10 @@ export default function Canvas({
       const dx = (e.clientX - act.startX) / scale;
       const dy = (e.clientY - act.startY) / scale;
       onUpdateText(act.id, { x: act.origX + dx, y: act.origY + dy });
+    } else if (act.type === "text_resize" && onUpdateText) {
+      const dx = (e.clientX - act.startX) / scale;
+      const nextWidth = Math.min(900, Math.max(80, act.origWidth + dx));
+      onUpdateText(act.id, { width: nextWidth });
     }
   }, [onUpdateText, onUpdateShape]);
 
@@ -1019,14 +1358,19 @@ export default function Canvas({
       const w = Math.abs(act.cx - act.sx);
       const h = Math.abs(act.cy - act.sy);
       if (w >= MIN_SHAPE_PIXELS && h >= MIN_SHAPE_PIXELS) {
+        const id = `shape-${Date.now()}`;
         onAddShape({
-          id: `shape-${Date.now()}`,
+          id,
           kind: act.kind,
           x: x1,
           y: y1,
           w,
           h,
+          fill: SHAPE_COLOR_PRESETS[0],
         });
+        setSelectedShapeId(id);
+        onSelectImage?.(null);
+        setSelectedTextId(null);
       }
       setAction(null);
       try { e.currentTarget.releasePointerCapture(e.pointerId); } catch {}
@@ -1723,36 +2067,126 @@ export default function Canvas({
           );
         })}
 
-        {shapeItems.map((s) => (
-          <div
-            key={s.id}
-            data-shape-item={s.id}
-            className={`absolute z-[15] pointer-events-auto border-2 transition-colors ${
-              selectedShapeId === s.id
-                ? "border-accent shadow-[0_0_0_1px_rgba(63,202,88,0.35)]"
-                : "border-white/45 hover:border-white/70"
-            } ${s.kind === "ellipse" ? "rounded-full" : "rounded-lg"}`}
-            style={{
-              left: s.x,
-              top: s.y,
-              width: s.w,
-              height: s.h,
-              background: "rgba(63, 202, 88, 0.06)",
-            }}
-          />
-        ))}
+        {shapeItems.map((s) => {
+          const selected = selectedShapeId === s.id;
+          const fill = s.fill || SHAPE_COLOR_PRESETS[0];
+          const handles = [
+            ["nw", -6, -6, "cursor-nwse-resize"],
+            ["ne", s.w - 6, -6, "cursor-nesw-resize"],
+            ["sw", -6, s.h - 6, "cursor-nesw-resize"],
+            ["se", s.w - 6, s.h - 6, "cursor-nwse-resize"],
+          ];
+          return (
+            <div
+              key={s.id}
+              data-shape-item={s.id}
+              className={`absolute z-[15] pointer-events-auto border-2 transition-colors ${
+                selected ? "shadow-[0_0_0_1px_rgba(63,202,88,0.35)]" : "border-transparent hover:border-accent/35"
+              } ${s.kind === "ellipse" ? "rounded-full" : "rounded-lg"}`}
+              style={{
+                left: s.x,
+                top: s.y,
+                width: s.w,
+                height: s.h,
+                background: fill,
+                borderColor: selected ? "var(--accent)" : "transparent",
+              }}
+            >
+              {selected && (
+                <>
+                  <div
+                    className="absolute -top-10 left-0 z-30 flex items-center gap-1 rounded-lg border border-border-primary bg-bg-secondary/95 px-1.5 py-1 shadow-md"
+                    onPointerDown={(e) => e.stopPropagation()}
+                  >
+                    <button
+                      type="button"
+                      title="打开颜色选择器"
+                      aria-label="打开颜色选择器"
+                      className="h-6 w-6 rounded-full border-2 border-accent shadow-sm transition-transform hover:scale-105"
+                      style={{ backgroundColor: fill }}
+                      onClick={() => setActiveShapeColorPickerId((current) => (current === s.id ? null : s.id))}
+                    />
+                    <div className="mx-0.5 h-5 w-px bg-border-primary" />
+                    <button
+                      type="button"
+                      title="删除形状"
+                      className="flex h-7 w-7 items-center justify-center rounded-md text-text-secondary transition-colors hover:bg-red-500/15 hover:text-red-400"
+                      onClick={() => {
+                        onDeleteShape?.(s.id);
+                        setSelectedShapeId(null);
+                      }}
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                    {activeShapeColorPickerId === s.id && (
+                      <div
+                        className="absolute left-0 bottom-[calc(100%+8px)] z-50"
+                        onPointerDown={(e) => e.stopPropagation()}
+                      >
+                        <ShapeColorPicker
+                          value={fill}
+                          onChange={(nextFill) => onUpdateShape?.(s.id, { fill: nextFill })}
+                        />
+                      </div>
+                    )}
+                  </div>
+                  {handles.map(([handle, left, top, cursor]) => (
+                    <button
+                      key={handle}
+                      type="button"
+                      title="调整大小"
+                      aria-label="调整大小"
+                      className={`absolute h-3 w-3 rounded-full border border-accent bg-bg-secondary shadow-md ${cursor}`}
+                      style={{ left, top }}
+                      onPointerDown={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setAction({
+                          type: "shape_resize",
+                          id: s.id,
+                          handle,
+                          startX: e.clientX,
+                          startY: e.clientY,
+                          origX: s.x,
+                          origY: s.y,
+                          origW: s.w,
+                          origH: s.h,
+                        });
+                        try {
+                          containerRef.current?.setPointerCapture(e.pointerId);
+                        } catch {
+                          /* ignore */
+                        }
+                      }}
+                    />
+                  ))}
+                </>
+              )}
+            </div>
+          );
+        })}
 
         {textItems.map((t) => {
           const isHighlighted =
             selectedTextId === t.id || multiSelectedTextIds.includes(t.id);
-          const isEditing = editingTextId === t.id;
+          const isEditing = editingTextId === t.id || (isTextTool && t.isDraft);
           const fontPx = Math.min(MAX_TEXT_FONT, Math.max(MIN_TEXT_FONT, t.fontSize ?? DEFAULT_TEXT_FONT));
+          const textColor = t.color || "";
+          const boxWidth = Math.min(900, Math.max(80, t.width ?? 240));
           const bumpFont = (delta) => {
             const next = Math.min(MAX_TEXT_FONT, Math.max(MIN_TEXT_FONT, fontPx + delta));
             onUpdateText?.(t.id, { fontSize: next });
           };
+          const finishTextEditing = (nextText = t.text) => {
+            const textValue = String(nextText || "").trim();
+            if (!textValue) {
+              onDeleteText?.(t.id);
+              setSelectedTextId(null);
+            }
+            setEditingTextId(null);
+          };
           const showSelectBar =
-            isSelectTool &&
+            (isSelectTool || isTextTool) &&
             isHighlighted &&
             !isEditing &&
             multiSelectedImageIds.length + multiSelectedTextIds.length <= 1;
@@ -1760,10 +2194,10 @@ export default function Canvas({
             <div
               key={t.id}
               data-text-item={t.id}
-              className={`absolute z-[25] max-w-[min(92vw,480px)] ${
+              className={`absolute z-[25] ${
                 isHighlighted && !isEditing ? "outline outline-1 outline-accent/70 outline-offset-2 rounded-sm" : ""
-              } ${isSelectTool && !isEditing ? "cursor-move" : ""}`}
-              style={{ left: t.x, top: t.y }}
+              } ${(isSelectTool || isTextTool) && !isEditing ? "cursor-move" : ""}`}
+              style={{ left: t.x, top: t.y, width: boxWidth, opacity: textEditorOverlay?.id === t.id ? 0 : 1 }}
               onPointerDown={(e) => {
                 if (isEditing) return;
                 handleTextItemPointerDown(e, t);
@@ -1792,6 +2226,24 @@ export default function Canvas({
                     <Plus size={14} />
                   </button>
                   <div className="w-px h-5 bg-border-primary mx-0.5" />
+                  <div className="flex items-center gap-1 px-1">
+                    {TEXT_COLOR_PRESETS.map((color) => (
+                      <button
+                        key={color}
+                        type="button"
+                        title="文字颜色"
+                        aria-label="文字颜色"
+                        className={`h-5 w-5 rounded-full border transition-all ${
+                          textColor && textColor.toLowerCase() === color.toLowerCase()
+                            ? "border-accent ring-2 ring-accent/30"
+                            : "border-border-primary hover:border-text-secondary"
+                        }`}
+                        style={{ backgroundColor: color }}
+                        onClick={() => onUpdateText?.(t.id, { color })}
+                      />
+                    ))}
+                  </div>
+                  <div className="w-px h-5 bg-border-primary mx-0.5" />
                   <button
                     type="button"
                     title="删除文案"
@@ -1809,15 +2261,34 @@ export default function Canvas({
               {isEditing ? (
                 <textarea
                   data-text-editor={t.id}
-                  value={t.text}
-                  onChange={(e) => onUpdateText?.(t.id, { text: e.target.value })}
+                  ref={(node) => {
+                    if (!node || !isEditing) return;
+                    if (document.activeElement === node) return;
+                    requestAnimationFrame(() => focusTextEditor(t.id, { select: Boolean(t.isDraft) }));
+                  }}
+                  value={editingTextDraft}
+                  onChange={(e) => {
+                    setEditingTextDraft(e.currentTarget.value);
+                    e.currentTarget.style.height = "auto";
+                    e.currentTarget.style.height = `${e.currentTarget.scrollHeight}px`;
+                  }}
                   onPointerDown={(e) => e.stopPropagation()}
-                  onBlur={() => setEditingTextId(null)}
-                  autoFocus
-                  rows={4}
-                  placeholder="输入文案…"
-                  style={{ fontSize: fontPx }}
-                  className="w-[min(92vw,420px)] min-h-[4em] resize-y rounded-sm bg-transparent border-0 px-0.5 py-0 text-text-primary placeholder-text-tertiary/80 outline-none focus:ring-0 focus:shadow-[0_0_0_1px_rgba(63,202,88,0.5)] select-text leading-relaxed"
+                  onBlur={(e) => {
+                    const nextText = e.currentTarget.value.replace(/\n$/, "");
+                    onUpdateText?.(t.id, {
+                      text: nextText,
+                      isDraft: false,
+                    });
+                    finishTextEditing(nextText);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === "Escape" || ((e.ctrlKey || e.metaKey) && e.key === "Enter")) {
+                      e.preventDefault();
+                      e.currentTarget.blur();
+                    }
+                  }}
+                  style={{ fontSize: fontPx, color: textColor || undefined, width: boxWidth }}
+                  className="min-w-[80px] resize-none overflow-hidden whitespace-pre-wrap rounded-sm border-0 bg-transparent px-0.5 py-0 text-text-primary outline-none focus:shadow-[0_0_0_1px_rgba(63,202,88,0.65)] select-text leading-snug"
                 />
               ) : (
                 <div
@@ -1828,24 +2299,76 @@ export default function Canvas({
                     setMultiSelectedTextIds([]);
                     setSelectedShapeId(null);
                     setSelectedTextId(t.id);
-                    setEditingTextId(t.id);
+                    openTextEditorOverlay(t);
                   }}
-                  style={{ fontSize: fontPx }}
-                  className={`max-w-[min(92vw,480px)] whitespace-pre-wrap leading-relaxed ${
+                  style={{ fontSize: fontPx, color: textColor || undefined, width: boxWidth }}
+                  className={`whitespace-pre-wrap leading-snug ${
                     isSelectTool && !isEditing ? "cursor-move" : "cursor-text"
                   } ${
                     t.text.trim()
-                      ? "text-text-primary [text-shadow:0_1px_3px_rgba(0,0,0,0.85),0_0_12px_rgba(0,0,0,0.35)]"
-                      : "text-text-tertiary/90 [text-shadow:0_1px_2px_rgba(0,0,0,0.6)]"
+                      ? `text-text-primary ${isLightTheme ? "" : "[text-shadow:0_1px_3px_rgba(0,0,0,0.85),0_0_12px_rgba(0,0,0,0.35)]"}`
+                      : `text-text-tertiary/90 ${isLightTheme ? "" : "[text-shadow:0_1px_2px_rgba(0,0,0,0.6)]"}`
                   }`}
                 >
-                  {t.text.trim() ? t.text : "选择工具：单击选中 · 拖拽移动 · 双击编辑"}
+                  {t.text.trim() ? t.text : "输入文字"}
                 </div>
+              )}
+              {isHighlighted && !isEditing && multiSelectedImageIds.length + multiSelectedTextIds.length <= 1 && (
+                <button
+                  type="button"
+                  title="拖拽调整文字框宽度"
+                  aria-label="拖拽调整文字框宽度"
+                  className="absolute -bottom-2 -right-2 h-4 w-4 rounded-full border border-accent bg-bg-secondary shadow-md cursor-ew-resize"
+                  onPointerDown={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setAction({
+                      type: "text_resize",
+                      id: t.id,
+                      startX: e.clientX,
+                      origWidth: boxWidth,
+                    });
+                    try {
+                      containerRef.current?.setPointerCapture(e.pointerId);
+                    } catch {
+                      /* ignore */
+                    }
+                  }}
+                />
               )}
             </div>
           );
         })}
       </div>
+
+      {textEditorOverlay && (
+        <textarea
+          ref={textEditorOverlayRef}
+          autoFocus
+          value={editingTextDraft}
+          onChange={(e) => {
+            setEditingTextDraft(e.currentTarget.value);
+            e.currentTarget.style.height = "auto";
+            e.currentTarget.style.height = `${e.currentTarget.scrollHeight}px`;
+          }}
+          onPointerDown={(e) => e.stopPropagation()}
+          onBlur={commitTextEditorOverlay}
+          onKeyDown={(e) => {
+            if (e.key === "Escape" || ((e.ctrlKey || e.metaKey) && e.key === "Enter")) {
+              e.preventDefault();
+              e.currentTarget.blur();
+            }
+          }}
+          style={{
+            left: textEditorOverlay.left,
+            top: textEditorOverlay.top,
+            width: textEditorOverlay.width,
+            fontSize: textEditorOverlay.fontSize,
+            color: textEditorOverlay.color || undefined,
+          }}
+          className="absolute z-[60] min-w-[80px] resize-none overflow-hidden whitespace-pre-wrap rounded-sm border border-accent bg-bg-primary/85 px-0.5 py-0 text-text-primary outline-none shadow-[0_0_0_1px_rgba(63,202,88,0.45)] select-text leading-snug"
+        />
+      )}
 
       {/* Floating toolbar at bottom center */}
       <div data-toolbar>

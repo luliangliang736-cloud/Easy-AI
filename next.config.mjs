@@ -3,7 +3,7 @@ const nextConfig = {
   images: {
     remotePatterns: [{ protocol: "https", hostname: "**" }],
   },
-  serverExternalPackages: [],
+  serverExternalPackages: ["@imgly/background-removal-node", "sharp"],
 };
 
 export default nextConfig;
