@@ -828,10 +828,15 @@ export default function HomePage() {
 
       {/* Hero */}
       <section className="relative w-full h-screen min-h-[600px] overflow-hidden">
-        <img
-          src="/images/home-hero-person-5.jpg"
-          alt="EasyAI 创作首页封面"
+        <video
+          src="/videos/home-hero-easyfamily.mp4"
+          aria-label="EasyAI 创作首页封面"
           className="absolute inset-0 w-full h-full object-cover"
+          autoPlay
+          muted
+          loop
+          playsInline
+          preload="auto"
         />
       </section>
 
