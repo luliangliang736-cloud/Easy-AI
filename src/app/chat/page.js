@@ -50,7 +50,7 @@ const IMAGE_HISTORY_KEY = "lovart-chat-image-history";
 const IMAGE_HISTORY_LIMIT = 100;
 const ATTACHMENT_ACCEPT = "image/*,.pdf,.doc,.docx,.txt,.md,.markdown,.rtf,.csv,.json,.xml,.xls,.xlsx,.ppt,.pptx";
 const EZFAMILY_ASSET_URL = "/api/ezfamily";
-const EZLOGO_ASSET_URL = "/api/ezlogo";
+const EZLOGO_ASSET_URL = "/ip-assets/EZlogo/EZlogo.jpg";
 const WA_TEMPLATE_ASSET_URL = "/api/wa-templates";
 const WA_LOCKUP_ASSET_URL = "/api/wa-lockup";
 const WA_SMILE_LOGO_ASSET_URL = "/api/wa-smile-logo";
@@ -853,7 +853,10 @@ export default function ChatPage() {
         apiText = text.replace(/\bezlogo\b/gi, "").replace(/\s+/g, " ").trim();
         apiText = `${apiText || "参考图中的图形标志进行设计。"}
 
-注意：EZlogo 只是系统触发词，用于自动加入参考图；不要在画面中生成“EZlogo”文字。`;
+EZlogo trigger instructions:
+- 第一张参考图是 EZlogo 的品牌标志结构锚点，必须以它的笑脸弧线、点状元素、整体几何关系和品牌识别为主体。
+- 其它参考图只用于学习材质、色彩、光影、排版或超级符号风格，不要复刻其它参考图里的主体字母、符号或图形。
+- “EZlogo”只是系统触发词，不要在画面中生成“EZlogo”文字，也不要把它理解成要生成英文字母“EZ”。`;
       } catch { /* 静默跳过 */ }
     }
     if (qualityFixPrompt) {
@@ -866,11 +869,13 @@ export default function ChatPage() {
       ? getLatestGeneratedImages(messages)
       : [];
 
-    // WA 模板：模板图必须作为第一参考图；普通触发：保留用户参考图优先
+    // WA 模板/EZlogo：系统资产必须作为第一参考图；其它图仅作为风格/场景参考
     // 无触发：正常使用 refImages
     const submittedImages = autoRefImages.length > 0
       ? (waTemplateRequest
         ? [...autoRefImages, ...activeRefImages, ...inheritedImages]
+        : hasEzLogoTrigger
+          ? [...autoRefImages, ...activeRefImages, ...inheritedImages]
         : (activeRefImages.length > 0 ? [...activeRefImages, ...autoRefImages] : [...autoRefImages, ...inheritedImages]))
       : [...activeRefImages, ...inheritedImages];
     const predictedMode = detectOneClickEntryMode(apiText, submittedImages);
