@@ -471,7 +471,9 @@ function parseAspectRatio(imageSize) {
 
 const REQUEST_TIMEOUT_MS = 90000;
 const IMAGE_REQUEST_TIMEOUT_MS = 5 * 60 * 1000;
+const VIDEO_REQUEST_TIMEOUT_MS = 10 * 60 * 1000;
 const GENERATION_STALE_MS = IMAGE_REQUEST_TIMEOUT_MS + 30 * 1000;
+const VIDEO_GENERATION_STALE_MS = VIDEO_REQUEST_TIMEOUT_MS + 30 * 1000;
 const MAX_PARALLEL_GENERATIONS = 1;
 const STORAGE_VERSION = "9";
 const DEFAULT_CONVERSATION_TITLE = "新建对话";
@@ -1027,11 +1029,11 @@ function HomeInner() {
 
     const clearStaleGeneratingItems = () => {
       const now = Date.now();
-      const staleItems = canvasGeneratingItems.filter((item) => (
-        item?.isGeneratingPlaceholder &&
-        item?.createdAt &&
-        now - item.createdAt > GENERATION_STALE_MS
-      ));
+      const staleItems = canvasGeneratingItems.filter((item) => {
+        if (!item?.isGeneratingPlaceholder || !item?.createdAt) return false;
+        const staleMs = item.mediaType === "video" ? VIDEO_GENERATION_STALE_MS : GENERATION_STALE_MS;
+        return now - item.createdAt > staleMs;
+      });
       if (!staleItems.length) return;
 
       const staleItemIds = new Set(staleItems.map((item) => item.id));
@@ -1516,25 +1518,20 @@ function HomeInner() {
     };
 
     updateConversationMessages(conversationId, (prev) => [...prev, userMsg, aiMsg]);
-    if (!isKlingVideoRequest) {
-      setIsGenerating(true);
-    }
+    setIsGenerating(true);
     if (!preserveComposer) {
       setPrompt("");
     }
     try {
       const requestController = new AbortController();
-      if (!isKlingVideoRequest) {
-        generationAbortRef.current = requestController;
-        activeGenerationRef.current = {
-          conversationId,
-          aiMsgId,
-          controller: requestController,
-          cancelled: false,
-        };
-      }
+      generationAbortRef.current = requestController;
+      activeGenerationRef.current = {
+        conversationId,
+        aiMsgId,
+        controller: requestController,
+        cancelled: false,
+      };
       const shouldCancelTaskForStaleGeneration = () =>
-        !isKlingVideoRequest &&
         (
           activeGenerationRef.current?.conversationId !== conversationId ||
           activeGenerationRef.current?.aiMsgId !== aiMsgId ||
@@ -1630,7 +1627,7 @@ function HomeInner() {
                   sound: requestParams.sound || "off",
                   ref_images: preparedImages.slice(0, 2),
                 }),
-              }, IMAGE_REQUEST_TIMEOUT_MS);
+              }, VIDEO_REQUEST_TIMEOUT_MS);
             } else if (shouldUseEditApi) {
               res = await fetchWithTimeout("/api/edit", {
                 method: "POST",
@@ -1722,7 +1719,6 @@ function HomeInner() {
             return { status: "completed" };
           } catch (err) {
             if (
-              !isKlingVideoRequest &&
               (
                 activeGenerationRef.current?.conversationId !== conversationId ||
                 activeGenerationRef.current?.aiMsgId !== aiMsgId
@@ -1731,7 +1727,7 @@ function HomeInner() {
               return { status: "cancelled" };
             }
             if (err?.name === "AbortError") {
-              if (isKlingVideoRequest || !activeGenerationRef.current?.cancelled) {
+              if (!activeGenerationRef.current?.cancelled) {
                 patchTask(conversationId, aiMsgId, taskId, {
                   status: "failed",
                   error: "请求超时。可稍后重试，或减少张数以降低排队压力。",
@@ -1763,12 +1759,9 @@ function HomeInner() {
       ), 0);
 
       if (
-        isKlingVideoRequest ||
-        (
-          activeGenerationRef.current?.conversationId === conversationId &&
-          activeGenerationRef.current?.aiMsgId === aiMsgId &&
-          !activeGenerationRef.current?.cancelled
-        )
+        activeGenerationRef.current?.conversationId === conversationId &&
+        activeGenerationRef.current?.aiMsgId === aiMsgId &&
+        !activeGenerationRef.current?.cancelled
       ) {
         updateMessage(conversationId, aiMsgId, {
           status: successCount > 0 ? "completed" : "failed",
@@ -1795,7 +1788,6 @@ function HomeInner() {
       }
     } catch (err) {
       if (
-        !isKlingVideoRequest &&
         activeGenerationRef.current?.conversationId === conversationId &&
         activeGenerationRef.current?.aiMsgId === aiMsgId &&
         activeGenerationRef.current?.cancelled
@@ -1826,16 +1818,13 @@ function HomeInner() {
         prev.filter((item) => item.aiMsgId !== aiMsgId)
       );
       if (
-        !isKlingVideoRequest &&
         activeGenerationRef.current?.conversationId === conversationId &&
         activeGenerationRef.current?.aiMsgId === aiMsgId
       ) {
         activeGenerationRef.current = null;
       }
-      if (!isKlingVideoRequest) {
-        generationAbortRef.current = null;
-        setIsGenerating(false);
-      }
+      generationAbortRef.current = null;
+      setIsGenerating(false);
     }
   }, [
     composerMode,

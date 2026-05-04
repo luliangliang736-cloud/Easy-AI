@@ -2,14 +2,16 @@ import { createHmac } from "crypto";
 import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
-export const maxDuration = 300;
+export const maxDuration = 600;
 
 const API_BASE = (process.env.KLING_API_BASE || "https://api-beijing.klingai.com").replace(/\/$/, "");
 const ACCESS_KEY_ID = process.env.KLING_ACCESS_KEY_ID || process.env.KLING_ACCESS_KEY || "";
 const ACCESS_KEY_SECRET = process.env.KLING_ACCESS_KEY_SECRET || process.env.KLING_SECRET_KEY || "";
 const REQUEST_TIMEOUT_MS = Number(process.env.KLING_REQUEST_TIMEOUT_MS || 60 * 1000);
 const POLL_INTERVAL_MS = Number(process.env.KLING_POLL_INTERVAL_MS || 5 * 1000);
-const POLL_TIMEOUT_MS = Number(process.env.KLING_POLL_TIMEOUT_MS || 4 * 60 * 1000);
+const POLL_TIMEOUT_MS = Number(process.env.KLING_POLL_TIMEOUT_MS || 8 * 60 * 1000);
+const REQUEST_RETRY_ATTEMPTS = Number(process.env.KLING_REQUEST_RETRY_ATTEMPTS || 4);
+const REQUEST_RETRY_BASE_MS = Number(process.env.KLING_REQUEST_RETRY_BASE_MS || 1200);
 
 const VALID_ASPECT_RATIOS = new Set(["16:9", "9:16", "1:1"]);
 const VALID_MODES = new Set(["std", "pro", "4k", "standard", "professional", "720p", "1080p"]);
@@ -184,6 +186,28 @@ function getApiErrorMessage(data, status) {
   );
 }
 
+function getErrorCode(error) {
+  return error?.cause?.code || error?.code || "";
+}
+
+function isTransientKlingError(error) {
+  const code = getErrorCode(error);
+  const message = String(error?.message || "");
+  return (
+    error?.name === "AbortError"
+    || message === "fetch failed"
+    || message.includes("Kling API returned non-JSON (502)")
+    || message.includes("Kling API returned non-JSON (503)")
+    || message.includes("Kling API returned non-JSON (504)")
+    || message.includes("terminated")
+    || ["ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "UND_ERR_CONNECT_TIMEOUT", "UND_ERR_SOCKET", "EAI_AGAIN", "ENOTFOUND"].includes(code)
+  );
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 async function fetchJsonWithTimeout(url, options = {}) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
@@ -205,23 +229,50 @@ async function fetchJsonWithTimeout(url, options = {}) {
   }
 }
 
-async function requestKling(path, { method = "GET", body } = {}) {
-  return fetchJsonWithTimeout(`${API_BASE}${path}`, {
-    method,
-    headers: {
-      Authorization: `Bearer ${signJwt()}`,
-      "Content-Type": "application/json",
-    },
-    body: body ? JSON.stringify(body) : undefined,
-  });
+async function requestKling(path, { method = "GET", body, meta, action = "request" } = {}) {
+  let lastError = null;
+  for (let attempt = 1; attempt <= REQUEST_RETRY_ATTEMPTS; attempt += 1) {
+    try {
+      return await fetchJsonWithTimeout(`${API_BASE}${path}`, {
+        method,
+        headers: {
+          Authorization: `Bearer ${signJwt()}`,
+          "Content-Type": "application/json",
+        },
+        body: body ? JSON.stringify(body) : undefined,
+      });
+    } catch (error) {
+      lastError = error;
+      if (!isTransientKlingError(error) || attempt >= REQUEST_RETRY_ATTEMPTS) {
+        throw error;
+      }
+
+      const delayMs = REQUEST_RETRY_BASE_MS * attempt + Math.floor(Math.random() * 400);
+      if (meta) {
+        logKlingEvent(meta, "retry", {
+          action,
+          attempt,
+          nextAttempt: attempt + 1,
+          delayMs,
+          message: error?.message || "request failed",
+          code: getErrorCode(error) || null,
+        });
+      }
+      await sleep(delayMs);
+    }
+  }
+  throw lastError;
 }
 
-async function pollTask(path, taskId) {
+async function pollTask(path, taskId, meta) {
   const start = Date.now();
   let lastData = null;
 
   while (Date.now() - start < POLL_TIMEOUT_MS) {
-    const data = await requestKling(`${path}/${encodeURIComponent(taskId)}`);
+    const data = await requestKling(`${path}/${encodeURIComponent(taskId)}`, {
+      meta,
+      action: "poll_task",
+    });
     lastData = data;
 
     const status = normalizeKlingStatus(
@@ -384,6 +435,7 @@ export async function POST(request) {
     }
 
     const { path, payload, generationType } = buildTaskPayload(body);
+    payload.external_task_id = payload.external_task_id || meta.id;
     logKlingEvent(meta, "start", {
       generationType,
       path,
@@ -394,7 +446,12 @@ export async function POST(request) {
       aspectRatio: payload.aspect_ratio || null,
       refCount: Array.isArray(body?.ref_images) ? body.ref_images.filter(Boolean).length : 0,
     });
-    const createData = await requestKling(path, { method: "POST", body: payload });
+    const createData = await requestKling(path, {
+      method: "POST",
+      body: payload,
+      meta,
+      action: "create_task",
+    });
     const taskId = extractTaskId(createData);
     if (!taskId) {
       const immediateUrls = extractVideoUrls(createData);
@@ -425,7 +482,7 @@ export async function POST(request) {
     }
 
     logKlingEvent(meta, "task_created", { generationType, taskId });
-    const urls = await pollTask(path, taskId);
+    const urls = await pollTask(path, taskId, meta);
     logKlingEvent(meta, "success", {
       generationType,
       taskId,
@@ -454,7 +511,7 @@ export async function POST(request) {
       : error?.message || "Kling video request failed";
     logKlingEvent(meta, "error", {
       message,
-      code: error?.cause?.code || error?.code || null,
+      code: getErrorCode(error) || null,
     });
     return NextResponse.json({ error: message }, { status: 500 });
   }
