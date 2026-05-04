@@ -12,6 +12,7 @@ import {
   ChevronUp,
   Copy,
   Download,
+  Gauge,
   Loader2,
   Mic,
   MicOff,
@@ -21,6 +22,7 @@ import {
   Moon,
   Send,
   Plus,
+  RefreshCw,
   Square,
   Sun,
   Trash2,
@@ -352,6 +354,7 @@ export default function FloatingEntryWidget({
   onSelectHistory,
   onDeleteHistory,
   onDeleteMessage,
+  onRegenerateMessage,
   onClose,
   onExpandFullscreen,
 }) {
@@ -387,6 +390,7 @@ export default function FloatingEntryWidget({
   const restorePanelFrameRef = useRef(null);
   const [previewSrc, setPreviewSrc] = useState(null);
   const [copiedMessageId, setCopiedMessageId] = useState(null);
+  const [expandedQualityId, setExpandedQualityId] = useState(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [panelTheme, setPanelTheme] = useState("dark");
   const [isLogoMenuOpen, setIsLogoMenuOpen] = useState(false);
@@ -1158,7 +1162,7 @@ export default function FloatingEntryWidget({
     onDeleteHistory?.(historyId);
   };
 
-  const placeholder = "试试上传一张图片，告诉我你想怎么修改";
+  const placeholder = "释放创意，一键帮你完成重复且无聊的工作~";
 
   if (!ready) {
     return null;
@@ -1568,6 +1572,89 @@ export default function FloatingEntryWidget({
                                     {copiedMessageId === message.id ? "已复制" : "复制"}
                                   </button>
                                 ) : null}
+                                {message.qualityCheck ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => setExpandedQualityId((current) => (current === message.id ? null : message.id))}
+                                    className={`inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-[11px] transition-all ${
+                                      message.qualityCheck.passed
+                                        ? isLightTheme
+                                          ? "text-emerald-700 hover:bg-emerald-500/10"
+                                          : "text-emerald-300 hover:bg-emerald-400/10"
+                                        : isLightTheme
+                                          ? "text-amber-700 hover:bg-amber-500/10"
+                                          : "text-amber-300 hover:bg-amber-400/10"
+                                    }`}
+                                    title="查看质检结果"
+                                  >
+                                    <Gauge size={12} />
+                                    质检 {Number(message.qualityCheck.score || 0)}/100
+                                    <ChevronUp size={11} className={`transition-transform ${expandedQualityId === message.id ? "" : "rotate-180"}`} />
+                                  </button>
+                                ) : null}
+                                {message.qualityCheck ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => onRegenerateMessage?.(message.id)}
+                                    disabled={isSubmitting}
+                                    className={`inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-[11px] transition-all disabled:cursor-not-allowed disabled:opacity-40 ${
+                                      isLightTheme
+                                        ? "text-black/45 hover:bg-black/[0.04] hover:text-black/80"
+                                        : "text-text-tertiary hover:bg-bg-hover hover:text-text-primary"
+                                    }`}
+                                    title="按质检建议重新生成"
+                                  >
+                                    <RefreshCw size={12} />
+                                    按建议重生
+                                  </button>
+                                ) : null}
+                              </div>
+                            ) : null}
+                            {message.qualityCheck && expandedQualityId === message.id ? (
+                              <div className={`mt-2 rounded-xl px-3 py-2 text-[12px] leading-6 ${
+                                isLightTheme
+                                  ? "border border-black/8 bg-black/[0.035] text-black/65"
+                                  : "border border-border-primary bg-bg-hover text-text-secondary"
+                              }`}>
+                                {message.qualityImprovement ? (
+                                  <>
+                                    <div className={message.qualityImprovement.delta >= 0 ? "font-medium text-emerald-500" : "font-medium text-amber-400"}>
+                                      本次优化（{message.qualityImprovement.previousScore}/100 → {message.qualityImprovement.nextScore}/100）
+                                    </div>
+                                    <div className="mt-1 space-y-1">
+                                      {message.qualityImprovement.improvements.map((item, itemIndex) => (
+                                        <div key={`${message.id}-improvement-${itemIndex}`}>优化：{item}</div>
+                                      ))}
+                                    </div>
+                                    {message.qualityImprovement.remainingIssues.length > 0 ? (
+                                      <div className="mt-2 opacity-80">
+                                        仍可优化：{message.qualityImprovement.remainingIssues.join("；")}
+                                      </div>
+                                    ) : null}
+                                    <div className="mt-2 text-[11px] opacity-60">
+                                      分数仅供参考，具体以实际出图质量和使用场景为准。
+                                    </div>
+                                  </>
+                                ) : (
+                                  <>
+                                    <div className={message.qualityCheck.passed ? "font-medium text-emerald-500" : "font-medium text-amber-400"}>
+                                      {message.qualityCheck.passed ? "质检通过" : "质检需关注"}（{Number(message.qualityCheck.score || 0)}/100）
+                                    </div>
+                                    {Array.isArray(message.qualityCheck.issues) && message.qualityCheck.issues.length > 0 ? (
+                                      <div className="mt-1 space-y-1">
+                                        {message.qualityCheck.issues.slice(0, 3).map((issue, issueIndex) => (
+                                          <div key={`${message.id}-quality-${issueIndex}`}>问题：{issue.message}</div>
+                                        ))}
+                                      </div>
+                                    ) : null}
+                                    {message.qualityCheck.suggestedFix ? (
+                                      <div className="mt-1">建议：{message.qualityCheck.suggestedFix}</div>
+                                    ) : null}
+                                    <div className="mt-2 text-[11px] opacity-60">
+                                      分数仅供参考，具体以实际出图质量和使用场景为准。
+                                    </div>
+                                  </>
+                                )}
                               </div>
                             ) : null}
                           </div>
@@ -1935,6 +2022,7 @@ export default function FloatingEntryWidget({
               width={132}
               height={132}
               className="relative w-[132px] h-[132px] object-contain"
+              unoptimized
               aria-hidden="true"
             />
           </button>

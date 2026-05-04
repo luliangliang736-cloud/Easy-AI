@@ -7,7 +7,7 @@ import {
 import {
   Maximize2, Download, Trash2, Copy,
   MessageSquare, Lock, Unlock, FileDown, Image as ImageIcon,
-  Minus, Plus, Scissors, Type,
+  Minus, Plus, Scissors, Type, Play, Pause,
 } from "lucide-react";
 import { flushSync } from "react-dom";
 import { useToast } from "@/components/Toast";
@@ -24,6 +24,10 @@ const SHAPE_COLOR_PRESETS = ["rgba(63, 202, 88, 0.18)", "rgba(255, 255, 255, 0.1
 
 function clampNumber(value, min, max) {
   return Math.min(max, Math.max(min, Number(value) || 0));
+}
+
+function getMaxShapeRadius(shape) {
+  return Math.floor(Math.min(Math.abs(shape?.w || 0), Math.abs(shape?.h || 0)) / 2);
 }
 
 function rgbToHex({ r, g, b }) {
@@ -134,7 +138,7 @@ function ShapeColorPicker({ value, onChange }) {
         className="relative h-44 w-full cursor-crosshair overflow-hidden rounded-xl"
         style={{
           backgroundColor: hueCss,
-          backgroundImage: "linear-gradient(90deg,#fff,rgba(255,255,255,0)),linear-gradient(0deg,#000,rgba(0,0,0,0))",
+          backgroundImage: "linear-gradient(180deg,rgba(0,0,0,0),#000),linear-gradient(90deg,#fff,rgba(255,255,255,0))",
         }}
         onPointerDown={(event) => {
           event.currentTarget.setPointerCapture(event.pointerId);
@@ -176,7 +180,9 @@ function ShapeColorPicker({ value, onChange }) {
       </div>
 
       <div className="mt-3 grid grid-cols-[74px_1fr_64px] overflow-hidden rounded-lg border border-border-primary bg-bg-tertiary text-sm">
-        <div className="border-r border-border-primary px-3 py-2 text-text-primary">Hex</div>
+        <div className="flex items-center gap-1 border-r border-border-primary px-3 py-2 text-text-primary">
+          Hex
+        </div>
         <input
           value={hex}
           onChange={(event) => {
@@ -184,7 +190,7 @@ function ShapeColorPicker({ value, onChange }) {
             if (!rgbValue) return;
             applyColor({ ...rgbToHsv(rgbValue), a: color.a });
           }}
-          className="min-w-0 bg-transparent px-3 py-2 text-text-primary outline-none"
+          className="min-w-0 bg-transparent px-3 py-2 text-center text-text-primary outline-none"
         />
         <div className="flex items-center border-l border-border-primary">
           <input
@@ -238,6 +244,9 @@ function getCanvasImageHeight(img, pos, meta) {
     const ratio = img.placeholderAspectRatio || 1;
     return Math.max(160, Math.round(pos.w / ratio));
   }
+  if (img.media_type === "video" || img.mediaType === "video") {
+    return meta ? (pos.w * meta.height) / meta.width : Math.round((pos.w * 9) / 16);
+  }
   return meta ? (pos.w * meta.height) / meta.width : pos.w;
 }
 
@@ -270,9 +279,10 @@ function ContextMenu({ x, y, img, isLocked, onClose, onAction }) {
     if (rect.bottom > vh) menuRef.current.style.top = `${y - rect.height}px`;
   }, [x, y]);
 
+  const isVideo = img?.media_type === "video" || img?.mediaType === "video";
   const items = [
     { id: "copy", label: "复制", icon: Copy },
-    { id: "sendToChat", label: "发送到对话", icon: MessageSquare },
+    ...(!isVideo ? [{ id: "sendToChat", label: "发送到对话", icon: MessageSquare }] : []),
     { id: "export", label: "导出", icon: FileDown },
     { id: "divider" },
     { id: "lock", label: isLocked ? "解锁" : "锁定", icon: isLocked ? Unlock : Lock },
@@ -353,10 +363,13 @@ export default function Canvas({
   const [multiSelectedTextIds, setMultiSelectedTextIds] = useState([]);
   const [selectedShapeId, setSelectedShapeId] = useState(null);
   const [activeShapeColorPickerId, setActiveShapeColorPickerId] = useState(null);
+  const [canvasBackgroundColor, setCanvasBackgroundColor] = useState("");
+  const [isCanvasColorPickerOpen, setIsCanvasColorPickerOpen] = useState(false);
   const [semanticSelection, setSemanticSelection] = useState(null);
   const [semanticSelectingImageId, setSemanticSelectingImageId] = useState(null);
   const [semanticPickModifierHeld, setSemanticPickModifierHeld] = useState(false);
   const [semanticPickCursorPos, setSemanticPickCursorPos] = useState(null);
+  const [playingVideoIds, setPlayingVideoIds] = useState([]);
   /** 按住空格临时平移（与 Figma 类似）；与 handlePointerDown 同步读取 */
   const spacePanHeldRef = useRef(false);
   /** 画布内 Ctrl/Cmd+C 复制后的数据（系统剪贴板失败时仍可粘贴） */
@@ -579,6 +592,23 @@ export default function Canvas({
     window.addEventListener("pointerdown", handlePointerDown);
     return () => window.removeEventListener("pointerdown", handlePointerDown);
   }, [upscaleMenuFor]);
+
+  useEffect(() => {
+    if (!isCanvasColorPickerOpen && !activeShapeColorPickerId) return undefined;
+    const handlePointerDown = (event) => {
+      const target = event.target;
+      if (
+        target?.closest?.("[data-color-picker-root]") ||
+        target?.closest?.("[data-color-picker-trigger]")
+      ) {
+        return;
+      }
+      setIsCanvasColorPickerOpen(false);
+      setActiveShapeColorPickerId(null);
+    };
+    window.addEventListener("pointerdown", handlePointerDown);
+    return () => window.removeEventListener("pointerdown", handlePointerDown);
+  }, [activeShapeColorPickerId, isCanvasColorPickerOpen]);
 
   /** 空格按住：可左键拖拽平移画布（输入框内不抢占空格） */
   useEffect(() => {
@@ -809,6 +839,8 @@ export default function Canvas({
   const isSelectTool = activeTool === "select";
   const isShapeTool = activeTool === "shape";
   const isLightTheme = theme === "light";
+  const defaultShapeFill = isLightTheme ? "#000000" : "#FFFFFF";
+  const resolvedCanvasColor = canvasBackgroundColor || (isLightTheme ? "#f4f5f7" : "#0b0b0c");
   const quickEditActions = [
     { id: "cutout", label: "抠图", icon: Scissors },
     { id: "upscale", label: "高清放大", icon: Maximize2 },
@@ -1223,6 +1255,7 @@ export default function Canvas({
         width: 240,
         isDraft: true,
       }, { select: true, isNew: true });
+      onToolChange?.("select");
       return;
     }
 
@@ -1305,7 +1338,13 @@ export default function Canvas({
         nextY = act.handle.includes("n") ? act.origY + act.origH - MIN_SHAPE_PIXELS : nextY;
         nextH = MIN_SHAPE_PIXELS;
       }
-      onUpdateShape(act.id, { x: nextX, y: nextY, w: nextW, h: nextH });
+      onUpdateShape(act.id, {
+        x: nextX,
+        y: nextY,
+        w: nextW,
+        h: nextH,
+        radius: Math.min(act.origRadius || 0, Math.floor(Math.min(nextW, nextH) / 2)),
+      });
     } else if (act.type === "marquee") {
       const rect = containerRef.current?.getBoundingClientRect();
       if (!rect) return;
@@ -1366,11 +1405,13 @@ export default function Canvas({
           y: y1,
           w,
           h,
-          fill: SHAPE_COLOR_PRESETS[0],
+          radius: 0,
+          fill: defaultShapeFill,
         });
         setSelectedShapeId(id);
         onSelectImage?.(null);
         setSelectedTextId(null);
+        onToolChange?.("select");
       }
       setAction(null);
       try { e.currentTarget.releasePointerCapture(e.pointerId); } catch {}
@@ -1470,7 +1511,7 @@ export default function Canvas({
     }
     setAction(null);
     try { e.currentTarget.releasePointerCapture(e.pointerId); } catch {}
-  }, [onUpdateImage, onSelectImage, onAddShape, onSyncCanvasRefImages, images, renderImages]);
+  }, [onUpdateImage, onSelectImage, onAddShape, onToolChange, onSyncCanvasRefImages, images, renderImages, defaultShapeFill]);
 
   const handleContextMenu = useCallback((e) => {
     e.preventDefault();
@@ -1508,7 +1549,8 @@ export default function Canvas({
           const url = URL.createObjectURL(blob);
           const a = document.createElement("a");
           a.href = url;
-          a.download = `image-${Date.now()}.png`;
+          const isVideo = img.media_type === "video" || img.mediaType === "video";
+          a.download = `${isVideo ? "video" : "image"}-${Date.now()}.${isVideo ? "mp4" : "png"}`;
           a.click();
           URL.revokeObjectURL(url);
           toast("已导出", "success", 1200);
@@ -1687,7 +1729,7 @@ export default function Canvas({
       ref={containerRef}
       className={`flex-1 relative overflow-hidden select-none ${cursor}`}
       style={{
-        background: "var(--bg-primary)",
+        background: canvasBackgroundColor || "var(--bg-primary)",
       }}
       onPointerDownCapture={handleMiddleButtonPanCapture}
       onPointerDown={handlePointerDown}
@@ -1777,11 +1819,23 @@ export default function Canvas({
           const h = Math.abs(a.cy - a.sy);
           return (
             <div
-              className={`absolute pointer-events-none z-[12] border-2 border-dashed border-emerald-400/90 bg-emerald-500/10 ${
-                a.kind === "ellipse" ? "rounded-full" : "rounded-md"
+              className={`absolute pointer-events-none z-[12] border-2 border-accent ${
+                a.kind === "ellipse" ? "rounded-full" : ""
               }`}
-              style={{ left: x, top: y, width: w, height: h }}
-            />
+              style={{ left: x, top: y, width: w, height: h, backgroundColor: defaultShapeFill }}
+            >
+              {[
+                ["left-[-5px] top-[-5px]"],
+                ["right-[-5px] top-[-5px]"],
+                ["left-[-5px] bottom-[-5px]"],
+                ["right-[-5px] bottom-[-5px]"],
+              ].map(([position]) => (
+                <div
+                  key={position}
+                  className={`absolute h-2.5 w-2.5 border border-accent bg-white ${position}`}
+                />
+              ))}
+            </div>
           );
         })()}
 
@@ -1835,12 +1889,15 @@ export default function Canvas({
             isHighlighted && multiSelectedImageIds.length === 0;
           const isLocked = lockedRef.current.has(img.id);
           const meta = imageMetaRef.current[img.id];
+          const isVideo = img.media_type === "video" || img.mediaType === "video";
           const semanticForImage = semanticSelection?.imageId === img.id ? semanticSelection : null;
           const semanticBox = semanticForImage?.bbox;
           const semanticLabel = semanticForImage?.label ? String(semanticForImage.label).trim() : "";
           const displayHeight = meta
             ? Math.round((pos.w * meta.height) / meta.width)
-            : Math.round(pos.w);
+            : isVideo
+              ? Math.round((pos.w * 9) / 16)
+              : Math.round(pos.w);
           const sizeLabel =
             meta?.width && meta?.height
               ? `${meta.width} × ${meta.height} px`
@@ -1856,7 +1913,7 @@ export default function Canvas({
               {isChromeSingle && (
                 <div className="absolute left-0 right-0 bottom-full mb-2 z-10 flex flex-col gap-2">
                   <div className="flex items-center gap-2 px-2 py-1.5 rounded-xl border border-border-primary bg-bg-primary/92 backdrop-blur-xl shadow-lg pointer-events-auto overflow-visible">
-                    {quickEditActions.map((action) => {
+                    {(isVideo ? [] : quickEditActions).map((action) => {
                       if (action.id === "upscale") {
                         return (
                           <div key={action.id} className="relative">
@@ -1927,12 +1984,12 @@ export default function Canvas({
                       );
                     })}
                   </div>
-                  <div className="flex items-center justify-between gap-2 text-[10px] text-accent pointer-events-none">
-                    <div className="flex items-center gap-1.5 px-1.5 py-0.5 rounded-md bg-bg-primary/90 border border-accent/40 min-w-0">
+                  <div className="flex items-center justify-between gap-2 text-[10px] text-text-primary pointer-events-none">
+                    <div className="flex items-center gap-1.5 px-1.5 py-0.5 min-w-0">
                       <ImageIcon size={10} />
-                      <span className="truncate">{img.prompt || "Image"}</span>
+                      <span className="truncate">{img.prompt || (isVideo ? "Video" : "Image")}</span>
                     </div>
-                    <div className="px-1.5 py-0.5 rounded-md bg-bg-primary/90 border border-accent/40 shrink-0" title="原图像素尺寸">
+                    <div className="px-1.5 py-0.5 shrink-0" title="原图像素尺寸">
                       {sizeLabel}
                     </div>
                   </div>
@@ -1941,25 +1998,76 @@ export default function Canvas({
 
               {/* 选区手柄相对图片线框定位，避免与下方标题栏错位 */}
               <div className="relative w-full">
-                <div className={`rounded-xl overflow-hidden border-2 transition-colors ${
+                <div className={`overflow-hidden border transition-colors ${
                   isHighlighted ? "border-accent" : "border-transparent hover:border-border-secondary"
                 }`}>
-                  <img
-                    src={img.image_url}
-                    alt={img.prompt}
-                    className="w-full block pointer-events-none"
-                    draggable={false}
-                    onLoad={(e) => {
-                      const { naturalWidth, naturalHeight } = e.currentTarget;
-                      if (naturalWidth && naturalHeight) {
-                        imageMetaRef.current[img.id] = {
-                          width: naturalWidth,
-                          height: naturalHeight,
-                        };
-                        forceRender();
-                      }
-                    }}
-                  />
+                  {isVideo ? (
+                    <video
+                      src={img.image_url}
+                      className="w-full block pointer-events-none bg-black"
+                      draggable={false}
+                      playsInline
+                      onPlay={() => {
+                        setPlayingVideoIds((prev) => (prev.includes(img.id) ? prev : [...prev, img.id]));
+                      }}
+                      onPause={() => {
+                        setPlayingVideoIds((prev) => prev.filter((id) => id !== img.id));
+                      }}
+                      onEnded={() => {
+                        setPlayingVideoIds((prev) => prev.filter((id) => id !== img.id));
+                      }}
+                      onLoadedMetadata={(e) => {
+                        const { videoWidth, videoHeight } = e.currentTarget;
+                        if (videoWidth && videoHeight) {
+                          imageMetaRef.current[img.id] = {
+                            width: videoWidth,
+                            height: videoHeight,
+                          };
+                          forceRender();
+                        }
+                      }}
+                    />
+                  ) : (
+                    <img
+                      src={img.image_url}
+                      alt={img.prompt}
+                      className="w-full block pointer-events-none"
+                      draggable={false}
+                      onLoad={(e) => {
+                        const { naturalWidth, naturalHeight } = e.currentTarget;
+                        if (naturalWidth && naturalHeight) {
+                          imageMetaRef.current[img.id] = {
+                            width: naturalWidth,
+                            height: naturalHeight,
+                          };
+                          forceRender();
+                        }
+                      }}
+                    />
+                  )}
+                  {isVideo && (
+                    <button
+                      type="button"
+                      onPointerDown={(e) => e.stopPropagation()}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        const video = e.currentTarget.parentElement?.querySelector("video");
+                        if (!video) return;
+                        if (video.paused) {
+                          void video.play();
+                        } else {
+                          video.pause();
+                        }
+                      }}
+                      className={`absolute left-2 bottom-2 z-10 inline-flex items-center gap-1.5 rounded-lg bg-black/62 px-2.5 py-1.5 text-[11px] font-medium text-white shadow-lg backdrop-blur-sm transition-opacity hover:bg-black/78 ${
+                        isHighlighted ? "opacity-100" : "opacity-0 group-hover:opacity-100"
+                      }`}
+                      title={playingVideoIds.includes(img.id) ? "暂停视频" : "播放视频"}
+                    >
+                      {playingVideoIds.includes(img.id) ? <Pause size={12} /> : <Play size={12} />}
+                      {playingVideoIds.includes(img.id) ? "暂停" : "播放"}
+                    </button>
+                  )}
                   {semanticForImage?.maskDataUrl && (
                     <img
                       src={semanticForImage.maskDataUrl}
@@ -2032,30 +2140,57 @@ export default function Canvas({
 
                 {isChromeSingle && (
                   <>
-                    <div className="absolute -top-1.5 -left-1.5 w-3.5 h-3.5 bg-bg-primary border-2 border-accent rounded-[2px] pointer-events-none" />
-                    <div className="absolute -top-1.5 -right-1.5 w-3.5 h-3.5 bg-bg-primary border-2 border-accent rounded-[2px] pointer-events-none" />
-                    <div className="absolute -bottom-1.5 -left-1.5 w-3.5 h-3.5 bg-bg-primary border-2 border-accent rounded-[2px] pointer-events-none" />
-                    {isLocked ? (
-                      <div className="absolute -bottom-1.5 -right-1.5 w-3.5 h-3.5 bg-bg-primary border-2 border-accent rounded-[2px] pointer-events-none" />
-                    ) : (
+                    {[
+                      ["nw", "-top-1 -left-1", "cursor-nwse-resize"],
+                      ["ne", "-top-1 -right-1", "cursor-nesw-resize"],
+                      ["sw", "-bottom-1 -left-1", "cursor-nesw-resize"],
+                      ["se", "-bottom-1 -right-1", "cursor-nwse-resize"],
+                    ].map(([handle, positionClass, resizeCursor]) => (
                       <div
-                        className="absolute -bottom-1.5 -right-1.5 w-3.5 h-3.5 bg-bg-primary rounded-[2px] cursor-nwse-resize border-2 border-accent"
+                        key={handle}
+                        className={`absolute h-1.5 w-1.5 border border-accent bg-white ${
+                          isLocked ? "pointer-events-none" : resizeCursor
+                        } ${positionClass}`}
                         onPointerDown={(e) => {
+                          if (isLocked) return;
+                          e.preventDefault();
                           e.stopPropagation();
                           const startX = e.clientX;
-                          const startW = pos.w;
+                          const startY = e.clientY;
+                          const orig = { ...pos };
+                          const origHeight = displayHeight;
+                          const heightRatio = origHeight / orig.w || 1;
                           const onMove = (ev) => {
                             const sc = cameraRef.current.zoom / 100;
-                            const dw = (ev.clientX - startX) / sc;
-                            positionsRef.current[img.id] = { ...positionsRef.current[img.id], w: Math.max(120, startW + dw) };
+                            const dx = (ev.clientX - startX) / sc;
+                            const dy = (ev.clientY - startY) / sc;
+                            const widthFromX = handle.includes("e") ? orig.w + dx : orig.w - dx;
+                            const heightFromY = handle.includes("s") ? origHeight + dy : origHeight - dy;
+                            const widthFromY = heightFromY / heightRatio;
+                            const nextW = Math.max(
+                              120,
+                              Math.abs(dx) > Math.abs(dy / heightRatio) ? widthFromX : widthFromY
+                            );
+                            const nextH = nextW * heightRatio;
+                            positionsRef.current[img.id] = {
+                              ...positionsRef.current[img.id],
+                              x: handle.includes("w") ? orig.x + orig.w - nextW : orig.x,
+                              y: handle.includes("n") ? orig.y + origHeight - nextH : orig.y,
+                              w: nextW,
+                            };
                             forceRender();
                           };
-                          const onUp = () => { window.removeEventListener("pointermove", onMove); window.removeEventListener("pointerup", onUp); };
+                          const onUp = () => {
+                            window.removeEventListener("pointermove", onMove);
+                            window.removeEventListener("pointerup", onUp);
+                            const nextPos = positionsRef.current[img.id];
+                            if (nextPos) onUpdateImage?.(img.id, nextPos);
+                          };
                           window.addEventListener("pointermove", onMove);
                           window.addEventListener("pointerup", onUp);
                         }}
                       />
-                    )}
+                    ))}
                   </>
                 )}
               </div>
@@ -2070,6 +2205,8 @@ export default function Canvas({
         {shapeItems.map((s) => {
           const selected = selectedShapeId === s.id;
           const fill = s.fill || SHAPE_COLOR_PRESETS[0];
+          const maxRadius = getMaxShapeRadius(s);
+          const shapeRadius = s.kind === "ellipse" ? maxRadius : clampNumber(s.radius ?? 0, 0, maxRadius);
           const handles = [
             ["nw", -6, -6, "cursor-nwse-resize"],
             ["ne", s.w - 6, -6, "cursor-nesw-resize"],
@@ -2082,7 +2219,7 @@ export default function Canvas({
               data-shape-item={s.id}
               className={`absolute z-[15] pointer-events-auto border-2 transition-colors ${
                 selected ? "shadow-[0_0_0_1px_rgba(63,202,88,0.35)]" : "border-transparent hover:border-accent/35"
-              } ${s.kind === "ellipse" ? "rounded-full" : "rounded-lg"}`}
+              }`}
               style={{
                 left: s.x,
                 top: s.y,
@@ -2090,6 +2227,7 @@ export default function Canvas({
                 height: s.h,
                 background: fill,
                 borderColor: selected ? "var(--accent)" : "transparent",
+                borderRadius: s.kind === "ellipse" ? "50%" : `${shapeRadius}px`,
               }}
             >
               {selected && (
@@ -2100,6 +2238,7 @@ export default function Canvas({
                   >
                     <button
                       type="button"
+                      data-color-picker-trigger
                       title="打开颜色选择器"
                       aria-label="打开颜色选择器"
                       className="h-6 w-6 rounded-full border-2 border-accent shadow-sm transition-transform hover:scale-105"
@@ -2107,6 +2246,26 @@ export default function Canvas({
                       onClick={() => setActiveShapeColorPickerId((current) => (current === s.id ? null : s.id))}
                     />
                     <div className="mx-0.5 h-5 w-px bg-border-primary" />
+                    {s.kind !== "ellipse" && (
+                      <>
+                        <label className="flex h-7 items-center gap-1 rounded-md px-1 text-[11px] text-text-secondary">
+                          <span>R</span>
+                          <input
+                            type="number"
+                            min="0"
+                            max={maxRadius}
+                            value={Math.round(shapeRadius)}
+                            onChange={(event) => {
+                              onUpdateShape?.(s.id, {
+                                radius: clampNumber(event.target.value, 0, maxRadius),
+                              });
+                            }}
+                            className="w-10 bg-transparent text-center text-text-primary outline-none"
+                          />
+                        </label>
+                        <div className="mx-0.5 h-5 w-px bg-border-primary" />
+                      </>
+                    )}
                     <button
                       type="button"
                       title="删除形状"
@@ -2120,6 +2279,7 @@ export default function Canvas({
                     </button>
                     {activeShapeColorPickerId === s.id && (
                       <div
+                        data-color-picker-root
                         className="absolute left-0 bottom-[calc(100%+8px)] z-50"
                         onPointerDown={(e) => e.stopPropagation()}
                       >
@@ -2151,6 +2311,7 @@ export default function Canvas({
                           origY: s.y,
                           origW: s.w,
                           origH: s.h,
+                          origRadius: shapeRadius,
                         });
                         try {
                           containerRef.current?.setPointerCapture(e.pointerId);
@@ -2372,6 +2533,18 @@ export default function Canvas({
 
       {/* Floating toolbar at bottom center */}
       <div data-toolbar>
+        {isCanvasColorPickerOpen && (
+          <div
+            data-color-picker-root
+            className="absolute bottom-20 left-1/2 z-30 -translate-x-1/2"
+            onPointerDown={(e) => e.stopPropagation()}
+          >
+            <ShapeColorPicker
+              value={resolvedCanvasColor}
+              onChange={(nextColor) => setCanvasBackgroundColor(nextColor)}
+            />
+          </div>
+        )}
         <Toolbar
           activeTool={activeTool}
           onToolChange={onToolChange}
@@ -2379,6 +2552,8 @@ export default function Canvas({
           onZoomChange={handleToolbarZoomChange}
           shapeMode={shapeMode}
           onShapeModeChange={onShapeModeChange}
+          canvasColor={resolvedCanvasColor}
+          onToggleCanvasColorPicker={() => setIsCanvasColorPickerOpen((open) => !open)}
         />
       </div>
 

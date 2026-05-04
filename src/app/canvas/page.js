@@ -20,6 +20,13 @@ function errStr(e) {
   return e.message || e.error || JSON.stringify(e);
 }
 
+function normalizeInspirationUrl(value = "") {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  if (/^https?:\/\//i.test(raw)) return raw;
+  return `https://${raw}`;
+}
+
 function parseQuantityToken(tok) {
   if (!tok) return 0;
   const t = String(tok).trim();
@@ -602,7 +609,7 @@ function sanitizeConversationsForStorage(conversations) {
 
 function sanitizeCanvasImagesForStorage(items) {
   if (!Array.isArray(items)) return [];
-  // base64 图片太大，只保留 HTTPS URL（Nano API / CDN 链接）
+  // base64 图片/视频太大，只保留 HTTPS URL（Nano/Kling API / CDN 链接）
   return items.filter((item) => item && isHttpsUrl(item.image_url));
 }
 
@@ -692,9 +699,18 @@ const MODEL_LABELS = {
   "gemini-3-pro-image-preview-2k": "Pro 2K",
   "gemini-3-pro-image-preview-4k": "Pro 4K",
   "gpt-image-2": "GPT Image 2",
+  "kling-v2-6": "Kling-V2-6 视频",
+  "kling-v3": "Kling-V3 视频",
+  "kling-v3-omni": "Kling-V3-Omni 视频",
 };
 
 const GPT_IMAGE_2_MODEL = "gpt-image-2";
+const KLING_VIDEO_MODELS = new Set(["kling-v2-6", "kling-v3", "kling-v3-omni"]);
+
+function isKlingVideoModel(model) {
+  const value = String(model || "").trim().toLowerCase();
+  return KLING_VIDEO_MODELS.has(value) || value.startsWith("kling-video") || value.startsWith("kling-v");
+}
 
 const UPSCALE_MODELS = {
   flash: {
@@ -715,12 +731,7 @@ const UPSCALE_MODELS = {
 };
 
 function resolveUpscaleModel(currentModel, targetSize) {
-  const family = currentModel?.startsWith("gemini-3-pro-image-preview")
-    ? "pro"
-    : currentModel?.startsWith("gemini-3.1-flash-image-preview")
-      ? "flash2"
-      : "flash";
-  return UPSCALE_MODELS[family]?.[targetSize] || UPSCALE_MODELS.flash2[targetSize];
+  return "gemini-3-pro-image-preview";
 }
 
 function normalizeTextEditBlocks(blocks = []) {
@@ -856,10 +867,16 @@ function HomeInner() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [isTextEditing, setIsTextEditing] = useState(false);
   const [panelWidth, setPanelWidth] = useState(340);
+  const [isInspirationMode, setIsInspirationMode] = useState(false);
+  const [inspirationUrl, setInspirationUrl] = useState("");
+  const [activeInspirationUrl, setActiveInspirationUrl] = useState("");
+  const [inspirationPanelWidth, setInspirationPanelWidth] = useState(380);
+  const [isInspirationResizing, setIsInspirationResizing] = useState(false);
   const [historySearch, setHistorySearch] = useState("");
   const canvasRef = useRef(null);
   const generationAbortRef = useRef(null);
   const activeGenerationRef = useRef(null);
+  const inspirationResizeFrameRef = useRef(0);
   // 标记 localStorage 已加载完毕，加载前禁止持久化 effect 写入（避免覆盖已保存的数据）
   const persistReadyRef = useRef(false);
   const activeConversation = conversations.find((conversation) => conversation.id === activeConversationId) || conversations[0];
@@ -1149,6 +1166,59 @@ function HomeInner() {
     }
   }, []);
 
+  const handleOpenInspirationUrl = useCallback(() => {
+    const nextUrl = normalizeInspirationUrl(inspirationUrl);
+    if (!nextUrl) return;
+    setActiveInspirationUrl(nextUrl);
+    setInspirationUrl(nextUrl);
+  }, [inspirationUrl]);
+
+  const handleInspirationResizeStart = useCallback((event) => {
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = inspirationPanelWidth;
+    setIsInspirationResizing(true);
+
+    const handlePointerMove = (moveEvent) => {
+      const maxWidth = Math.min(window.innerWidth - panelWidth - 280, 1400);
+      const nextWidth = Math.min(maxWidth, Math.max(220, startWidth + moveEvent.clientX - startX));
+      if (inspirationResizeFrameRef.current) {
+        window.cancelAnimationFrame(inspirationResizeFrameRef.current);
+      }
+      inspirationResizeFrameRef.current = window.requestAnimationFrame(() => {
+        setInspirationPanelWidth(nextWidth);
+        inspirationResizeFrameRef.current = 0;
+      });
+    };
+
+    const handlePointerUp = () => {
+      if (inspirationResizeFrameRef.current) {
+        window.cancelAnimationFrame(inspirationResizeFrameRef.current);
+        inspirationResizeFrameRef.current = 0;
+      }
+      setIsInspirationResizing(false);
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
+  }, [inspirationPanelWidth, panelWidth]);
+
+  useEffect(() => {
+    return () => {
+      if (inspirationResizeFrameRef.current) {
+        window.cancelAnimationFrame(inspirationResizeFrameRef.current);
+      }
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+  }, []);
+
   const handleGenerate = useCallback(async (retryPayload = null) => {
     const sourceText = retryPayload?.text ?? prompt;
     const effectiveTextEditBlocks = retryPayload?.textEditBlocks || textEditBlocks;
@@ -1171,7 +1241,7 @@ function HomeInner() {
     const preserveComposer = Boolean(retryPayload?.preserveComposer);
     const hidePlaceholderPrompt = Boolean(retryPayload?.hidePlaceholderPrompt);
     const editMode = retryPayload?.editMode || null;
-    if (!text || isBusy || !activeConversationId) return;
+    if (!text || !activeConversationId) return;
 
     if (
       POINT_IMAGE_EDIT_ENABLED
@@ -1181,6 +1251,7 @@ function HomeInner() {
       && !retryPayload?.disableSemanticEdit
       )
     ) {
+      if (isBusy) return;
       const ts = Date.now();
       const conversationId = activeConversationId;
       const userMsgId = `user-object-edit-${ts}`;
@@ -1293,9 +1364,11 @@ function HomeInner() {
         }
       : effectiveParams;
     const hasImages = effectiveRefImages.length > 0;
-    const shouldUseEditApi = Boolean(editMode) || hasImages;
     const requestParams = resolvedParams;
+    const isKlingVideoRequest = isKlingVideoModel(requestParams.model);
+    const shouldUseEditApi = !isKlingVideoRequest && (Boolean(editMode) || hasImages);
     const modelLabel = MODEL_LABELS[requestParams.model] || requestParams.model;
+    if (!isKlingVideoRequest && isBusy) return;
 
     const messageRefImages = hasImages
       ? await Promise.all(effectiveRefImages.map((img) => makeMessagePreviewImage(img)))
@@ -1303,7 +1376,9 @@ function HomeInner() {
 
     const inferred = inferLoopCountFromPrompt(composerText);
     const isEditLikeRequest = shouldUseEditApi;
-    const requestedCount = isEditLikeRequest
+    const requestedCount = isKlingVideoRequest
+      ? 1
+      : isEditLikeRequest
       ? (inferred || 1)
       : Math.max(effectiveParams.num || 1, inferred);
     const count = Math.min(
@@ -1342,25 +1417,37 @@ function HomeInner() {
       status: "generating",
       tasks,
       urls: [],
+      mediaType: isKlingVideoRequest ? "video" : "image",
       error: null,
       entryMode: activeEntryMode,
       composerMode: activeComposerMode,
     };
 
     updateConversationMessages(conversationId, (prev) => [...prev, userMsg, aiMsg]);
-    setIsGenerating(true);
+    if (!isKlingVideoRequest) {
+      setIsGenerating(true);
+    }
     if (!preserveComposer) {
       setPrompt("");
     }
     try {
       const requestController = new AbortController();
-      generationAbortRef.current = requestController;
-      activeGenerationRef.current = {
-        conversationId,
-        aiMsgId,
-        controller: requestController,
-        cancelled: false,
-      };
+      if (!isKlingVideoRequest) {
+        generationAbortRef.current = requestController;
+        activeGenerationRef.current = {
+          conversationId,
+          aiMsgId,
+          controller: requestController,
+          cancelled: false,
+        };
+      }
+      const shouldCancelTaskForStaleGeneration = () =>
+        !isKlingVideoRequest &&
+        (
+          activeGenerationRef.current?.conversationId !== conversationId ||
+          activeGenerationRef.current?.aiMsgId !== aiMsgId ||
+          activeGenerationRef.current?.cancelled
+        );
       const preparedImages = await Promise.all(
         effectiveRefImages.map((img) => {
           if (typeof img !== "string") {
@@ -1404,6 +1491,7 @@ function HomeInner() {
           isGeneratingPlaceholder: true,
           generationStatus: "pending",
           placeholderAspectRatio,
+          mediaType: isKlingVideoRequest ? "video" : "image",
         })),
       ]);
 
@@ -1411,11 +1499,7 @@ function HomeInner() {
         tasks,
         Math.min(MAX_PARALLEL_GENERATIONS, count),
         async (task) => {
-          if (
-            activeGenerationRef.current?.conversationId !== conversationId ||
-            activeGenerationRef.current?.aiMsgId !== aiMsgId ||
-            activeGenerationRef.current?.cancelled
-          ) {
+          if (shouldCancelTaskForStaleGeneration()) {
             return { status: "cancelled" };
           }
 
@@ -1438,7 +1522,23 @@ function HomeInner() {
 
           try {
             let res;
-            if (shouldUseEditApi) {
+            if (isKlingVideoRequest) {
+              res = await fetchWithTimeout("/api/kling-video", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                signal: requestController.signal,
+                body: JSON.stringify({
+                  prompt: requestPrompt,
+                  model: requestParams.model,
+                  image_size: imageSize,
+                  aspect_ratio: imageSize,
+                  duration: requestParams.duration || "5",
+                  mode: requestParams.mode || "pro",
+                  sound: requestParams.sound || "off",
+                  ref_images: preparedImages.slice(0, 2),
+                }),
+              }, IMAGE_REQUEST_TIMEOUT_MS);
+            } else if (shouldUseEditApi) {
               res = await fetchWithTimeout("/api/edit", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
@@ -1478,40 +1578,40 @@ function HomeInner() {
             }
 
             const data = await parseApiResponse(res);
-            if (
-              activeGenerationRef.current?.conversationId !== conversationId ||
-              activeGenerationRef.current?.aiMsgId !== aiMsgId ||
-              activeGenerationRef.current?.cancelled
-            ) {
+            if (shouldCancelTaskForStaleGeneration()) {
               return { status: "cancelled" };
             }
 
             if (!res.ok || data.error) {
+              const errorMessage = errStr(data.error || `请求失败（${res.status}）`);
               patchTask(conversationId, aiMsgId, taskId, {
                 status: "failed",
-                error: errStr(data.error || `请求失败（${res.status}）`),
+                error: errorMessage,
               });
               setCanvasGeneratingItems((prev) =>
                 prev.filter((item) => item.id !== canvasItemId)
               );
-              return { status: "failed" };
+              return { status: "failed", error: errorMessage };
             }
 
             const urls = data.data?.urls || [];
+            const mediaType = data.data?.mediaType || (isKlingVideoRequest ? "video" : "image");
             const url = urls[0];
             if (!url) {
+              const errorMessage = isKlingVideoRequest ? "未返回视频" : "未返回图片";
               patchTask(conversationId, aiMsgId, taskId, {
                 status: "failed",
-                error: "未返回图片",
+                error: errorMessage,
               });
               setCanvasGeneratingItems((prev) =>
                 prev.filter((item) => item.id !== canvasItemId)
               );
-              return { status: "failed" };
+              return { status: "failed", error: errorMessage };
             }
             patchTask(conversationId, aiMsgId, taskId, {
               status: "completed",
               url,
+              type: mediaType,
               error: null,
             });
             setCanvasGeneratingItems((prev) =>
@@ -1522,19 +1622,23 @@ function HomeInner() {
               {
                 id: canvasItemId,
                 image_url: url,
+                media_type: mediaType,
                 prompt: displayText,
               },
             ]);
             return { status: "completed" };
           } catch (err) {
             if (
-              activeGenerationRef.current?.conversationId !== conversationId ||
-              activeGenerationRef.current?.aiMsgId !== aiMsgId
+              !isKlingVideoRequest &&
+              (
+                activeGenerationRef.current?.conversationId !== conversationId ||
+                activeGenerationRef.current?.aiMsgId !== aiMsgId
+              )
             ) {
               return { status: "cancelled" };
             }
             if (err?.name === "AbortError") {
-              if (!activeGenerationRef.current?.cancelled) {
+              if (isKlingVideoRequest || !activeGenerationRef.current?.cancelled) {
                 patchTask(conversationId, aiMsgId, taskId, {
                   status: "failed",
                   error: "请求超时。可稍后重试，或减少张数以降低排队压力。",
@@ -1542,7 +1646,7 @@ function HomeInner() {
                 setCanvasGeneratingItems((prev) =>
                   prev.filter((item) => item.id !== canvasItemId)
                 );
-                return { status: "failed" };
+                return { status: "failed", error: "请求超时。可稍后重试，或减少张数以降低排队压力。" };
               }
               setCanvasGeneratingItems((prev) =>
                 prev.filter((item) => item.id !== canvasItemId)
@@ -1556,7 +1660,7 @@ function HomeInner() {
             setCanvasGeneratingItems((prev) =>
               prev.filter((item) => item.id !== canvasItemId)
             );
-            return { status: "failed" };
+            return { status: "failed", error: errStr(err) };
           }
         }
       );
@@ -1566,18 +1670,28 @@ function HomeInner() {
       ), 0);
 
       if (
-        activeGenerationRef.current?.conversationId === conversationId &&
-        activeGenerationRef.current?.aiMsgId === aiMsgId &&
-        !activeGenerationRef.current?.cancelled
+        isKlingVideoRequest ||
+        (
+          activeGenerationRef.current?.conversationId === conversationId &&
+          activeGenerationRef.current?.aiMsgId === aiMsgId &&
+          !activeGenerationRef.current?.cancelled
+        )
       ) {
         updateMessage(conversationId, aiMsgId, {
           status: successCount > 0 ? "completed" : "failed",
-          error: successCount === 0 ? "全部任务失败" : null,
+          mediaType: isKlingVideoRequest ? "video" : "image",
+          error: successCount === 0
+            ? (taskResults.find((result) => result?.error)?.error || "全部任务失败")
+            : null,
         });
         toast(
           successCount > 0
-            ? `生成完成，${successCount}/${count} 张已添加到画布`
-            : `生成结束，0/${count} 张成功`,
+            ? isKlingVideoRequest
+              ? "视频生成完成，已添加到画布"
+              : `生成完成，${successCount}/${count} 张已添加到画布`
+            : isKlingVideoRequest
+              ? "视频生成失败"
+              : `生成结束，0/${count} 张成功`,
           successCount > 0 ? "success" : "info",
           2200
         );
@@ -1588,6 +1702,7 @@ function HomeInner() {
       }
     } catch (err) {
       if (
+        !isKlingVideoRequest &&
         activeGenerationRef.current?.conversationId === conversationId &&
         activeGenerationRef.current?.aiMsgId === aiMsgId &&
         activeGenerationRef.current?.cancelled
@@ -1618,13 +1733,16 @@ function HomeInner() {
         prev.filter((item) => item.aiMsgId !== aiMsgId)
       );
       if (
+        !isKlingVideoRequest &&
         activeGenerationRef.current?.conversationId === conversationId &&
         activeGenerationRef.current?.aiMsgId === aiMsgId
       ) {
         activeGenerationRef.current = null;
       }
-      generationAbortRef.current = null;
-      setIsGenerating(false);
+      if (!isKlingVideoRequest) {
+        generationAbortRef.current = null;
+        setIsGenerating(false);
+      }
     }
   }, [
     composerMode,
@@ -1687,6 +1805,10 @@ function HomeInner() {
   }, [canvasHistory, toast]);
 
   const handleSendToChat = useCallback((img) => {
+    if (img?.media_type === "video" || img?.mediaType === "video") {
+      toast("视频暂不能作为参考图发送到对话", "info", 1500);
+      return;
+    }
     if (img?.image_url) {
       setRefImages((prev) => [...prev, img.image_url]);
       toast("已发送到对话", "success", 1500);
@@ -1973,7 +2095,7 @@ function HomeInner() {
     setTextEditPanelVisible(false);
       setSemanticSelection(null);
     await handleGenerate({
-      text: `请基于这张参考图做高清放大与细节增强，直接输出 ${targetSize} 高分辨率版本，保持主体、构图、文字内容与风格一致，不要改图，不要新增元素。`,
+      text: `请基于这张参考图做高清放大与细节增强，尽量输出接近 ${targetSize} 的高分辨率版本，保持主体、构图、文字内容与风格一致，不要改图，不要新增元素。`,
       params: {
         ...params,
         model,
@@ -2061,10 +2183,12 @@ function HomeInner() {
 
   const handleDropGeneratedImage = useCallback((item, dropX, dropY) => {
     if (!item?.url) return;
+    const mediaType = item.mediaType === "video" ? "video" : "image";
     const newImg = {
       id: `chat-drop-${Date.now()}`,
       image_url: item.url,
-      prompt: item.prompt || "拖入图片",
+      media_type: mediaType,
+      prompt: item.prompt || (mediaType === "video" ? "拖入视频" : "拖入图片"),
     };
     canvasHistory.push((prev) => [...prev, newImg]);
     toast("已添加到画布", "success", 1200);
@@ -2120,13 +2244,14 @@ function HomeInner() {
   const handleDownload = useCallback(async (msg) => {
     const url = msg.image_url;
     if (!url) return;
+    const isVideo = msg.mediaType === "video" || msg.media_type === "video";
     try {
       const res = await fetch(url);
       const blob = await res.blob();
       const blobUrl = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = blobUrl;
-      a.download = `image-${Date.now()}.png`;
+      a.download = `${isVideo ? "video" : "image"}-${Date.now()}.${isVideo ? "mp4" : "png"}`;
       a.click();
       URL.revokeObjectURL(blobUrl);
       toast("已下载", "success", 1200);
@@ -2225,17 +2350,98 @@ function HomeInner() {
 
   return (
     <div className="h-screen flex overflow-hidden">
-      <Link
-        href="/"
-        className="absolute top-3 z-30 flex items-center px-0.5 py-0.5 transition-opacity hover:opacity-80"
-        style={{ left: 12 }}
-        title="返回首页"
+      <div
+        className="absolute top-3 z-30 flex items-center gap-2 transition-[left]"
+        style={{ left: isInspirationMode ? inspirationPanelWidth + 12 : 12 }}
       >
-        <BrandLogo
-          className="h-7"
-          wordmarkOffsetClassName={`translate-y-[2px] ${theme === "light" ? "invert" : ""}`}
-        />
-      </Link>
+        <Link
+          href="/"
+          className="flex items-center px-0.5 py-0.5 transition-opacity hover:opacity-80"
+          title="返回首页"
+        >
+          <BrandLogo
+            className="h-7"
+            showText={false}
+            wordmarkOffsetClassName={`translate-y-[2px] ${theme === "light" ? "invert" : ""}`}
+          />
+        </Link>
+        <button
+          type="button"
+          onClick={() => setIsInspirationMode((value) => !value)}
+          className={`inline-flex h-7 translate-y-[1px] items-center gap-1.5 rounded-xl px-3 text-sm transition-all ${
+            isInspirationMode
+              ? theme === "light"
+                ? "bg-black/10 text-black"
+                : "bg-white/12 text-white"
+              : theme === "light"
+                ? "text-black/50 hover:bg-black/[0.05] hover:text-black/80"
+                : "text-white/50 hover:bg-white/[0.06] hover:text-white"
+          }`}
+        >
+          灵感模式
+        </button>
+      </div>
+      {isInspirationMode && (
+        <div
+          className="relative hidden shrink-0 lg:block"
+          style={{ width: inspirationPanelWidth }}
+        >
+          <aside className={`flex h-full flex-col border-r px-4 py-4 ${theme === "light" ? "border-black/8 bg-white/65" : "border-white/8 bg-white/[0.025]"}`}>
+            <div className="mb-4 mt-10">
+              <div className={`mb-2 text-sm font-semibold ${theme === "light" ? "text-[#111]" : "text-white"}`}>灵感模式</div>
+              <p className={`text-xs leading-relaxed ${theme === "light" ? "text-black/45" : "text-white/40"}`}>
+                边找参考边设计
+              </p>
+            </div>
+
+            <div className={`rounded-2xl border p-3 ${theme === "light" ? "border-black/8 bg-white" : "border-white/8 bg-[#171719]"}`}>
+              <div className="flex gap-2">
+                <input
+                  value={inspirationUrl}
+                  onChange={(e) => setInspirationUrl(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") handleOpenInspirationUrl();
+                  }}
+                  placeholder="输入设计网站链接"
+                  className={`min-w-0 flex-1 rounded-xl px-3 py-2 text-xs outline-none ${theme === "light" ? "bg-black/[0.04] text-[#111] placeholder:text-black/30" : "bg-white/[0.06] text-white placeholder:text-white/30"}`}
+                />
+                <button
+                  type="button"
+                  onClick={handleOpenInspirationUrl}
+                  className={`rounded-xl px-3 py-2 text-xs font-medium transition-all ${
+                    theme === "light"
+                      ? "bg-black/10 text-black hover:bg-black/15"
+                      : "bg-white/12 text-white hover:bg-white/16"
+                  }`}
+                >
+                  打开
+                </button>
+              </div>
+            </div>
+
+            <div className={`mt-3 min-h-0 flex-1 overflow-hidden rounded-2xl border ${theme === "light" ? "border-black/8 bg-black/[0.03]" : "border-white/8 bg-black/30"}`}>
+              {activeInspirationUrl ? (
+                <iframe
+                  src={activeInspirationUrl}
+                  title="灵感网站预览"
+                  sandbox="allow-same-origin allow-scripts allow-popups allow-forms"
+                  className={`h-full w-full ${isInspirationResizing ? "pointer-events-none" : ""}`}
+                />
+              ) : (
+                <div className={`flex h-full items-center justify-center px-8 text-center text-xs leading-relaxed ${theme === "light" ? "text-black/35" : "text-white/30"}`}>
+                  输入一个设计网站链接后，这里会尝试预览。部分网站不允许嵌入，可用新窗口打开。
+                </div>
+              )}
+            </div>
+          </aside>
+          <button
+            type="button"
+            aria-label="调整灵感面板宽度"
+            onPointerDown={handleInspirationResizeStart}
+            className={`absolute right-0 top-0 h-full w-2 translate-x-1/2 cursor-col-resize transition-colors ${theme === "light" ? "hover:bg-black/10" : "hover:bg-white/12"}`}
+          />
+        </div>
+      )}
       <Canvas
         ref={canvasRef}
         images={canvasImages}

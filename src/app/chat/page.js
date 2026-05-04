@@ -11,11 +11,13 @@ import {
   ChevronUp,
   Copy,
   Download,
+  Gauge,
   ImageIcon,
   Loader2,
   Maximize2,
   Moon,
   Plus,
+  RefreshCw,
   Send,
   Sun,
   Square,
@@ -26,11 +28,19 @@ import { compressImage } from "@/lib/imageUtils";
 import { GENERATION_STAGE_ORDER, getGenerationStageCopy } from "@/lib/generationStages";
 import BrandLogo from "@/components/BrandLogo";
 import {
+  buildWaTemplatePrompt,
+  chooseWaTemplateIpRole,
+  detectEzFamilyTrigger,
   detectOneClickEntryMode,
   getLatestGeneratedImages,
   isObviousOneClickGenerateRequest,
+  parseWaTemplateRequest,
   shouldReusePreviousGeneratedImages,
 } from "@/lib/oneClickCreationRules";
+import {
+  buildIpSceneExtensionPrompt,
+  detectIpSceneExtension,
+} from "@/lib/ipSceneExtensionRules";
 import SKILLS from "@/config/skills";
 import IP_ASSETS from "@/config/ipAssets";
 
@@ -38,6 +48,11 @@ const CHAT_SESSION_KEY = "lovart-chat-fullscreen-session";
 const IMAGE_HISTORY_KEY = "lovart-chat-image-history";
 const IMAGE_HISTORY_LIMIT = 100;
 const ATTACHMENT_ACCEPT = "image/*,.pdf,.doc,.docx,.txt,.md,.markdown,.rtf,.csv,.json,.xml,.xls,.xlsx,.ppt,.pptx";
+const EZFAMILY_ASSET_URL = "/api/ezfamily";
+const EZLOGO_ASSET_URL = "/api/ezlogo";
+const WA_TEMPLATE_ASSET_URL = "/api/wa-templates";
+const WA_LOCKUP_ASSET_URL = "/api/wa-lockup";
+const WA_SMILE_LOGO_ASSET_URL = "/api/wa-smile-logo";
 
 // ── 与悬浮框完全一致的生图参数常量 ──
 const FLOATING_DEFAULT_MODEL = "gemini-3.1-flash-image-preview-512";
@@ -50,6 +65,123 @@ const GENERATION_SAVING_STAGE_MS = 350;
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function fetchImageAsDataUrl(url) {
+  const res = await fetch(url);
+  if (!res.ok) return null;
+  const blob = await res.blob();
+  return new Promise((resolve) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => resolve(null);
+    reader.readAsDataURL(blob);
+  });
+}
+
+async function fetchEzFamilyReferenceImages(role) {
+  const roleText = String(role || "");
+  const singleImageUrl = `${EZFAMILY_ASSET_URL}?role=${encodeURIComponent(roleText)}`;
+  if (!roleText.includes("真人版")) {
+    const image = await fetchImageAsDataUrl(singleImageUrl);
+    return image ? [image] : [];
+  }
+
+  try {
+    const res = await fetch(`${singleImageUrl}&all=1`, { cache: "no-store" });
+    const data = await res.json().catch(() => ({}));
+    const items = Array.isArray(data.items) ? data.items : [];
+    const orderedItems = [
+      ...items.filter((item) => String(item?.name || "").includes("正视图")),
+      ...items.filter((item) => !String(item?.name || "").includes("正视图")),
+    ];
+    const images = (await Promise.all(
+      orderedItems
+        .map((item) => item?.src)
+        .filter(Boolean)
+        .map((src) => fetchImageAsDataUrl(src))
+    )).filter(Boolean);
+    if (images.length > 0) return images;
+  } catch {
+    // Fallback to a single identity reference.
+  }
+
+  const image = await fetchImageAsDataUrl(singleImageUrl);
+  return image ? [image] : [];
+}
+
+async function runWaQualityCheck(imageUrl) {
+  if (!imageUrl) return null;
+  try {
+    const res = await fetch("/api/wa-quality-check", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ imageUrl }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || data.error) return null;
+    return data.data || null;
+  } catch {
+    return null;
+  }
+}
+
+function buildWaQualityFixPrompt(qualityCheck) {
+  if (!qualityCheck) return "";
+  const issues = Array.isArray(qualityCheck.issues)
+    ? qualityCheck.issues
+      .map((issue) => String(issue?.message || "").trim())
+      .filter(Boolean)
+      .slice(0, 4)
+    : [];
+  const suggestedFix = String(qualityCheck.suggestedFix || "").trim();
+  if (!issues.length && !suggestedFix) return "";
+  return [
+    "",
+    "本次是基于上一版 WA 海报质检结果的修复重生，请明确修正以下问题，但仍保持原始用户需求、2:1 WA 模板结构、品牌规范和主副标题内容不变。",
+    issues.length ? `上一版问题：${issues.join("；")}` : "",
+    suggestedFix ? `上一版建议：${suggestedFix}` : "",
+    "修复优先级：先保证画面完整不裁切、主副标题清晰且层级正确、Logo/OJK/EASYCASH 清晰可读、人物和右侧元素不要挤压左侧文案；背景保持低干扰，不新增无关行业符号。",
+  ].filter(Boolean).join("\n");
+}
+
+function buildWaQualityImprovement(previousQualityCheck, nextQualityCheck) {
+  if (!previousQualityCheck || !nextQualityCheck) return null;
+  const previousScore = Number(previousQualityCheck.score || 0);
+  const nextScore = Number(nextQualityCheck.score || 0);
+  const previousIssues = Array.isArray(previousQualityCheck.issues)
+    ? previousQualityCheck.issues.filter((issue) => issue?.message)
+    : [];
+  const nextIssues = Array.isArray(nextQualityCheck.issues)
+    ? nextQualityCheck.issues.filter((issue) => issue?.message)
+    : [];
+  const nextIssueTypes = new Set(nextIssues.map((issue) => issue.type).filter(Boolean));
+  const resolvedIssues = previousIssues
+    .filter((issue) => issue.type && !nextIssueTypes.has(issue.type))
+    .map((issue) => issue.message)
+    .slice(0, 3);
+  const improvements = [];
+  if (nextScore > previousScore) {
+    improvements.push(`质检分数从 ${previousScore}/100 提升到 ${nextScore}/100`);
+  } else if (nextScore === previousScore) {
+    improvements.push(`质检分数保持在 ${nextScore}/100，主要变化体现在画面细节`);
+  }
+  if (resolvedIssues.length) {
+    improvements.push(`上一版部分问题已减弱或未再被识别：${resolvedIssues.join("；")}`);
+  }
+  if (previousIssues.length > nextIssues.length) {
+    improvements.push(`质检问题数量从 ${previousIssues.length} 项减少到 ${nextIssues.length} 项`);
+  }
+  if (!improvements.length) {
+    improvements.push("已按上一版质检建议重新生成，可重点对比文字区、Logo/OJK 可读性、人物位置和背景干扰度");
+  }
+  return {
+    previousScore,
+    nextScore,
+    delta: nextScore - previousScore,
+    improvements: improvements.slice(0, 3),
+    remainingIssues: nextIssues.map((issue) => issue.message).slice(0, 3),
+  };
 }
 
 /** 根据参考图真实像素尺寸，计算 GPT Image 2 edit 合法的精确输出尺寸 */
@@ -289,6 +421,7 @@ export default function ChatPage() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [generationStage, setGenerationStage] = useState("understanding");
   const [copiedMessageId, setCopiedMessageId] = useState(null);
+  const [expandedQualityId, setExpandedQualityId] = useState(null);
   const [previewSrc, setPreviewSrc] = useState(null);
   const [mounted, setMounted] = useState(false);
   const [isImageHistoryOpen, setIsImageHistoryOpen] = useState(false);
@@ -304,6 +437,7 @@ export default function ChatPage() {
   const abortControllerRef = useRef(null);
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null);
+  const promptTextareaRef = useRef(null);
   const imageHistoryMenuRef = useRef(null);
   const inspirationResizeFrameRef = useRef(0);
   const isLightTheme = theme === "light";
@@ -350,6 +484,16 @@ export default function ChatPage() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, isGenerating]);
+
+  useEffect(() => {
+    const textarea = promptTextareaRef.current;
+    if (!textarea) return;
+
+    textarea.style.height = "auto";
+    const nextHeight = Math.min(textarea.scrollHeight, 160);
+    textarea.style.height = `${nextHeight}px`;
+    textarea.style.overflowY = textarea.scrollHeight > 160 ? "auto" : "hidden";
+  }, [prompt]);
 
   useEffect(() => {
     if (!isImageHistoryOpen) return;
@@ -440,6 +584,21 @@ export default function ChatPage() {
       rawUrls.map(async (url) => { try { return await compressImage(url, 1280, 0.78); } catch { return url; } })
     );
     setRefImages((prev) => [...prev, ...compressed]);
+  };
+
+  const handlePaste = (event) => {
+    const clipboardItems = Array.from(event.clipboardData?.items || []);
+    const imageFilesFromItems = clipboardItems
+      .filter((item) => item.type?.startsWith("image/"))
+      .map((item) => item.getAsFile())
+      .filter(Boolean);
+    const imageFiles = imageFilesFromItems.length > 0
+      ? imageFilesFromItems
+      : Array.from(event.clipboardData?.files || []).filter((file) => file.type?.startsWith("image/"));
+
+    if (!imageFiles.length) return;
+    event.preventDefault();
+    void handleFilesAdd(imageFiles);
   };
 
   const handleOpenInspirationUrl = () => {
@@ -546,49 +705,88 @@ export default function ChatPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [handleFilesAdd]);
 
-  const handleSubmit = async () => {
-    const text = String(prompt || "").trim();
-    if (!text && refImages.length === 0) return;
+  const handleSubmit = async (override = null) => {
+    const activePrompt = override?.prompt ?? prompt;
+    const activeRefImages = Array.isArray(override?.refImages) ? override.refImages : refImages;
+    const text = String(activePrompt || "").trim();
+    if (!text && activeRefImages.length === 0) return;
     if (isGenerating) return;
+    const qualityFixPrompt = buildWaQualityFixPrompt(override?.qualityCheck);
 
-    // ── EasyFamily 关键词自动触发 IP 参考图 ─────────────────
-    let autoIpImage = null;
+    // ── WA 模板 / EZfamily / EZlogo 关键词自动触发参考图 ─────────────
+    let autoRefImages = [];
     let apiText = text; // 对 API 使用的 prompt（可能被增强）
-    const hasIpTrigger = /easyfamily/i.test(text);
+    const waTemplateRequest = parseWaTemplateRequest(text);
+    const ezFamilyRole = detectEzFamilyTrigger(text);
+    const hasEzLogoTrigger = /ezlogo/i.test(text);
+    const ipSceneRequest = detectIpSceneExtension(text, {
+      hasUserReferenceImages: activeRefImages.length > 0,
+      isWaTemplate: Boolean(waTemplateRequest),
+    });
 
-    if (hasIpTrigger && IP_ASSETS.length > 0) {
-      const pick = IP_ASSETS[Math.floor(Math.random() * IP_ASSETS.length)];
+    if (waTemplateRequest) {
       try {
-        const res = await fetch(pick.url);
-        const blob = await res.blob();
-        autoIpImage = await new Promise((resolve) => {
-          const reader = new FileReader();
-          reader.onload = () => resolve(reader.result);
-          reader.onerror = () => resolve(null);
-          reader.readAsDataURL(blob);
-        });
-
-        // 场景二：用户有参考图 + EasyFamily → IP 图作为第二张参考，prompt 保持原样
+        const templateImage = await fetchImageAsDataUrl(`${WA_TEMPLATE_ASSET_URL}?random=1`);
+        if (templateImage) autoRefImages.push(templateImage);
+        const role = ezFamilyRole || chooseWaTemplateIpRole(waTemplateRequest);
+        autoRefImages.push(...await fetchEzFamilyReferenceImages(role));
+        const lockupImage = await fetchImageAsDataUrl(WA_LOCKUP_ASSET_URL);
+        if (lockupImage) autoRefImages.push(lockupImage);
+        if (Math.random() < 0.28) {
+          const smileLogoImage = await fetchImageAsDataUrl(WA_SMILE_LOGO_ASSET_URL);
+          if (smileLogoImage) autoRefImages.push(smileLogoImage);
+        }
+        apiText = buildWaTemplatePrompt(waTemplateRequest, role);
       } catch { /* 静默跳过 */ }
+    } else if (ipSceneRequest) {
+      try {
+        const sceneImage = await fetchImageAsDataUrl(ipSceneRequest.sceneImageUrl);
+        if (sceneImage) autoRefImages.push(sceneImage);
+        autoRefImages.push(...await fetchEzFamilyReferenceImages(ipSceneRequest.role));
+        for (const logoUrl of ipSceneRequest.logoImageUrls || []) {
+          const logoImage = await fetchImageAsDataUrl(logoUrl);
+          if (logoImage) autoRefImages.push(logoImage);
+        }
+        apiText = buildIpSceneExtensionPrompt(ipSceneRequest);
+      } catch { /* 静默跳过 */ }
+    } else if (ezFamilyRole) {
+      try {
+        autoRefImages.push(...await fetchEzFamilyReferenceImages(ezFamilyRole));
+
+        // 场景二：用户有参考图 + EZfamily 触发图 → 作为第二张参考，prompt 保持原样
+      } catch { /* 静默跳过 */ }
+    } else if (hasEzLogoTrigger) {
+      try {
+        const logoImage = await fetchImageAsDataUrl(EZLOGO_ASSET_URL);
+        if (logoImage) autoRefImages.push(logoImage);
+        apiText = text.replace(/\bezlogo\b/gi, "").replace(/\s+/g, " ").trim();
+        apiText = `${apiText || "参考图中的图形标志进行设计。"}
+
+注意：EZlogo 只是系统触发词，用于自动加入参考图；不要在画面中生成“EZlogo”文字。`;
+      } catch { /* 静默跳过 */ }
+    }
+    if (qualityFixPrompt) {
+      apiText = `${apiText}\n${qualityFixPrompt}`;
     }
     // ─────────────────────────────────────────────────────
 
     // 继承上一条消息中生成的图片（与悬浮框逻辑一致）
-    const inheritedImages = shouldReusePreviousGeneratedImages(text, refImages)
+    const inheritedImages = shouldReusePreviousGeneratedImages(text, activeRefImages)
       ? getLatestGeneratedImages(messages)
       : [];
 
-    // 场景一：无参考图 → IP 图单独作为参考
-    // 场景二：有参考图 → [用户参考图, IP图]
+    // WA 模板：模板图必须作为第一参考图；普通触发：保留用户参考图优先
     // 无触发：正常使用 refImages
-    const submittedImages = autoIpImage
-      ? (refImages.length > 0 ? [...refImages, autoIpImage] : [autoIpImage, ...inheritedImages])
-      : [...refImages, ...inheritedImages];
+    const submittedImages = autoRefImages.length > 0
+      ? (waTemplateRequest
+        ? [...autoRefImages, ...activeRefImages, ...inheritedImages]
+        : (activeRefImages.length > 0 ? [...activeRefImages, ...autoRefImages] : [...autoRefImages, ...inheritedImages]))
+      : [...activeRefImages, ...inheritedImages];
     const predictedMode = detectOneClickEntryMode(apiText, submittedImages);
-    const bypassPlanner = Boolean(autoIpImage) || isObviousOneClickGenerateRequest(apiText, submittedImages, []);
+    const bypassPlanner = autoRefImages.length > 0 || isObviousOneClickGenerateRequest(apiText, submittedImages, []);
 
-    // autoIpImage 只用于生成，不在气泡里展示参考图
-    const displayRefImages = autoIpImage ? refImages : submittedImages;
+    // 自动参考图只用于生成，不在气泡里展示
+    const displayRefImages = autoRefImages.length > 0 ? activeRefImages : submittedImages;
     const userMsg = createMessage("user", text, { refImages: displayRefImages });
     const historyForApi = [...messages, userMsg].map((m) => ({
       role: m.role, text: m.text || "",
@@ -655,7 +853,7 @@ export default function ChatPage() {
           ? (agentParams.image_size === "auto" ? (firstRefMeta?.ratio || "1:1") : agentParams.image_size)
           : quickImageSize;
       const endpoint = hasImages ? "/api/edit" : "/api/generate";
-      // apiText 可能已被 EasyFamily 场景二增强，优先用 apiText
+      // apiText 可能已被触发词场景增强，优先用 apiText
       const finalPrompt = isAgentMode ? buildAgentPrompt(apiText, submittedImages) : apiText;
       const payload = hasImages
         ? { prompt: finalPrompt, image: submittedImages.length === 1 ? submittedImages[0] : submittedImages, model: generationModel, image_size: imageSize, num: 1, service_tier: isAgentMode ? agentParams.service_tier : FLOATING_DEFAULT_SERVICE_TIER }
@@ -674,10 +872,14 @@ export default function ChatPage() {
       if (!urls.length) throw new Error("未返回结果图片");
 
       await showGenerationStage("saving", GENERATION_SAVING_STAGE_MS, abortController.signal);
+      const qualityCheck = waTemplateRequest ? await runWaQualityCheck(urls[0]) : null;
+      const qualityImprovement = buildWaQualityImprovement(override?.qualityCheck, qualityCheck);
       setMessages((prev) => [
         ...prev,
         createMessage("assistant", assistantText || (resolvedMode === "agent" ? "我已经按你的要求整理并生成了一版结果。" : "我已经帮你快速生成了一版结果。"), {
           images: urls,
+          qualityCheck,
+          qualityImprovement,
           modelLabel: `${plan.assistantModel || ""} · ${generationModel}`.replace(/^ · /, ""),
         }),
       ]);
@@ -709,6 +911,20 @@ export default function ChatPage() {
       setGenerationStage("understanding");
       abortControllerRef.current = null;
     }
+  };
+
+  const handleRegenerateMessage = (messageId) => {
+    if (isGenerating) return;
+    const messageIndex = messages.findIndex((item) => item.id === messageId);
+    if (messageIndex <= 0) return;
+    const targetMessage = messages[messageIndex];
+    const sourceMessage = [...messages.slice(0, messageIndex)].reverse().find((item) => item.role === "user");
+    if (!sourceMessage) return;
+    void handleSubmit({
+      prompt: sourceMessage.text || "",
+      refImages: Array.isArray(sourceMessage.refImages) ? sourceMessage.refImages : [],
+      qualityCheck: targetMessage?.qualityCheck,
+    });
   };
 
   const handleCancel = () => {
@@ -752,13 +968,19 @@ export default function ChatPage() {
             transform: chatMode === "inspiration" ? `translateX(${inspirationPanelWidth}px)` : undefined,
           }}
         >
-          <div className="flex items-center">
+          <button
+            type="button"
+            onClick={() => router.push("/")}
+            className="flex items-center transition-opacity hover:opacity-80"
+            title="返回首页"
+            aria-label="返回首页"
+          >
             <BrandLogo
               className="h-7"
               showText={false}
               wordmarkOffsetClassName={`translate-y-[2px] ${isLightTheme ? "invert" : ""}`}
             />
-          </div>
+          </button>
           <button
             type="button"
             onClick={() => setChatMode((mode) => (mode === "inspiration" ? "chat" : "inspiration"))}
@@ -959,7 +1181,7 @@ export default function ChatPage() {
               {messages.map((message) => (
                 <div key={message.id} className={`flex gap-4 ${message.role === "user" ? "justify-end" : "justify-start"}`}>
                   {message.role === "assistant" && (
-                    <div className={`w-8 h-8 rounded-full shrink-0 mt-0.5 overflow-hidden flex items-center justify-center ${isLightTheme ? "bg-black/[0.06]" : "bg-white/[0.06]"}`}>
+                    <div className="w-8 h-8 shrink-0 mt-0.5 flex items-center justify-center">
                       <BrandLogo className="h-6" showText={false} />
                     </div>
                   )}
@@ -1019,8 +1241,89 @@ export default function ChatPage() {
                                 {copiedMessageId === message.id ? "已复制" : "复制"}
                               </button>
                             ) : null}
+                            {message.qualityCheck ? (
+                              <button
+                                type="button"
+                                onClick={() => setExpandedQualityId((current) => (current === message.id ? null : message.id))}
+                                className={`inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-[11px] transition-all ${
+                                  message.qualityCheck.passed
+                                    ? isLightTheme
+                                      ? "text-emerald-700 hover:bg-emerald-500/10"
+                                      : "text-emerald-300 hover:bg-emerald-400/10"
+                                    : isLightTheme
+                                      ? "text-amber-700 hover:bg-amber-500/10"
+                                      : "text-amber-300 hover:bg-amber-400/10"
+                                }`}
+                              >
+                                <Gauge size={12} />
+                                质检 {Number(message.qualityCheck.score || 0)}/100
+                                <ChevronUp size={11} className={`transition-transform ${expandedQualityId === message.id ? "" : "rotate-180"}`} />
+                              </button>
+                            ) : null}
+                            {message.qualityCheck ? (
+                              <button
+                                type="button"
+                                onClick={() => handleRegenerateMessage(message.id)}
+                                disabled={isGenerating}
+                                className={`inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-[11px] transition-all disabled:cursor-not-allowed disabled:opacity-40 ${
+                                  isLightTheme
+                                    ? "text-black/35 hover:bg-black/[0.04] hover:text-black/70"
+                                    : "text-white/30 hover:bg-white/[0.05] hover:text-white/70"
+                                }`}
+                              >
+                                <RefreshCw size={12} />
+                                按建议重生
+                              </button>
+                            ) : null}
                           </div>
                         )}
+                        {message.qualityCheck && expandedQualityId === message.id ? (
+                          <div className={`mt-2 rounded-xl px-3 py-2 text-[12px] leading-6 ${
+                            isLightTheme
+                              ? "border border-black/8 bg-black/[0.035] text-black/65"
+                              : "border border-white/10 bg-white/[0.04] text-white/65"
+                          }`}>
+                            {message.qualityImprovement ? (
+                              <>
+                                <div className={message.qualityImprovement.delta >= 0 ? "font-medium text-emerald-500" : "font-medium text-amber-400"}>
+                                  本次优化（{message.qualityImprovement.previousScore}/100 → {message.qualityImprovement.nextScore}/100）
+                                </div>
+                                <div className="mt-1 space-y-1">
+                                  {message.qualityImprovement.improvements.map((item, itemIndex) => (
+                                    <div key={`${message.id}-improvement-${itemIndex}`}>优化：{item}</div>
+                                  ))}
+                                </div>
+                                {message.qualityImprovement.remainingIssues.length > 0 ? (
+                                  <div className="mt-2 opacity-80">
+                                    仍可优化：{message.qualityImprovement.remainingIssues.join("；")}
+                                  </div>
+                                ) : null}
+                                <div className="mt-2 text-[11px] opacity-60">
+                                  分数仅供参考，具体以实际出图质量和使用场景为准。
+                                </div>
+                              </>
+                            ) : (
+                              <>
+                                <div className={message.qualityCheck.passed ? "font-medium text-emerald-500" : "font-medium text-amber-400"}>
+                                  {message.qualityCheck.passed ? "质检通过" : "质检需关注"}（{Number(message.qualityCheck.score || 0)}/100）
+                                </div>
+                                {Array.isArray(message.qualityCheck.issues) && message.qualityCheck.issues.length > 0 ? (
+                                  <div className="mt-1 space-y-1">
+                                    {message.qualityCheck.issues.slice(0, 3).map((issue, issueIndex) => (
+                                      <div key={`${message.id}-quality-${issueIndex}`}>问题：{issue.message}</div>
+                                    ))}
+                                  </div>
+                                ) : null}
+                                {message.qualityCheck.suggestedFix ? (
+                                  <div className="mt-1">建议：{message.qualityCheck.suggestedFix}</div>
+                                ) : null}
+                                <div className="mt-2 text-[11px] opacity-60">
+                                  分数仅供参考，具体以实际出图质量和使用场景为准。
+                                </div>
+                              </>
+                            )}
+                          </div>
+                        ) : null}
                       </div>
                     )}
 
@@ -1067,7 +1370,7 @@ export default function ChatPage() {
 
               {isGenerating && (
                 <div className="flex gap-4 justify-start items-start">
-                  <div className={`w-8 h-8 rounded-full shrink-0 mt-0.5 overflow-hidden flex items-center justify-center ${isLightTheme ? "bg-black/[0.06]" : "bg-white/[0.06]"}`}>
+                  <div className="w-8 h-8 shrink-0 mt-0.5 flex items-center justify-center">
                     <BrandLogo className="h-6" showText={false} />
                   </div>
                   <div className="w-full max-w-[320px]">
@@ -1156,7 +1459,7 @@ export default function ChatPage() {
               isLightTheme
                 ? "bg-white border border-black/8 shadow-[0_2px_12px_rgba(0,0,0,0.06)] focus-within:shadow-[0_2px_16px_rgba(0,0,0,0.09)] focus-within:border-black/14"
                 : "bg-[#1c1c1e] border border-white/10 shadow-[0_4px_24px_rgba(0,0,0,0.4)] focus-within:border-white/18"
-            } transition-all`}>
+            } transition-all`} onPaste={handlePaste}>
               <input ref={fileInputRef} type="file" accept={ATTACHMENT_ACCEPT} multiple className="hidden"
                 onChange={(e) => { if (e.target.files?.length) void handleFilesAdd(e.target.files); e.target.value = ""; }} />
 
@@ -1220,6 +1523,7 @@ export default function ChatPage() {
               )}
 
               <textarea
+                ref={promptTextareaRef}
                 value={prompt}
                 onChange={(e) => setPrompt(e.target.value)}
                 onKeyDown={(e) => {
@@ -1229,11 +1533,11 @@ export default function ChatPage() {
                   }
                 }}
                 rows={1}
-                placeholder="试试上传一张图片，告诉我你想怎么修改"
-                className={`flex-1 min-h-[28px] max-h-40 bg-transparent text-[15px] outline-none resize-none leading-7 overflow-y-auto py-0.5 ${isLightTheme ? "text-[#111] placeholder:text-black/28" : "text-white placeholder:text-white/28"}`}
+                placeholder="释放创意，一键帮你完成重复且无聊的工作~"
+                className={`flex-1 min-h-[28px] max-h-40 bg-transparent text-[15px] outline-none resize-none leading-7 overflow-y-hidden py-0.5 ${isLightTheme ? "text-[#111] placeholder:text-black/28" : "text-white placeholder:text-white/28"}`}
               />
 
-              <button type="button" onClick={handleSubmit} disabled={!canSubmit || isGenerating}
+              <button type="button" onClick={() => handleSubmit()} disabled={!canSubmit || isGenerating}
                 className={`shrink-0 w-8 h-8 rounded-full flex items-center justify-center transition-all self-end mb-0.5 ${!canSubmit || isGenerating ? `${isLightTheme ? "bg-black/[0.05] text-black/25" : "bg-white/[0.05] text-white/25"} cursor-not-allowed` : "bg-[#0d0d0d] text-white hover:bg-black/80 dark:bg-white dark:text-black dark:hover:bg-white/90"}`}
               >
                 {isGenerating ? <Loader2 size={15} className="animate-spin" /> : <Send size={14} />}

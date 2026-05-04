@@ -84,6 +84,29 @@ body {
   100% { background-position: 200% 0; }
 }
 
+@keyframes hero-button-breathe {
+  0%, 100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.095);
+  }
+}
+
+.home-card {
+  transform: translate3d(0, 0, 0) scale(1);
+  transform-origin: center;
+  transition:
+    transform 900ms cubic-bezier(0.19, 1, 0.22, 1),
+    background-color 360ms ease-out,
+    box-shadow 360ms ease-out;
+  will-change: transform;
+}
+
+.home-card:hover {
+  transform: translate3d(0, 0, 0) scale(1.045);
+}
+
 .animate-fade-in {
   animation: fade-in 0.3s ease-out;
 }

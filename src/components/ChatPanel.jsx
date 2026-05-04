@@ -18,12 +18,14 @@ import {
   AlertCircle,
   RotateCw,
   Download,
+  Play,
   PauseCircle,
-  Zap,
+  Pause,
   Crown,
   Rocket,
   Sparkles,
   Trash2,
+  Video,
 } from "lucide-react";
 import { compressImage } from "@/lib/imageUtils";
 import { MAX_GEN_COUNT } from "@/lib/genLimits";
@@ -34,63 +36,55 @@ const CANVAS_IMAGE_MIME = "application/x-easy-ai-canvas-image";
 
 const MODEL_TIERS = [
   {
-    id: "flash",
-    name: "Nano Banana",
-    icon: Zap,
-    desc: "极速低价",
-    color: "text-green-400",
-    bg: "bg-green-500/15 border-green-500/30",
-    variants: [
-      { model: "gemini-2.5-flash-image", label: "1K", credits: { default: 2, priority: 3 } },
-      { model: "gemini-2.5-flash-image-hd", label: "1K HD", credits: { default: 5, priority: 8 } },
-    ],
-    maxInputImages: 3,
-    extendedRatios: false,
-  },
-  {
     id: "flash2",
     name: "Nano Banana 2",
     icon: Rocket,
     desc: "推荐 · 高性价比",
-    color: "text-blue-400",
-    bg: "bg-blue-500/15 border-blue-500/30",
     variants: [
-      { model: "gemini-3.1-flash-image-preview-512", label: "512px", credits: { default: 4, priority: 6 } },
-      { model: "gemini-3.1-flash-image-preview", label: "1K", credits: { default: 4, priority: 6 } },
-      { model: "gemini-3.1-flash-image-preview-2k", label: "2K", credits: { default: 6, priority: 9 } },
-      { model: "gemini-3.1-flash-image-preview-4k", label: "4K", credits: { default: 8, priority: 12 } },
+      { model: "gemini-3.1-flash-image-preview", label: "默认", credits: { default: 0, priority: 0 } },
     ],
     maxInputImages: 10,
     extendedRatios: true,
+    serviceTierOptions: false,
   },
   {
     id: "pro",
     name: "Nano Banana Pro",
     icon: Crown,
     desc: "专业画质 · Thinking",
-    color: "text-amber-400",
-    bg: "bg-amber-500/15 border-amber-500/30",
     variants: [
-      { model: "gemini-3-pro-image-preview", label: "1K", credits: { default: 8, priority: 12 } },
-      { model: "gemini-3-pro-image-preview-2k", label: "2K", credits: { default: 8, priority: 12 } },
-      { model: "gemini-3-pro-image-preview-4k", label: "4K", credits: { default: 16, priority: 24 } },
+      { model: "gemini-3-pro-image-preview", label: "默认", credits: { default: 0, priority: 0 } },
     ],
     maxInputImages: 14,
     extendedRatios: false,
+    serviceTierOptions: false,
   },
   {
     id: "chatgpt-image2",
     name: "GPT Image 2",
     icon: Sparkles,
     desc: "GPT 生图 · 已接入",
-    color: "text-fuchsia-400",
-    bg: "bg-fuchsia-500/15 border-fuchsia-500/30",
     variants: [
       { model: "gpt-image-2", label: "1K", credits: { default: 0, priority: 0 } },
     ],
     maxInputImages: 10,
     extendedRatios: true,
     customSizes: true,
+  },
+  {
+    id: "kling-video",
+    name: "Kling 视频",
+    icon: Video,
+    desc: "文生/图生/首尾帧视频",
+    variants: [
+      { model: "kling-v2-6", label: "Kling-V2-6", credits: { default: 0, priority: 0 } },
+      { model: "kling-v3", label: "Kling-V3", credits: { default: 0, priority: 0 } },
+      { model: "kling-v3-omni", label: "Kling-V3-Omni", credits: { default: 0, priority: 0 } },
+    ],
+    maxInputImages: 2,
+    extendedRatios: false,
+    serviceTierOptions: false,
+    mediaType: "video",
   },
 ];
 
@@ -137,6 +131,22 @@ const SERVICE_TIERS = [
   { id: "default", label: "标准", desc: "更省积分" },
   { id: "priority", label: "高优先", desc: "更稳更快" },
 ];
+const KLING_VIDEO_MIN_DURATION = 3;
+const KLING_VIDEO_MAX_DURATION = 15;
+const KLING_VIDEO_MODES = [
+  { value: "std", label: "720p" },
+  { value: "pro", label: "1080p" },
+  { value: "4k", label: "4K" },
+];
+const KLING_V26_DURATIONS = ["5", "10"];
+const KLING_SOUND_OPTIONS = [
+  { value: "off", label: "无声", desc: "成本更低" },
+  { value: "on", label: "有声", desc: "成本更高" },
+];
+const PARAM_ACTIVE_CLASS = "bg-green-500 text-white border border-green-500";
+const PARAM_ACTIVE_MUTED_TEXT_CLASS = "text-white/75";
+const PARAM_ACTIVE_ICON_CLASS = "text-white/80";
+const MODEL_ICON_CLASS = "text-text-tertiary";
 
 function parseExactSizeValue(value) {
   const match = String(value || "").trim().match(EXACT_SIZE_PATTERN);
@@ -184,12 +194,6 @@ function validateGptImage2CustomSize(width, height) {
   if (totalPixels < GPT_IMAGE_2_SIZE_LIMITS.minPixels || totalPixels > GPT_IMAGE_2_SIZE_LIMITS.maxPixels) {
     return `总像素需介于 ${GPT_IMAGE_2_SIZE_LIMITS.minPixels} 和 ${GPT_IMAGE_2_SIZE_LIMITS.maxPixels} 之间。`;
   }
-  return "";
-}
-
-function getServiceTierLabel(serviceTier) {
-  if (serviceTier === "default") return "标准线路";
-  if (serviceTier === "priority") return "高优线路";
   return "";
 }
 
@@ -243,6 +247,43 @@ function readFileAsDataURL(file) {
   });
 }
 
+function isVideoReferenceSource(src) {
+  const value = String(src || "").trim().toLowerCase();
+  return value.startsWith("data:video/")
+    || /\.(mp4|webm|mov|m4v|ogg)(\?|#|$)/i.test(value);
+}
+
+function ReferenceThumb({ src, index, sizeClass = "h-14 w-14", onClick }) {
+  const isVideo = isVideoReferenceSource(src);
+  const commonClass = `${sizeClass} rounded-lg object-cover border border-border-primary`;
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`relative block overflow-hidden rounded-lg bg-bg-hover ${onClick ? "cursor-pointer hover:opacity-80 transition-opacity" : ""}`}
+      title={isVideo ? `参考视频 ${index + 1}` : `参考图 ${index + 1}`}
+    >
+      {isVideo ? (
+        <>
+          <video
+            src={src}
+            className={commonClass}
+            muted
+            playsInline
+            preload="metadata"
+          />
+          <span className="absolute inset-0 flex items-center justify-center bg-black/20 text-white">
+            <Video size={14} />
+          </span>
+        </>
+      ) : (
+        <img src={src} alt={`参考图${index + 1}`} className={commonClass} />
+      )}
+    </button>
+  );
+}
+
 function ImageLightbox({ src, onClose }) {
   useEffect(() => {
     const handler = (e) => { if (e.key === "Escape") onClose(); };
@@ -266,16 +307,19 @@ function ImageLightbox({ src, onClose }) {
 }
 
 function MessageBubble({ message, onRetry, onDownload, onImageClick, onPreview, onPauseGenerate, onDelete }) {
+  const isVideoMessage = message.mediaType === "video";
+  const [playingVideoUrls, setPlayingVideoUrls] = useState([]);
   const handleGeneratedImageDragStart = useCallback((e, url, index) => {
     const payload = {
       url,
       prompt: message.text || `生成结果 ${index + 1}`,
+      mediaType: message.mediaType || "image",
     };
     e.dataTransfer.effectAllowed = "copy";
     e.dataTransfer.setData(CANVAS_IMAGE_MIME, JSON.stringify(payload));
     e.dataTransfer.setData("text/uri-list", url);
     e.dataTransfer.setData("text/plain", url);
-  }, [message.text]);
+  }, [message.mediaType, message.text]);
 
   if (message.role === "user") {
     return (
@@ -295,12 +339,15 @@ function MessageBubble({ message, onRetry, onDownload, onImageClick, onPreview, 
           {message.refImages?.length > 0 && (
             <div className="flex gap-1.5 mb-2 flex-wrap">
               {message.refImages.map((src, i) => (
-                <img key={i} src={src} alt={`参考图${i + 1}`}
-                  className="w-12 h-12 rounded-lg object-cover border border-border-primary cursor-pointer hover:opacity-80 transition-opacity"
-                  onClick={() => onPreview?.(src)}
+                <ReferenceThumb
+                  key={i}
+                  src={src}
+                  index={i}
+                  sizeClass="w-12 h-12"
+                  onClick={() => isVideoReferenceSource(src) ? window.open(src, "_blank") : onPreview?.(src)}
                 />
               ))}
-              <span className="text-[10px] text-text-tertiary self-end">{message.refImages.length}张参考图</span>
+              <span className="text-[10px] text-text-tertiary self-end">{message.refImages.length}个参考素材</span>
             </div>
           )}
           <p className="text-sm text-text-primary leading-relaxed">{message.text}</p>
@@ -308,7 +355,6 @@ function MessageBubble({ message, onRetry, onDownload, onImageClick, onPreview, 
             <span className="text-[10px] text-text-tertiary">
               {message.modelLabel} · {message.params?.image_size}
               {message.params?.num > 1 && ` · ${message.params.num}张`}
-              {message.params?.service_tier && ` · ${getServiceTierLabel(message.params.service_tier)}`}
             </span>
           </div>
         </div>
@@ -322,7 +368,6 @@ function MessageBubble({ message, onRetry, onDownload, onImageClick, onPreview, 
       <div className="max-w-[85%] w-full group/message">
         <div className="flex items-center gap-2 mb-2">
           <BrandLogo className="h-6 w-auto flex-shrink-0" />
-          <span className="text-xs text-text-secondary font-medium">AI Agent</span>
           <button
             type="button"
             onClick={() => onDelete?.(message.id)}
@@ -362,7 +407,11 @@ function MessageBubble({ message, onRetry, onDownload, onImageClick, onPreview, 
                       className="relative w-full cursor-pointer"
                       onClick={() => onPreview?.(t.url)}
                     >
-                      <img src={t.url} alt="" className="w-full object-cover" />
+                      {t.type === "video" || isVideoMessage ? (
+                        <video src={t.url} className="w-full object-cover" muted playsInline />
+                      ) : (
+                        <img src={t.url} alt="" className="w-full object-cover" />
+                      )}
                     </button>
                   )}
                   {t.status === "failed" && (
@@ -389,9 +438,11 @@ function MessageBubble({ message, onRetry, onDownload, onImageClick, onPreview, 
             <div className="flex items-center gap-3">
               <Loader2 size={18} className="text-accent animate-spin" />
               <div>
-                <p className="text-sm text-text-primary">正在生成图片...</p>
+                <p className="text-sm text-text-primary">正在生成{isVideoMessage ? "视频" : "图片"}...</p>
                 <p className="text-xs text-text-tertiary mt-0.5">
-                  {message.params?.num > 1 ? `共 ${message.params.num} 张，` : ""}预计 10-30 秒
+                  {isVideoMessage
+                    ? "预计 1-4 分钟"
+                    : `${message.params?.num > 1 ? `共 ${message.params.num} 张，` : ""}预计 10-30 秒`}
                 </p>
               </div>
             </div>
@@ -436,16 +487,56 @@ function MessageBubble({ message, onRetry, onDownload, onImageClick, onPreview, 
                   className="relative block w-full cursor-grab active:cursor-grabbing"
                   draggable
                   onDragStart={(e) => handleGeneratedImageDragStart(e, url, i)}
-                  onClick={() => onPreview?.(url)}
-                  title="可直接拖入左侧画布"
+                  onClick={() => {
+                    if (!isVideoMessage) onPreview?.(url);
+                  }}
+                  title={isVideoMessage ? "可直接拖入左侧画布" : "可直接拖入左侧画布，点击预览"}
                 >
-                  <img src={url} alt={message.text} className="w-full hover:opacity-95 transition-opacity" />
+                  {isVideoMessage ? (
+                    <>
+                      <video
+                        src={url}
+                        playsInline
+                        className="w-full bg-black"
+                        onPlay={() => {
+                          setPlayingVideoUrls((prev) => (prev.includes(url) ? prev : [...prev, url]));
+                        }}
+                        onPause={() => {
+                          setPlayingVideoUrls((prev) => prev.filter((item) => item !== url));
+                        }}
+                        onEnded={() => {
+                          setPlayingVideoUrls((prev) => prev.filter((item) => item !== url));
+                        }}
+                      />
+                      <button
+                        type="button"
+                        onPointerDown={(event) => event.stopPropagation()}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          const video = event.currentTarget.parentElement?.querySelector("video");
+                          if (!video) return;
+                          if (video.paused) {
+                            void video.play();
+                          } else {
+                            video.pause();
+                          }
+                        }}
+                        className="absolute left-2 bottom-2 inline-flex items-center gap-1.5 rounded-lg bg-black/62 px-2.5 py-1.5 text-[11px] font-medium text-white shadow-lg backdrop-blur-sm transition-colors hover:bg-black/78"
+                        title={playingVideoUrls.includes(url) ? "暂停视频" : "播放视频"}
+                      >
+                        {playingVideoUrls.includes(url) ? <Pause size={12} /> : <Play size={12} />}
+                        {playingVideoUrls.includes(url) ? "暂停" : "播放"}
+                      </button>
+                    </>
+                  ) : (
+                    <img src={url} alt={message.text} className="w-full hover:opacity-95 transition-opacity" />
+                  )}
                 </div>
                 <div className="px-3 py-2 flex items-center justify-between">
                   <span className="text-[10px] text-text-tertiary">
                     {message.modelLabel} · {message.params?.image_size}
+                    {message.mediaType === "video" && message.params?.duration && ` · ${message.params.duration}s`}
                     {message.urls.length > 1 && ` · ${i + 1}/${message.urls.length}`}
-                    {message.params?.service_tier && ` · ${getServiceTierLabel(message.params.service_tier)}`}
                   </span>
                   <button onClick={() => onDownload?.({ ...message, image_url: url })}
                     className="p-1.5 rounded-md text-text-tertiary hover:text-text-primary hover:bg-bg-hover transition-all" title="下载">
@@ -533,6 +624,7 @@ export default function ChatPanel({
   const [previewSrc, setPreviewSrc] = useState(null);
   const [showConversationMenu, setShowConversationMenu] = useState(false);
   const [showCanvasHistoryMenu, setShowCanvasHistoryMenu] = useState(false);
+  const [showModelMenu, setShowModelMenu] = useState(false);
   const [conversationSearch, setConversationSearch] = useState("");
   const [gptAdvancedOpen, setGptAdvancedOpen] = useState(false);
 
@@ -552,17 +644,50 @@ export default function ChatPanel({
       if (!canvasHistoryMenuRef.current?.contains(event.target)) {
         setShowCanvasHistoryMenu(false);
       }
+      if (!event.target.closest("[data-model-menu-root]")) {
+        setShowModelMenu(false);
+      }
     };
 
     window.addEventListener("pointerdown", handlePointerDown);
     return () => window.removeEventListener("pointerdown", handlePointerDown);
   }, [showConversationMenu, showCanvasHistoryMenu]);
 
-  const currentTier = MODEL_TIERS.find((t) => t.variants.some((v) => v.model === params.model)) || MODEL_TIERS[1];
-  const availableRatios = currentTier.extendedRatios ? [...STANDARD_RATIOS, ...EXTENDED_RATIOS] : STANDARD_RATIOS;
+  const currentTier = MODEL_TIERS.find((t) => t.variants.some((v) => v.model === params.model)) || MODEL_TIERS[0];
+  const isKlingVideoTier = currentTier.id === "kling-video";
+  const currentKlingModel = String(params.model || "").trim();
+  const isKlingV26 = currentKlingModel === "kling-v2-6";
+  const isKlingV3Family = currentKlingModel === "kling-v3" || currentKlingModel === "kling-v3-omni";
+  const klingRefCount = refImages?.length || 0;
+  const isKlingFirstLastFrame = klingRefCount >= 2;
+  const availableKlingModes = isKlingV26
+    ? KLING_VIDEO_MODES.filter((item) =>
+        isKlingFirstLastFrame ? item.value === "pro" : item.value !== "4k"
+      )
+    : KLING_VIDEO_MODES;
+  const canUseKlingSound = isKlingV26 && !isKlingFirstLastFrame;
+  const klingDurationHint = isKlingV26
+    ? "Kling-V2-6 支持 5s / 10s。"
+    : "Kling-V3 / V3-Omni 支持 3s-15s。";
+  const klingModeHint = isKlingV26
+    ? isKlingFirstLastFrame
+      ? "Kling-V2-6 首尾帧仅支持 1080p。"
+      : "Kling-V2-6 支持 720p / 1080p；有声会自动使用 1080p。"
+    : "Kling-V3 / V3-Omni 支持 720p / 1080p / 4K。";
+  const klingSoundHint = isKlingV26
+    ? isKlingFirstLastFrame
+      ? "Kling-V2-6 首尾帧不支持声音控制。"
+      : "Kling-V2-6 文生/图生可选有声；有声会自动使用 1080p。"
+    : "Kling-V3 / V3-Omni 不支持声音控制。";
+  const availableRatios = isKlingVideoTier
+    ? ["16:9", "9:16", "1:1"]
+    : currentTier.extendedRatios
+      ? [...STANDARD_RATIOS, ...EXTENDED_RATIOS]
+      : STANDARD_RATIOS;
   const maxImages = currentTier.maxInputImages;
   const currentServiceTier = params.service_tier === "default" ? "default" : "priority";
   const isGptImage2Tier = currentTier.id === "chatgpt-image2";
+  const showServiceTierOptions = !isGptImage2Tier && currentTier.serviceTierOptions !== false;
   const exactSize = parseExactSizeValue(params.image_size);
   const currentGptQuality = isGptImage2Tier ? String(params.quality || "auto").trim().toLowerCase() : "auto";
   const currentGptFormat = isGptImage2Tier ? String(params.output_format || "png").trim().toLowerCase() : "png";
@@ -576,6 +701,9 @@ export default function ChatPanel({
     GPT_IMAGE_2_FORMAT_OPTIONS.find((item) => item.value === currentGptFormat)?.label || "PNG";
   const currentGptModerationLabel =
     GPT_IMAGE_2_MODERATION_OPTIONS.find((item) => item.value === currentGptModeration)?.label || "标准";
+  const currentKlingModeLabel =
+    availableKlingModes.find((item) => item.value === (params.mode || "pro"))?.label || "1080p";
+  const klingActiveClass = PARAM_ACTIVE_CLASS;
   const currentEntryMode = "agent";
   const currentEntryModeLabel = "Agent";
   const isQuickEntryMode = false;
@@ -625,6 +753,63 @@ export default function ChatPanel({
         p.output_compression ?? (String(p.output_format || "png").toLowerCase() === "png" ? undefined : 90),
     }));
   }, [isGptImage2Tier, onParamsChange, params.quality, params.output_format, params.moderation, params.output_compression]);
+
+  useEffect(() => {
+    if (!isKlingVideoTier) return;
+
+    const next = { ...params };
+    let changed = false;
+    if (isKlingV26) {
+      if (!KLING_V26_DURATIONS.includes(String(next.duration || "5"))) {
+        next.duration = "5";
+        changed = true;
+      }
+      if (next.mode === "4k") {
+        next.mode = "pro";
+        changed = true;
+      }
+      if (isKlingFirstLastFrame) {
+        if (next.mode !== "pro") {
+          next.mode = "pro";
+          changed = true;
+        }
+        if (next.sound !== "off") {
+          next.sound = "off";
+          changed = true;
+        }
+      } else if (next.sound === "on" && next.mode !== "pro") {
+        next.mode = "pro";
+        changed = true;
+      }
+    } else if (isKlingV3Family) {
+      const duration = Math.min(
+        KLING_VIDEO_MAX_DURATION,
+        Math.max(KLING_VIDEO_MIN_DURATION, Math.round(Number(next.duration || 5)) || 5)
+      );
+      if (String(next.duration || "5") !== String(duration)) {
+        next.duration = String(duration);
+        changed = true;
+      }
+      if (next.sound !== "off") {
+        next.sound = "off";
+        changed = true;
+      }
+    }
+
+    if (!next.sound) {
+      next.sound = "off";
+      changed = true;
+    }
+
+    if (changed) onParamsChange(next);
+  }, [
+    isKlingV26,
+    isKlingFirstLastFrame,
+    isKlingV3Family,
+    isKlingVideoTier,
+    onParamsChange,
+    params,
+  ]);
 
   /** 固定比例时清除 _autoRatio；选 Auto 时按首张参考图重新识别 */
   const applyRatio = useCallback(
@@ -747,10 +932,20 @@ export default function ChatPanel({
   const setTier = (tier) => {
     const defaultVariant = tier.variants.find((v) => v.label === "1K") || tier.variants[0];
     let nextImageSize = params.image_size;
+    if (tier.id === "kling-video" && !["16:9", "9:16", "1:1"].includes(nextImageSize)) {
+      nextImageSize = "16:9";
+    }
     if (!tier.extendedRatios && EXTENDED_RATIOS.includes(nextImageSize)) {
       nextImageSize = "1:1";
     }
-    onParamsChange({ ...params, model: defaultVariant.model, image_size: nextImageSize });
+    onParamsChange({
+      ...params,
+      model: defaultVariant.model,
+      image_size: nextImageSize,
+      ...(tier.id === "kling-video"
+        ? { num: 1, duration: params.duration || "5", mode: params.mode || "pro", sound: params.sound || "off" }
+        : {}),
+    });
   };
 
 
@@ -799,36 +994,41 @@ export default function ChatPanel({
                 }}
                 className={`w-8 h-8 rounded-lg flex items-center justify-center transition-all ${
                   showCanvasHistoryMenu
-                    ? "text-accent bg-accent/10"
+                    ? "text-green-600 bg-green-500/10"
                     : "text-text-tertiary hover:text-text-primary hover:bg-bg-hover"
                 }`}
-                title="历史记录"
-                aria-label="历史记录"
+                title="历史结果"
+                aria-label="历史结果"
               >
                 <ImageIcon size={16} />
               </button>
 
               {showCanvasHistoryMenu && (
-                <div className="absolute right-0 top-[calc(100%+8px)] w-[320px] rounded-2xl border border-border-primary bg-bg-secondary/95 backdrop-blur-xl shadow-2xl overflow-hidden z-30 animate-fade-in">
+                <div className="absolute right-0 top-[calc(100%+8px)] flex h-[420px] w-[320px] flex-col overflow-hidden rounded-2xl border border-border-primary bg-bg-secondary/95 shadow-2xl backdrop-blur-xl z-30 animate-fade-in">
                   <div className="flex items-center justify-between gap-2 border-b border-border-primary px-3 py-2">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <Clock size={14} className="text-text-tertiary" />
+                        <span className="text-sm font-medium text-text-primary">历史结果</span>
+                      </div>
+                      <div className="mt-0.5 text-[11px] text-text-tertiary">点击缩略图可预览结果</div>
+                    </div>
                     <div className="flex items-center gap-2">
-                      <Clock size={14} className="text-text-tertiary" />
-                      <span className="text-sm font-medium text-text-primary">历史记录</span>
                       {canvasCompletedHistory.length > 0 && (
                         <span className="rounded-md bg-bg-tertiary px-1.5 py-0.5 text-[10px] text-text-tertiary">
                           {canvasCompletedHistory.length}
                         </span>
                       )}
+                      {canvasCompletedHistory.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={onClearCanvasHistory}
+                          className="rounded-lg px-2 py-1 text-[11px] text-text-tertiary transition-all hover:bg-red-500/10 hover:text-red-400"
+                        >
+                          清空
+                        </button>
+                      )}
                     </div>
-                    {canvasCompletedHistory.length > 0 && (
-                      <button
-                        type="button"
-                        onClick={onClearCanvasHistory}
-                        className="rounded-lg px-2 py-1 text-[11px] text-text-tertiary transition-all hover:bg-red-500/10 hover:text-red-400"
-                      >
-                        清空
-                      </button>
-                    )}
                   </div>
 
                   {canvasCompletedHistory.length > 3 && (
@@ -855,18 +1055,17 @@ export default function ChatPanel({
                     </div>
                   )}
 
-                  <div className="max-h-[420px] overflow-y-auto px-2 py-2 space-y-1.5 scrollbar-thin">
+                  <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-3 pt-2 scrollbar-thin">
                     {reversedCanvasHistory.length === 0 && (
                       <div className="flex flex-col items-center justify-center px-4 py-10 text-center">
                         <ImageIcon size={24} className="mb-2 text-text-tertiary opacity-30" />
                         <p className="text-[11px] text-text-tertiary opacity-60">
-                          {canvasHistorySearch ? "没有匹配的记录" : "暂无生图记录"}
+                          {canvasHistorySearch ? "没有匹配的记录" : "暂无生成记录"}
                         </p>
                       </div>
                     )}
 
                     {reversedCanvasHistory.map((message) => {
-                      const firstUrl = message.urls?.[0];
                       const time = message.id ? new Date(parseInt(message.id.replace("ai-", ""), 10)).toLocaleString("zh-CN", {
                         month: "numeric",
                         day: "numeric",
@@ -875,40 +1074,65 @@ export default function ChatPanel({
                       }) : "";
 
                       return (
-                        <button
+                        <div
                           key={message.id}
-                          type="button"
-                          onClick={() => {
-                            setShowCanvasHistoryMenu(false);
-                            onSelectCanvasHistory?.(message);
-                          }}
-                          className="w-full overflow-hidden rounded-xl border border-border-primary bg-bg-tertiary text-left transition-all hover:border-accent/30 group"
+                          className="mb-3 last:mb-0"
                         >
-                          <div className="flex gap-2 p-2">
-                            {firstUrl && (
-                              <div className="relative h-14 w-14 flex-shrink-0 overflow-hidden rounded-lg bg-bg-hover">
-                                <img
-                                  src={firstUrl}
-                                  alt={message.text}
-                                  className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
-                                  loading="lazy"
-                                />
-                              </div>
-                            )}
-                            <div className="min-w-0 flex-1 py-0.5">
-                              <p className="line-clamp-2 text-[11px] leading-snug text-text-primary">
-                                {message.text}
-                              </p>
-                              <div className="mt-1 flex items-center gap-1.5">
-                                <span className="truncate text-[9px] text-text-tertiary">{message.modelLabel}</span>
-                                {message.urls?.length > 1 && (
-                                  <span className="text-[9px] text-accent">{message.urls.length}张</span>
-                                )}
-                                <span className="ml-auto flex-shrink-0 text-[9px] text-text-tertiary">{time}</span>
-                              </div>
-                            </div>
+                          <div className="mb-1.5 truncate text-[11px] text-text-secondary">
+                            {message.text}
                           </div>
-                        </button>
+                          <div className="grid grid-cols-4 gap-1.5">
+                            {(message.urls || []).slice(0, 4).map((url, i) => (
+                              <button
+                                key={`${message.id}-${i}`}
+                                type="button"
+                                onClick={() => {
+                                  if (message.mediaType === "video") window.open(url, "_blank");
+                                  else setPreviewSrc(url);
+                                }}
+                                className="group relative aspect-square overflow-hidden rounded-lg border border-border-primary bg-bg-hover"
+                              >
+                                {message.mediaType === "video" ? (
+                                  <video
+                                    src={url}
+                                    className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
+                                    muted
+                                    playsInline
+                                  />
+                                ) : (
+                                  <img
+                                    src={url}
+                                    alt={`历史图片 ${i + 1}`}
+                                    className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
+                                    loading="lazy"
+                                  />
+                                )}
+                                {message.urls?.length > 4 && i === 3 && (
+                                  <span className="absolute inset-0 flex items-center justify-center bg-black/45 text-[11px] font-medium text-white">
+                                    +{message.urls.length - 3}
+                                  </span>
+                                )}
+                              </button>
+                            ))}
+                          </div>
+                          <div className="mt-1 flex items-center gap-1.5 text-[10px] text-text-tertiary">
+                            <span className="truncate">{message.modelLabel}</span>
+                            {message.mediaType === "video"
+                              ? <span className="text-accent">视频</span>
+                              : message.urls?.length > 1 && <span className="text-accent">{message.urls.length}张</span>}
+                            <span className="ml-auto flex-shrink-0">{time}</span>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setShowCanvasHistoryMenu(false);
+                              onSelectCanvasHistory?.(message);
+                            }}
+                            className="mt-2 w-full rounded-lg border border-border-primary bg-bg-tertiary px-2.5 py-1.5 text-[11px] font-medium text-text-secondary transition-all hover:border-accent/30 hover:bg-accent/10 hover:text-text-primary"
+                          >
+                            一键填入
+                          </button>
+                        </div>
                       );
                     })}
                   </div>
@@ -976,7 +1200,7 @@ export default function ChatPanel({
                           }}
                           className={`w-full text-left px-3 py-2.5 rounded-xl transition-all border ${
                             isActive
-                              ? "bg-accent/10 border-accent/30"
+                              ? "bg-green-500/10 border-green-500/30"
                               : "bg-bg-tertiary border-border-primary hover:bg-bg-hover"
                           }`}
                         >
@@ -1037,7 +1261,7 @@ export default function ChatPanel({
                     const Icon = t.icon;
                     return (
                       <div key={t.id} className="flex items-center gap-2 px-3 py-2 rounded-lg bg-bg-tertiary border border-border-primary">
-                        <Icon size={14} className={t.color} />
+                        <Icon size={14} className={MODEL_ICON_CLASS} />
                         <div>
                           <p className="text-[11px] text-text-primary font-medium">{t.name}</p>
                           <p className="text-[10px] text-text-tertiary">{t.desc} · 最多{t.maxInputImages}张参考图</p>
@@ -1074,7 +1298,7 @@ export default function ChatPanel({
                   onClick={() => onComposerModeChange?.("agent")}
                   className={`px-3 py-1.5 rounded-lg text-[11px] font-medium transition-all ${
                     composerMode === "agent"
-                      ? "bg-accent text-white"
+                      ? PARAM_ACTIVE_CLASS
                       : "text-text-secondary hover:text-text-primary"
                   }`}
                 >
@@ -1085,7 +1309,7 @@ export default function ChatPanel({
                   onClick={() => onComposerModeChange?.("manual")}
                   className={`px-3 py-1.5 rounded-lg text-[11px] font-medium transition-all ${
                     composerMode === "manual"
-                      ? "bg-accent text-white"
+                      ? PARAM_ACTIVE_CLASS
                       : "text-text-secondary hover:text-text-primary"
                   }`}
                 >
@@ -1107,54 +1331,76 @@ export default function ChatPanel({
             <div className="space-y-3 py-2 animate-fade-in">
               <div>
                 <span className="block text-[11px] text-text-tertiary mb-1.5">模型</span>
-                <div className="space-y-1.5">
-                  {MODEL_TIERS.map((tier) => {
-                    const Icon = tier.icon;
-                    const active = currentTier.id === tier.id;
+                <div className="relative" data-model-menu-root>
+                  {(() => {
+                    const Icon = currentTier.icon;
                     return (
                       <button
-                        key={tier.id}
                         type="button"
-                        disabled={tier.disabled}
-                        onClick={() => {
-                          if (!tier.disabled) setTier(tier);
-                        }}
-                        className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-left transition-all border ${
-                          tier.disabled
-                            ? "bg-bg-tertiary/60 border-border-primary opacity-60 cursor-not-allowed"
-                            : active
-                              ? tier.bg
-                              : "bg-bg-tertiary border-border-primary hover:bg-bg-hover"
-                        }`}
+                        onClick={() => setShowModelMenu((prev) => !prev)}
+                        className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-left transition-all ${PARAM_ACTIVE_CLASS}`}
                       >
-                        <Icon size={14} className={active ? tier.color : "text-text-tertiary"} />
-                        <div className="flex-1 min-w-0">
-                          <p className={`text-[11px] font-medium ${active ? "text-text-primary" : "text-text-secondary"}`}>{tier.name}</p>
-                          <p className="text-[10px] text-text-tertiary">{tier.desc}</p>
+                        <Icon size={14} className={PARAM_ACTIVE_ICON_CLASS} />
+                        <div className="min-w-0 flex-1">
+                          <p className="text-[11px] font-medium text-white">{currentTier.name}</p>
+                          <p className={`text-[10px] truncate ${PARAM_ACTIVE_MUTED_TEXT_CLASS}`}>{currentTier.desc}</p>
                         </div>
-                        {tier.disabled && (
-                          <span className="rounded-md border border-fuchsia-500/20 bg-fuchsia-500/10 px-1.5 py-0.5 text-[9px] font-medium text-fuchsia-300">
-                            即将接入
-                          </span>
-                        )}
+                        <ChevronDown size={14} className={`text-white/75 transition-transform ${showModelMenu ? "rotate-180" : ""}`} />
                       </button>
                     );
-                  })}
+                  })()}
+                  {showModelMenu && (
+                    <div className="absolute left-0 right-0 top-[calc(100%+6px)] z-40 space-y-1 rounded-xl border border-border-primary bg-bg-secondary/98 p-1.5 shadow-2xl backdrop-blur-xl">
+                      {MODEL_TIERS.map((tier) => {
+                        const Icon = tier.icon;
+                        const active = currentTier.id === tier.id;
+                        return (
+                          <button
+                            key={tier.id}
+                            type="button"
+                            disabled={tier.disabled}
+                            onClick={() => {
+                              if (tier.disabled) return;
+                              setTier(tier);
+                              setShowModelMenu(false);
+                            }}
+                            className={`w-full flex items-center gap-2.5 rounded-lg border px-3 py-2 text-left transition-all ${
+                              tier.disabled
+                                ? "border-border-primary bg-bg-tertiary/60 opacity-60 cursor-not-allowed"
+                                : active
+                                  ? PARAM_ACTIVE_CLASS
+                                  : "border-transparent bg-transparent hover:bg-bg-hover"
+                            }`}
+                          >
+                            <Icon size={14} className={active ? PARAM_ACTIVE_ICON_CLASS : MODEL_ICON_CLASS} />
+                            <div className="min-w-0 flex-1">
+                              <p className={`text-[11px] font-medium ${active ? "text-white" : "text-text-secondary"}`}>{tier.name}</p>
+                              <p className={`text-[10px] truncate ${active ? PARAM_ACTIVE_MUTED_TEXT_CLASS : "text-text-tertiary"}`}>{tier.desc}</p>
+                            </div>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
                 </div>
               </div>
-              <div>
-                <span className="block text-[11px] text-text-tertiary mb-1.5">分辨率</span>
-                <div className="flex gap-1.5 flex-wrap">
-                  {currentTier.variants.map((v) => (
-                    <button key={v.model} onClick={() => onParamsChange({ ...params, model: v.model })}
-                      className={`px-2.5 py-1.5 rounded-lg text-[11px] font-medium transition-all ${params.model === v.model ? "bg-accent text-white" : "bg-bg-tertiary text-text-secondary hover:bg-bg-hover border border-border-primary"}`}>
-                      {v.label}
-                      <span className="block text-[9px] opacity-60">{getVariantCredits(v, currentServiceTier)} credits</span>
-                    </button>
-                  ))}
+              {currentTier.variants.length > 1 && (
+                <div>
+                  <span className="block text-[11px] text-text-tertiary mb-1.5">模型规格</span>
+                  <div className="flex gap-1.5 flex-wrap">
+                    {currentTier.variants.map((v) => (
+                      <button key={v.model} onClick={() => onParamsChange({ ...params, model: v.model })}
+                        className={`px-2.5 py-1.5 rounded-lg text-[11px] font-medium transition-all ${params.model === v.model ? PARAM_ACTIVE_CLASS : "bg-bg-tertiary text-text-secondary hover:bg-bg-hover border border-border-primary"}`}>
+                        {v.label}
+                        {!isKlingVideoTier && (
+                          <span className="block text-[9px] opacity-60">{getVariantCredits(v, currentServiceTier)} credits</span>
+                        )}
+                      </button>
+                    ))}
+                  </div>
                 </div>
-              </div>
-              {!isGptImage2Tier && (
+              )}
+              {showServiceTierOptions && (
                 <div>
                   <span className="block text-[11px] text-text-tertiary mb-1.5">线路</span>
                   <div className="grid grid-cols-2 gap-1.5">
@@ -1165,18 +1411,161 @@ export default function ChatPanel({
                         onClick={() => onParamsChange({ ...params, service_tier: tier.id })}
                         className={`px-3 py-2 rounded-lg text-left border transition-all ${
                           params.service_tier === tier.id
-                            ? "bg-accent/10 border-accent/30 text-text-primary"
+                            ? PARAM_ACTIVE_CLASS
                             : "bg-bg-tertiary border-border-primary text-text-secondary hover:bg-bg-hover"
                         }`}
                       >
                         <span className="block text-[11px] font-medium">{tier.label}</span>
-                        <span className="block text-[10px] text-text-tertiary mt-0.5">{tier.desc}</span>
+                        <span className={`block text-[10px] mt-0.5 ${params.service_tier === tier.id ? PARAM_ACTIVE_MUTED_TEXT_CLASS : "text-text-tertiary"}`}>{tier.desc}</span>
                       </button>
                     ))}
                   </div>
                 </div>
               )}
-              {isGptImage2Tier ? (
+              {isKlingVideoTier ? (
+                <CollapsibleParamSection
+                  title="Kling 视频参数"
+                  summary={[
+                    `比例 ${params.image_size || "参考图"}`,
+                    `${params.duration || "5"}s`,
+                    currentKlingModeLabel,
+                    (params.sound || "off") === "on" ? "有声" : "无声",
+                    isKlingFirstLastFrame ? "首尾帧" : klingRefCount === 1 ? "图生视频" : "文生视频",
+                  ].join(" · ")}
+                  open
+                  onToggle={() => {}}
+                >
+                  <div className="pt-2 space-y-3">
+                    <div>
+                      <span className="block text-[11px] text-text-tertiary mb-1.5">视频比例</span>
+                      <div className="flex gap-1 flex-wrap">
+                        {availableRatios.map((r) => (
+                          <button
+                            key={r}
+                            type="button"
+                            onClick={() => onParamsChange({
+                              ...params,
+                              image_size: params.image_size === r ? "" : r,
+                            })}
+                            className={`px-2 py-1 rounded-md text-[10px] font-medium transition-all ${
+                              params.image_size === r
+                                ? PARAM_ACTIVE_CLASS
+                                : "bg-bg-tertiary text-text-secondary hover:bg-bg-hover border border-border-primary"
+                            }`}
+                          >
+                            {r}
+                          </button>
+                        ))}
+                      </div>
+                      <p className="text-[10px] text-text-tertiary mt-1.5">
+                        再次点击已选比例可取消；有参考图时取消比例会优先按参考图比例生成。
+                      </p>
+                    </div>
+                    <div>
+                      <div className="mb-2 flex items-center justify-between">
+                        <span className="block text-[11px] text-text-tertiary">生成时长</span>
+                        <span className="text-[11px] font-medium text-text-secondary">{params.duration || "5"}s</span>
+                      </div>
+                      {isKlingV26 ? (
+                        <div className="flex gap-1.5">
+                          {KLING_V26_DURATIONS.map((duration) => (
+                            <button
+                              key={duration}
+                              type="button"
+                              onClick={() => onParamsChange({ ...params, duration })}
+                              className={`px-2.5 py-1.5 rounded-lg text-[11px] font-medium transition-all ${
+                                String(params.duration || "5") === duration
+                                  ? klingActiveClass
+                                  : "bg-bg-tertiary text-text-secondary hover:bg-bg-hover border border-border-primary"
+                              }`}
+                            >
+                              {duration}s
+                            </button>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="grid grid-cols-[28px_1fr_32px] items-center gap-2">
+                          <span className="text-[11px] text-text-tertiary">{KLING_VIDEO_MIN_DURATION}s</span>
+                          <input
+                            type="range"
+                            min={KLING_VIDEO_MIN_DURATION}
+                            max={KLING_VIDEO_MAX_DURATION}
+                            step={1}
+                            value={Number(params.duration || 5)}
+                            onChange={(event) => onParamsChange({ ...params, duration: String(event.target.value) })}
+                            className="w-full accent-green-500"
+                          />
+                          <span className="text-right text-[11px] text-text-tertiary">{KLING_VIDEO_MAX_DURATION}s</span>
+                        </div>
+                      )}
+                      <p className="text-[10px] text-text-tertiary mt-1.5">
+                        {klingDurationHint}
+                      </p>
+                    </div>
+                    <div>
+                      <span className="block text-[11px] text-text-tertiary mb-1.5">分辨率模式</span>
+                      <div className="flex gap-1.5 flex-wrap">
+                        {availableKlingModes.map((item) => (
+                          <button
+                            key={item.value}
+                            type="button"
+                            onClick={() => onParamsChange({ ...params, mode: item.value })}
+                            className={`px-2.5 py-1.5 rounded-lg text-[11px] font-medium transition-all ${
+                              String(params.mode || "pro") === item.value
+                                ? klingActiveClass
+                                : "bg-bg-tertiary text-text-secondary hover:bg-bg-hover border border-border-primary"
+                            }`}
+                          >
+                            {item.label}
+                          </button>
+                        ))}
+                      </div>
+                      <p className="text-[10px] text-text-tertiary mt-1.5">
+                        {klingModeHint}
+                      </p>
+                    </div>
+                    <div>
+                      <span className="block text-[11px] text-text-tertiary mb-1.5">声音</span>
+                      <div className="grid grid-cols-2 gap-1.5">
+                        {KLING_SOUND_OPTIONS.map((item) => (
+                          <button
+                            key={item.value}
+                            type="button"
+                            disabled={item.value === "on" && !canUseKlingSound}
+                            onClick={() => {
+                              if (item.value === "on" && !canUseKlingSound) return;
+                              onParamsChange({
+                                ...params,
+                                sound: item.value,
+                                ...(item.value === "on" ? { mode: "pro" } : {}),
+                              });
+                            }}
+                            className={`rounded-lg border px-3 py-2 text-left transition-all ${
+                              String(params.sound || "off") === item.value
+                                ? klingActiveClass
+                                : item.value === "on" && !canUseKlingSound
+                                  ? "border-border-primary bg-bg-tertiary/60 text-text-tertiary/50 cursor-not-allowed"
+                                : "border-border-primary bg-bg-tertiary text-text-secondary hover:bg-bg-hover"
+                            }`}
+                          >
+                            <span className="block text-[11px] font-medium">{item.label}</span>
+                            <span className={`mt-0.5 block text-[10px] ${
+                              String(params.sound || "off") === item.value
+                                ? PARAM_ACTIVE_MUTED_TEXT_CLASS
+                                : "text-text-tertiary"
+                            }`}>
+                              {item.value === "on" && !canUseKlingSound ? "当前模型/首尾帧不支持" : item.desc}
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                      <p className="text-[10px] text-text-tertiary mt-1.5">
+                        {klingSoundHint} 0 张参考图为文生视频，1 张为图生视频，2 张为首尾帧生视频。
+                      </p>
+                    </div>
+                  </div>
+                </CollapsibleParamSection>
+              ) : isGptImage2Tier ? (
                 <CollapsibleParamSection
                   title="GPT 高级参数"
                   summary={[
@@ -1194,12 +1583,12 @@ export default function ChatPanel({
                   <div className="pt-2 space-y-3">
                     <div>
                       <span className="block text-[11px] text-text-tertiary mb-1.5">
-                        宽高比{currentTier.extendedRatios && <span className="text-blue-400 ml-1">+ 扩展</span>}
+                        宽高比{currentTier.extendedRatios && <span className="text-text-tertiary ml-1">+ 扩展</span>}
                       </span>
                       <div className="flex gap-1 flex-wrap">
                         {availableRatios.map((r) => (
                           <button key={r} onClick={() => void applyRatio(r)}
-                            className={`px-2 py-1 rounded-md text-[10px] font-medium transition-all ${params.image_size === r ? "bg-accent text-white" : r === "auto" ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 hover:bg-emerald-500/20" : EXTENDED_RATIOS.includes(r) ? "bg-blue-500/10 text-blue-400 border border-blue-500/20 hover:bg-blue-500/20" : "bg-bg-tertiary text-text-secondary hover:bg-bg-hover border border-border-primary"}`}>
+                            className={`px-2 py-1 rounded-md text-[10px] font-medium transition-all ${params.image_size === r ? PARAM_ACTIVE_CLASS : "bg-bg-tertiary text-text-secondary hover:bg-bg-hover border border-border-primary"}`}>
                             {r === "auto" ? "Auto" : r}
                           </button>
                         ))}
@@ -1225,7 +1614,7 @@ export default function ChatPanel({
                             onClick={() => onParamsChange({ ...params, quality: item.value })}
                             className={`px-2.5 py-1.5 rounded-lg text-[11px] font-medium transition-all ${
                               currentGptQuality === item.value
-                                ? "bg-fuchsia-500/15 text-fuchsia-700 border border-fuchsia-400/40 dark:bg-fuchsia-500/20 dark:text-fuchsia-200 dark:border-fuchsia-500/30"
+                                ? PARAM_ACTIVE_CLASS
                                 : "bg-bg-tertiary text-text-secondary hover:bg-bg-hover border border-border-primary"
                             }`}
                           >
@@ -1253,7 +1642,7 @@ export default function ChatPanel({
                             }
                             className={`px-2.5 py-1.5 rounded-lg text-[11px] font-medium transition-all ${
                               currentGptFormat === item.value
-                                ? "bg-fuchsia-500/15 text-fuchsia-700 border border-fuchsia-400/40 dark:bg-fuchsia-500/20 dark:text-fuchsia-200 dark:border-fuchsia-500/30"
+                                ? PARAM_ACTIVE_CLASS
                                 : "bg-bg-tertiary text-text-secondary hover:bg-bg-hover border border-border-primary"
                             }`}
                           >
@@ -1276,7 +1665,7 @@ export default function ChatPanel({
                                 output_compression: Math.min(100, Math.max(0, Number(e.target.value) || 0)),
                               })
                             }
-                            className="flex-1 accent-fuchsia-400"
+                            className="flex-1 accent-green-500"
                           />
                           <span className="w-10 text-right text-[10px] text-text-tertiary tabular-nums">
                             {currentGptCompression}
@@ -1297,7 +1686,7 @@ export default function ChatPanel({
                             onClick={() => onParamsChange({ ...params, moderation: item.value })}
                             className={`px-2.5 py-1.5 rounded-lg text-[11px] font-medium transition-all ${
                               currentGptModeration === item.value
-                                ? "bg-fuchsia-500/15 text-fuchsia-700 border border-fuchsia-400/40 dark:bg-fuchsia-500/20 dark:text-fuchsia-200 dark:border-fuchsia-500/30"
+                                ? PARAM_ACTIVE_CLASS
                                 : "bg-bg-tertiary text-text-secondary hover:bg-bg-hover border border-border-primary"
                             }`}
                           >
@@ -1314,12 +1703,12 @@ export default function ChatPanel({
               ) : (
                 <div>
                   <span className="block text-[11px] text-text-tertiary mb-1.5">
-                    宽高比{currentTier.extendedRatios && <span className="text-blue-400 ml-1">+ 扩展</span>}
+                    宽高比{currentTier.extendedRatios && <span className="text-text-tertiary ml-1">+ 扩展</span>}
                   </span>
                   <div className="flex gap-1 flex-wrap">
                     {availableRatios.map((r) => (
                       <button key={r} onClick={() => void applyRatio(r)}
-                        className={`px-2 py-1 rounded-md text-[10px] font-medium transition-all ${params.image_size === r ? "bg-accent text-white" : r === "auto" ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 hover:bg-emerald-500/20" : EXTENDED_RATIOS.includes(r) ? "bg-blue-500/10 text-blue-400 border border-blue-500/20 hover:bg-blue-500/20" : "bg-bg-tertiary text-text-secondary hover:bg-bg-hover border border-border-primary"}`}>
+                        className={`px-2 py-1 rounded-md text-[10px] font-medium transition-all ${params.image_size === r ? PARAM_ACTIVE_CLASS : "bg-bg-tertiary text-text-secondary hover:bg-bg-hover border border-border-primary"}`}>
                         {r === "auto" ? "Auto" : r}
                       </button>
                     ))}
@@ -1336,6 +1725,7 @@ export default function ChatPanel({
                   )}
                 </div>
               )}
+              {!isKlingVideoTier && (
               <div>
                 <span className="block text-[11px] text-text-tertiary mb-1.5">
                   生成数量（1–{MAX_GEN_COUNT}）
@@ -1364,6 +1754,7 @@ export default function ChatPanel({
                   <span className="text-[10px] text-text-tertiary">张 · 提示词里写「3张」等会与该数取较大值</span>
                 </div>
               </div>
+              )}
             </div>
           )}
 
@@ -1372,7 +1763,7 @@ export default function ChatPanel({
             <div className="flex gap-1.5 flex-wrap items-end">
               {refImages.map((src, i) => (
                 <div key={i} className="relative group/img">
-                  <img src={src} alt={`参考图${i + 1}`} className="h-14 w-14 rounded-lg object-cover border border-border-primary" />
+                  <ReferenceThumb src={src} index={i} />
                   <button onClick={() => removeImage(i)}
                     className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-error flex items-center justify-center text-white opacity-0 group-hover/img:opacity-100 transition-opacity">
                     <X size={10} />
