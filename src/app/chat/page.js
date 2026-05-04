@@ -28,6 +28,7 @@ import { compressImage } from "@/lib/imageUtils";
 import { GENERATION_STAGE_ORDER, getGenerationStageCopy } from "@/lib/generationStages";
 import BrandLogo from "@/components/BrandLogo";
 import {
+  buildEzFamilyTriggerPrompt,
   buildWaTemplatePrompt,
   chooseWaTemplateIpRole,
   detectEzFamilyTrigger,
@@ -752,8 +753,9 @@ export default function ChatPage() {
     } else if (ezFamilyRole) {
       try {
         autoRefImages.push(...await fetchEzFamilyReferenceImages(ezFamilyRole));
-
-        // 场景二：用户有参考图 + EZfamily 触发图 → 作为第二张参考，prompt 保持原样
+        apiText = buildEzFamilyTriggerPrompt(text, ezFamilyRole, {
+          hasUserReferenceImages: activeRefImages.length > 0,
+        });
       } catch { /* 静默跳过 */ }
     } else if (hasEzLogoTrigger) {
       try {

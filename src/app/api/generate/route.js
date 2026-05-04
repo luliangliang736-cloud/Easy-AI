@@ -16,6 +16,20 @@ const API_KEY_HEADER = process.env.NANO_API_KEY_HEADER || "authorization";
 const OPENAI_COMPAT_IMAGE_MODEL = process.env.NANO_OPENAI_IMAGE_MODEL || "";
 const OPENAI_COMPAT_IMAGE_ENDPOINT = (process.env.NANO_OPENAI_IMAGE_ENDPOINT || "images").trim().toLowerCase();
 
+function createRequestMeta(route) {
+  return {
+    id: `${route}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+    startedAt: Date.now(),
+  };
+}
+
+function logGenerateEvent(meta, event, details = {}) {
+  console.log(`[Generate:${meta.id}] ${event}`, JSON.stringify({
+    elapsedMs: Date.now() - meta.startedAt,
+    ...details,
+  }));
+}
+
 function resolveOpenAICompatNanoModel(model) {
   if (OPENAI_COMPAT_IMAGE_MODEL) return OPENAI_COMPAT_IMAGE_MODEL;
   const requestedModel = String(model || "").trim();
@@ -46,7 +60,9 @@ function formatRouteError(err) {
 }
 
 export async function POST(request) {
+  const meta = createRequestMeta("generate");
   if (!API_KEY || API_KEY === "sk-your-api-key-here") {
+    logGenerateEvent(meta, "config_error", { reason: "missing_api_key" });
     return NextResponse.json(
       { error: "API key not configured. Set NANO_API_KEY in .env.local" },
       { status: 500 }
@@ -68,7 +84,18 @@ export async function POST(request) {
       moderation,
     } = body;
 
+    logGenerateEvent(meta, "start", {
+      model: model || "gemini-3.1-flash-image-preview",
+      imageSize: image_size || "1:1",
+      num: Math.min(Math.max(num || 1, 1), MAX_GEN_COUNT),
+      refCount: Array.isArray(ref_images) ? ref_images.length : 0,
+      serviceTier: service_tier || null,
+      apiStyle: API_STYLE,
+      endpoint: API_STYLE === "openai" ? OPENAI_COMPAT_IMAGE_ENDPOINT : "nano",
+    });
+
     if (!prompt?.trim()) {
+      logGenerateEvent(meta, "validation_error", { reason: "missing_prompt" });
       return NextResponse.json({ error: "Prompt is required" }, { status: 400 });
     }
 
@@ -85,6 +112,10 @@ export async function POST(request) {
       const tasks = urls
         .filter(Boolean)
         .map((url, index) => ({ id: `gpt-image-2-${index}`, index, url, status: "completed" }));
+      logGenerateEvent(meta, "success", {
+        provider: "gpt-image-2",
+        urlCount: urls.filter(Boolean).length,
+      });
       return NextResponse.json({
         success: true,
         data: { urls, tasks },
@@ -112,6 +143,10 @@ export async function POST(request) {
       const tasks = urls
         .filter(Boolean)
         .map((url, index) => ({ id: `nano-openai-${index}`, index, url, status: "completed" }));
+      logGenerateEvent(meta, "success", {
+        provider: "openai-compatible",
+        urlCount: urls.filter(Boolean).length,
+      });
       return NextResponse.json({
         success: true,
         data: { urls, tasks },
@@ -143,11 +178,13 @@ export async function POST(request) {
 
     const rawText = await res.text();
     console.log("[Generate] Status:", res.status, "Body:", rawText.slice(0, 500));
+    logGenerateEvent(meta, "upstream_response", { provider: "nano", status: res.status });
 
     let data;
     try {
       data = JSON.parse(rawText);
     } catch {
+      logGenerateEvent(meta, "non_json_response", { status: res.status });
       return NextResponse.json(
         { error: `API returned non-JSON (${res.status}): ${rawText.slice(0, 200)}` },
         { status: 502 }
@@ -155,6 +192,12 @@ export async function POST(request) {
     }
 
     if (data.code !== 0) {
+      logGenerateEvent(meta, "upstream_error", {
+        provider: "nano",
+        code: data.code,
+        status: res.status,
+        message: data.message || null,
+      });
       return NextResponse.json(
         { error: data.message || `API error (code: ${data.code})` },
         { status: res.status >= 400 ? res.status : 400 }
@@ -172,6 +215,10 @@ export async function POST(request) {
     });
   } catch (err) {
     console.error("[Generate] Error:", err);
+    logGenerateEvent(meta, "error", {
+      message: formatRouteError(err),
+      code: err?.cause?.code || err?.code || null,
+    });
     return NextResponse.json(
       { error: formatRouteError(err) },
       { status: 500 }

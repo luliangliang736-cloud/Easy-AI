@@ -14,6 +14,20 @@ const POLL_TIMEOUT_MS = Number(process.env.KLING_POLL_TIMEOUT_MS || 4 * 60 * 100
 const VALID_ASPECT_RATIOS = new Set(["16:9", "9:16", "1:1"]);
 const VALID_MODES = new Set(["std", "pro", "4k", "standard", "professional", "720p", "1080p"]);
 
+function createRequestMeta(route) {
+  return {
+    id: `${route}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`,
+    startedAt: Date.now(),
+  };
+}
+
+function logKlingEvent(meta, event, details = {}) {
+  console.log(`[KlingVideo:${meta.id}] ${event}`, JSON.stringify({
+    elapsedMs: Date.now() - meta.startedAt,
+    ...details,
+  }));
+}
+
 function base64Url(input) {
   return Buffer.from(input)
     .toString("base64")
@@ -353,7 +367,9 @@ function buildTaskPayload(body) {
 }
 
 export async function POST(request) {
+  const meta = createRequestMeta("kling-video");
   if (!ACCESS_KEY_ID || !ACCESS_KEY_SECRET) {
+    logKlingEvent(meta, "config_error", { reason: "missing_api_key" });
     return NextResponse.json(
       { error: "Kling API key not configured. Set KLING_ACCESS_KEY_ID and KLING_ACCESS_KEY_SECRET in .env.local" },
       { status: 500 }
@@ -363,15 +379,31 @@ export async function POST(request) {
   try {
     const body = await request.json();
     if (!String(body?.prompt || "").trim()) {
+      logKlingEvent(meta, "validation_error", { reason: "missing_prompt" });
       return NextResponse.json({ error: "Prompt is required" }, { status: 400 });
     }
 
     const { path, payload, generationType } = buildTaskPayload(body);
+    logKlingEvent(meta, "start", {
+      generationType,
+      path,
+      model: payload.model_name,
+      mode: payload.mode || null,
+      duration: payload.duration || null,
+      sound: payload.sound || null,
+      aspectRatio: payload.aspect_ratio || null,
+      refCount: Array.isArray(body?.ref_images) ? body.ref_images.filter(Boolean).length : 0,
+    });
     const createData = await requestKling(path, { method: "POST", body: payload });
     const taskId = extractTaskId(createData);
     if (!taskId) {
       const immediateUrls = extractVideoUrls(createData);
       if (immediateUrls.length > 0) {
+        logKlingEvent(meta, "success", {
+          generationType,
+          taskMode: "immediate",
+          urlCount: immediateUrls.length,
+        });
         return NextResponse.json({
           success: true,
           data: {
@@ -388,10 +420,17 @@ export async function POST(request) {
           },
         });
       }
+      logKlingEvent(meta, "missing_task_id", { generationType });
       throw new Error("Kling API 未返回 task_id");
     }
 
+    logKlingEvent(meta, "task_created", { generationType, taskId });
     const urls = await pollTask(path, taskId);
+    logKlingEvent(meta, "success", {
+      generationType,
+      taskId,
+      urlCount: urls.length,
+    });
     return NextResponse.json({
       success: true,
       data: {
@@ -413,6 +452,10 @@ export async function POST(request) {
     const message = error?.name === "AbortError"
       ? "Kling 视频服务响应超时，请稍后重试。"
       : error?.message || "Kling video request failed";
+    logKlingEvent(meta, "error", {
+      message,
+      code: error?.cause?.code || error?.code || null,
+    });
     return NextResponse.json({ error: message }, { status: 500 });
   }
 }

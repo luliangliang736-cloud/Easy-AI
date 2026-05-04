@@ -822,6 +822,8 @@ export default function ChatPanel({
             image_size: "auto",
             _autoRatio: meta.ratio,
             _autoDimensions: meta.dimensionsLabel || undefined,
+            _autoWidth: meta.width || undefined,
+            _autoHeight: meta.height || undefined,
           }));
         } else {
           onParamsChange((p) => ({
@@ -829,6 +831,8 @@ export default function ChatPanel({
             image_size: "auto",
             _autoRatio: undefined,
             _autoDimensions: undefined,
+            _autoWidth: undefined,
+            _autoHeight: undefined,
           }));
         }
         return;
@@ -838,6 +842,8 @@ export default function ChatPanel({
         image_size: r,
         _autoRatio: undefined,
         _autoDimensions: undefined,
+        _autoWidth: undefined,
+        _autoHeight: undefined,
       }));
     },
     [refImages, onParamsChange]
@@ -874,6 +880,8 @@ export default function ChatPanel({
         image_size: "auto",
         _autoRatio: meta.ratio,
         _autoDimensions: meta.dimensionsLabel || undefined,
+        _autoWidth: meta.width || undefined,
+        _autoHeight: meta.height || undefined,
       }));
     }
   }, [refImages, maxImages, onRefImagesChange, onParamsChange]);
@@ -885,7 +893,7 @@ export default function ChatPanel({
       if (next.length === 0) {
         onParamsChange((p) =>
           p.image_size === "auto"
-            ? { ...p, _autoRatio: undefined, _autoDimensions: undefined }
+            ? { ...p, _autoRatio: undefined, _autoDimensions: undefined, _autoWidth: undefined, _autoHeight: undefined }
             : p
         );
         return;
@@ -898,6 +906,8 @@ export default function ChatPanel({
                   ...p,
                   _autoRatio: meta.ratio,
                   _autoDimensions: meta.dimensionsLabel || undefined,
+                  _autoWidth: meta.width || undefined,
+                  _autoHeight: meta.height || undefined,
                 }
               : p
           );

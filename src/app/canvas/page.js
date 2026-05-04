@@ -1024,6 +1024,8 @@ function HomeInner() {
         ...prev,
         _autoRatio: undefined,
         _autoDimensions: undefined,
+        _autoWidth: undefined,
+        _autoHeight: undefined,
       }));
       return undefined;
     }
@@ -1355,15 +1357,27 @@ function HomeInner() {
     const inferredQuickRatio = !effectiveRefImages.length && activeEntryMode === "quick"
       ? inferAspectRatioFromPrompt(composerText || text)
       : null;
-    const resolvedParams = inferredQuickRatio
+    let resolvedParams = inferredQuickRatio
       ? {
           ...effectiveParams,
           image_size: inferredQuickRatio,
           _autoRatio: undefined,
           _autoDimensions: undefined,
+          _autoWidth: undefined,
+          _autoHeight: undefined,
         }
       : effectiveParams;
     const hasImages = effectiveRefImages.length > 0;
+    if (hasImages && resolvedParams.image_size === "auto" && (!resolvedParams._autoRatio || !resolvedParams._autoWidth || !resolvedParams._autoHeight)) {
+      const meta = await detectRefImageMeta(effectiveRefImages[0]);
+      resolvedParams = {
+        ...resolvedParams,
+        _autoRatio: meta.ratio,
+        _autoDimensions: meta.dimensionsLabel || resolvedParams._autoDimensions,
+        _autoWidth: meta.width || resolvedParams._autoWidth,
+        _autoHeight: meta.height || resolvedParams._autoHeight,
+      };
+    }
     const requestParams = resolvedParams;
     const isKlingVideoRequest = isKlingVideoModel(requestParams.model);
     const shouldUseEditApi = !isKlingVideoRequest && (Boolean(editMode) || hasImages);

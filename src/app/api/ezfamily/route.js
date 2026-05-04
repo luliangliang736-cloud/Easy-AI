@@ -78,7 +78,7 @@ export async function GET(request) {
       ? images.filter((name) => name.includes(preferredKeyword))
       : images;
     const pickPool = candidateImages.length > 0 ? candidateImages : images;
-    const filename = pickPool[Math.floor(Math.random() * pickPool.length)];
+    const filename = [...pickPool].sort((a, b) => a.localeCompare(b, "zh-Hans-CN", { numeric: true }))[0];
     const image = await readFile(path.resolve(assetDir, filename));
 
     return new NextResponse(image, {

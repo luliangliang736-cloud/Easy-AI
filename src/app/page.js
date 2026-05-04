@@ -12,6 +12,7 @@ import { useTheme } from "@/lib/useTheme";
 import { compressImage } from "@/lib/imageUtils";
 import { getGenerationStageCopy } from "@/lib/generationStages";
 import {
+  buildEzFamilyTriggerPrompt,
   buildWaTemplatePrompt,
   chooseWaTemplateIpRole,
   detectEzFamilyTrigger,
@@ -598,12 +599,11 @@ const EFFECT_SHOWCASE_CARDS = [
 
 const HERO_CAROUSEL_FALLBACK_ITEMS = [
   { type: "video", src: "/images/home-hero-carousel/1.mp4", label: "EasyAI 创作首页封面 1" },
-  { type: "image", src: "/images/home-hero-carousel/2.jpg", label: "EasyAI 创作首页封面 2" },
+  { type: "video", src: "/images/home-hero-carousel/2.mp4", label: "EasyAI 创作首页封面 2" },
   { type: "video", src: "/images/home-hero-carousel/3.mp4", label: "EasyAI 创作首页封面 3" },
   { type: "image", src: "/images/home-hero-carousel/4.jpg", label: "EasyAI 创作首页封面 4" },
-  { type: "image", src: "/images/home-hero-carousel/5.jpg", label: "EasyAI 创作首页封面 5" },
+  { type: "video", src: "/images/home-hero-carousel/5.mp4", label: "EasyAI 创作首页封面 5" },
   { type: "image", src: "/images/home-hero-carousel/6.jpg", label: "EasyAI 创作首页封面 6" },
-  { type: "image", src: "/images/home-hero-carousel/7.jpg", label: "EasyAI 创作首页封面 7" },
 ];
 const HERO_CAROUSEL_INTERVAL_MS = 3000;
 
@@ -991,7 +991,9 @@ export default function HomePage() {
     } else if (ezFamilyRole) {
       try {
         autoRefImages.push(...await fetchEzFamilyReferenceImages(ezFamilyRole));
-        // 场景二：用户有参考图 + EZfamily 触发图 → 作为第二张参考，prompt 保持原样
+        apiPromptText = buildEzFamilyTriggerPrompt(prompt, ezFamilyRole, {
+          hasUserReferenceImages: activeRefImages.length > 0,
+        });
       } catch { /* 静默跳过 */ }
     } else if (hasEzLogoTrigger) {
       try {

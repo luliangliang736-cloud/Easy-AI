@@ -7,6 +7,30 @@ export function detectEzFamilyTrigger(promptText) {
   return role.charAt(0).toUpperCase() + role.slice(1);
 }
 
+export function buildEzFamilyTriggerPrompt(promptText, role, { hasUserReferenceImages = false } = {}) {
+  const originalPrompt = String(promptText || "").trim();
+  const roleName = String(role || "").trim() || "Boy";
+  const baseRole = roleName.replace("真人版", "") || roleName;
+  const isRobot = baseRole.toLowerCase() === "robot";
+  const identityName = `EasyFamily ${roleName}`;
+  const targetInstruction = hasUserReferenceImages
+    ? `- 第一张参考图是用户要修改/复刻/迁移的目标图，必须保留其构图、版式、背景、文字层级、人物姿势和画面比例。
+- 后续自动加入的参考图是 ${identityName} 身份锚点，必须用它替换目标图中的主要人物/角色。`
+    : `- 自动加入的参考图是 ${identityName} 身份锚点，必须把 ${identityName} 作为画面主角。`;
+  const roleInstruction = isRobot
+    ? "不要生成通用机器人、圆头机器人或陌生机器人；必须保留 EasyFamily Robot 的核心外形、脸部/屏幕比例、身体结构和品牌识别度。"
+    : `不要生成通用 ${baseRole.toLowerCase()}、小男孩、小女孩、陌生真人或随机卡通人物；必须保留 ${identityName} 的核心脸型、发型轮廓、眼镜/五官比例、年轻亲和气质和品牌角色识别度。`;
+
+  return `${originalPrompt}
+
+EZfamily trigger instructions:
+- “${baseRole.toLowerCase()}” 是系统触发词，只用于选择 ${identityName} 参考素材；不要把它理解成普通英文含义，也不要在画面中写出 “${baseRole.toLowerCase()}”。
+${targetInstruction}
+- ${roleInstruction}
+- 可以根据用户需求调整服装、姿势、表情、道具和画面风格，但身份必须来自 ${identityName} 参考图。
+- 如果用户说“复制/复刻/替换到这张图/海报”，优先保持目标图整体画面，只替换主人物身份，不要重做成全新无关构图。`;
+}
+
 function escapeRegExp(value) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
