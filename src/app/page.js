@@ -91,6 +91,14 @@ function createFloatingMessage(role, text = "", extra = {}) {
   };
 }
 
+function formatFloatingGenerationError(error) {
+  const message = String(error?.message || "").trim();
+  if (/failed to fetch/i.test(message)) {
+    return "生成请求连接中断或超时，请稍后重试。";
+  }
+  return message || "处理失败，请稍后重试。";
+}
+
 function hasFloatingSessionContent({ prompt = "", refImages = [], attachments = [], messages = [] } = {}) {
   return Boolean(
     String(prompt || "").trim()
@@ -246,6 +254,7 @@ async function fetchEzFamilyReferenceImages(role) {
     ];
     const images = (await Promise.all(
       orderedItems
+        .slice(0, 1)
         .map((item) => item?.src)
         .filter(Boolean)
         .map((src) => fetchImageAsDataUrl(src))
@@ -1174,7 +1183,7 @@ export default function HomePage() {
     } catch (err) {
       setFloatingMessages((prev) => [
         ...prev,
-        createFloatingMessage("assistant", err?.message || "处理失败，请稍后重试。"),
+        createFloatingMessage("assistant", formatFloatingGenerationError(err)),
       ]);
       setFloatingOutputError("");
     } finally {

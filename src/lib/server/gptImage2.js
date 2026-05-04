@@ -23,7 +23,7 @@ const GPT_IMAGE_2_API_KEY_HEADER = (
   || "authorization"
 ).trim().toLowerCase();
 const GPT_IMAGE_2_MODEL = process.env.GPT_IMAGE_2_MODEL || "gpt-image-2";
-const GPT_IMAGE_2_TIMEOUT_MS = Number(process.env.GPT_IMAGE_2_TIMEOUT_MS || 10 * 60 * 1000);
+const GPT_IMAGE_2_TIMEOUT_MS = Number(process.env.GPT_IMAGE_2_TIMEOUT_MS || 150 * 1000);
 const GPT_IMAGE_2_RETRY_COUNT = Math.max(0, Number(process.env.GPT_IMAGE_2_RETRY_COUNT || 1) || 0);
 const GPT_IMAGE_2_RETRY_DELAY_MS = Math.max(0, Number(process.env.GPT_IMAGE_2_RETRY_DELAY_MS || 800) || 0);
 const GPT_IMAGE_2_QUALITY = normalizeQuality(process.env.GPT_IMAGE_2_QUALITY || "medium");
@@ -206,7 +206,8 @@ function getUpstreamHost(url) {
 function isTransientFetchError(error) {
   const code = getErrorCode(error);
   return (
-    error?.message === "fetch failed"
+    error?.name === "AbortError"
+    || error?.message === "fetch failed"
     || ["UND_ERR_CONNECT_TIMEOUT", "ENOTFOUND", "EAI_AGAIN", "ETIMEDOUT", "ECONNRESET", "ECONNREFUSED"].includes(code)
   );
 }
@@ -229,42 +230,41 @@ function formatFetchError(error, url) {
   return error?.message || "图片服务请求失败，请稍后重试。";
 }
 
-async function fetchWithRetry(url, options) {
+async function fetchWithRetry(url, createOptions) {
   const requestUrl = withApiVersion(url);
   let lastError = null;
   for (let attempt = 0; attempt <= GPT_IMAGE_2_RETRY_COUNT; attempt += 1) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), GPT_IMAGE_2_TIMEOUT_MS);
     try {
+      const options = await createOptions(controller.signal, attempt);
       return await fetch(requestUrl, options);
     } catch (error) {
       lastError = error;
       if (!isTransientFetchError(error) || attempt >= GPT_IMAGE_2_RETRY_COUNT) break;
       await sleep(GPT_IMAGE_2_RETRY_DELAY_MS * (attempt + 1));
+    } finally {
+      clearTimeout(timer);
     }
   }
   throw new Error(formatFetchError(lastError, requestUrl));
 }
 
 async function postJson(url, payload) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), GPT_IMAGE_2_TIMEOUT_MS);
-  try {
-    const res = await fetchWithRetry(url, {
+  const res = await fetchWithRetry(url, (signal) => ({
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         ...buildAuthHeaders(),
       },
-      signal: controller.signal,
+      signal,
       body: JSON.stringify(payload),
-    });
-    const data = await parseJsonSafely(res);
-    if (!res.ok) {
-      throw new Error(`${parseResponseError(data, res.status)} [status:${res.status}]`);
-    }
-    return data;
-  } finally {
-    clearTimeout(timer);
+    }));
+  const data = await parseJsonSafely(res);
+  if (!res.ok) {
+    throw new Error(`${parseResponseError(data, res.status)} [status:${res.status}]`);
   }
+  return data;
 }
 
 function base64ToBlob(dataUrl) {
@@ -302,9 +302,7 @@ async function postFormData(url, {
   outputCompression,
   moderation,
 }) {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), GPT_IMAGE_2_TIMEOUT_MS);
-  try {
+  const res = await fetchWithRetry(url, async (signal) => {
     const formData = new FormData();
     // 标准 OpenAI 格式需要在 body 里传 model，Azure 格式 model 在 URL 里
     if (!IS_AZURE) formData.append("model", model);
@@ -324,20 +322,18 @@ async function postFormData(url, {
       formData.append("image[]", blob, `image.${ext}`);
     }
 
-    const res = await fetchWithRetry(url, {
+    return {
       method: "POST",
       headers: buildAuthHeaders(),
-      signal: controller.signal,
+      signal,
       body: formData,
-    });
-    const data = await parseJsonSafely(res);
-    if (!res.ok) {
-      throw new Error(`${parseResponseError(data, res.status)} [status:${res.status}]`);
-    }
-    return data;
-  } finally {
-    clearTimeout(timer);
+    };
+  });
+  const data = await parseJsonSafely(res);
+  if (!res.ok) {
+    throw new Error(`${parseResponseError(data, res.status)} [status:${res.status}]`);
   }
+  return data;
 }
 
 function extractUrls(data = {}, fallbackMimeType = "image/png") {

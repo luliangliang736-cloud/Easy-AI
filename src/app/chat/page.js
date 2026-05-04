@@ -98,6 +98,7 @@ async function fetchEzFamilyReferenceImages(role) {
     ];
     const images = (await Promise.all(
       orderedItems
+        .slice(0, 1)
         .map((item) => item?.src)
         .filter(Boolean)
         .map((src) => fetchImageAsDataUrl(src))
@@ -310,6 +311,14 @@ function createMessage(role, text = "", extra = {}) {
     text,
     ...extra,
   };
+}
+
+function formatGenerationError(error) {
+  const message = String(error?.message || "").trim();
+  if (/failed to fetch/i.test(message)) {
+    return "生成请求连接中断或超时，请稍后重试。";
+  }
+  return message || "处理失败，请稍后重试。";
 }
 
 function readFileAsDataURL(file) {
@@ -906,7 +915,7 @@ export default function ChatPage() {
       if (err?.name === "AbortError") {
         // 用户手动取消，不添加错误消息
       } else {
-        setMessages((prev) => [...prev, createMessage("assistant", err?.message || "处理失败，请稍后重试。")]);
+        setMessages((prev) => [...prev, createMessage("assistant", formatGenerationError(err))]);
       }
     } finally {
       setIsGenerating(false);
