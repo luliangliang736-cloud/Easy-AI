@@ -767,11 +767,12 @@ const EFFECT_SHOWCASE_CARDS = [
 
 const HERO_CAROUSEL_FALLBACK_ITEMS = [
   { type: "video", src: "/images/home-hero-carousel/1.mp4", label: "EasyAI 创作首页封面 1" },
-  { type: "video", src: "/images/home-hero-carousel/2.mp4", label: "EasyAI 创作首页封面 2" },
+  { type: "image", src: "/images/home-hero-carousel/2.jpg", label: "EasyAI 创作首页封面 2" },
   { type: "video", src: "/images/home-hero-carousel/3.mp4", label: "EasyAI 创作首页封面 3" },
-  { type: "image", src: "/images/home-hero-carousel/4.jpg", label: "EasyAI 创作首页封面 4" },
-  { type: "video", src: "/images/home-hero-carousel/5.mp4", label: "EasyAI 创作首页封面 5" },
-  { type: "image", src: "/images/home-hero-carousel/6.jpg", label: "EasyAI 创作首页封面 6" },
+  { type: "video", src: "/images/home-hero-carousel/4.mp4", label: "EasyAI 创作首页封面 4" },
+  { type: "image", src: "/images/home-hero-carousel/5.jpg", label: "EasyAI 创作首页封面 5" },
+  { type: "video", src: "/images/home-hero-carousel/6.mp4", label: "EasyAI 创作首页封面 6" },
+  { type: "image", src: "/images/home-hero-carousel/7.jpg", label: "EasyAI 创作首页封面 7" },
 ];
 const HERO_CAROUSEL_INTERVAL_MS = 3000;
 

@@ -4,7 +4,7 @@ import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 
-const HERO_ASSET_DIR = path.resolve(process.cwd(), "..", "素材", "首页封面", "轮播");
+const HERO_ASSET_DIR = path.resolve(process.cwd(), "public", "images", "home-hero-carousel");
 const MEDIA_TYPES = {
   ".gif": { contentType: "image/gif", type: "image" },
   ".jpg": { contentType: "image/jpeg", type: "image" },
