@@ -1,3 +1,5 @@
+import { normalizeGeneratedImageUrls } from "@/lib/server/generatedImageStore";
+
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
 
 function normalizeBaseUrl(apiBase = "") {
@@ -204,7 +206,7 @@ export async function generateWithOpenAICompatibleImage({
     },
   });
 
-  return extractUrls(data);
+  return await normalizeGeneratedImageUrls(extractUrls(data));
 }
 
 export async function editWithOpenAICompatibleImage({
@@ -236,7 +238,7 @@ export async function editWithOpenAICompatibleImage({
     images,
   });
 
-  return extractUrls(data);
+  return await normalizeGeneratedImageUrls(extractUrls(data));
 }
 
 export async function generateWithOpenAICompatibleChatImage({
@@ -263,7 +265,7 @@ export async function generateWithOpenAICompatibleChatImage({
     },
   });
 
-  return extractChatImageUrls(data);
+  return await normalizeGeneratedImageUrls(extractChatImageUrls(data));
 }
 
 export async function editWithOpenAICompatibleChatImage({
@@ -304,5 +306,5 @@ export async function editWithOpenAICompatibleChatImage({
     },
   });
 
-  return extractChatImageUrls(data);
+  return await normalizeGeneratedImageUrls(extractChatImageUrls(data));
 }

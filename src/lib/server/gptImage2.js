@@ -1,3 +1,5 @@
+import { normalizeGeneratedImageUrls } from "@/lib/server/generatedImageStore";
+
 const GPT_IMAGE_2_API_BASE_RAW = (
   process.env.GPT_IMAGE_2_API_BASE
   || process.env.FLOATING_ASSISTANT_API_BASE
@@ -336,9 +338,9 @@ async function postFormData(url, {
   return data;
 }
 
-function extractUrls(data = {}, fallbackMimeType = "image/png") {
+async function extractUrls(data = {}, fallbackMimeType = "image/png") {
   const items = Array.isArray(data?.data) ? data.data : [];
-  return items
+  const urls = items
     .map((item) => {
       if (typeof item?.url === "string" && item.url) {
         return item.url;
@@ -352,6 +354,7 @@ function extractUrls(data = {}, fallbackMimeType = "image/png") {
       return "";
     })
     .filter(Boolean);
+  return normalizeGeneratedImageUrls(urls);
 }
 
 export function isGptImage2Model(model = "") {
@@ -393,7 +396,7 @@ export async function generateWithGptImage2({
     }
   );
 
-  return extractUrls(result, toMimeType(normalizedOutputFormat));
+  return await extractUrls(result, toMimeType(normalizedOutputFormat));
 }
 
 export async function editWithGptImage2({
@@ -434,5 +437,5 @@ export async function editWithGptImage2({
     }
   );
 
-  return extractUrls(result, toMimeType(normalizedOutputFormat));
+  return await extractUrls(result, toMimeType(normalizedOutputFormat));
 }
