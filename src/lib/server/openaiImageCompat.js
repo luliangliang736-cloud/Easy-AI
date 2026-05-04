@@ -26,6 +26,26 @@ function mapImageSize(imageSize = "1:1") {
   return "1024x1024";
 }
 
+function buildChatImagePrompt(prompt, imageSize = "1:1") {
+  const basePrompt = String(prompt || "").trim();
+  const requestedSize = String(imageSize || "").trim();
+  if (!requestedSize) return basePrompt;
+
+  if (requestedSize.toLowerCase() === "auto") {
+    return `${basePrompt}
+
+Output size requirements:
+- Preserve the aspect ratio of the first reference image.
+- Do not default to a square canvas unless the first reference image is square.`;
+  }
+
+  return `${basePrompt}
+
+Output size requirements:
+- Use aspect ratio/size: ${requestedSize}.
+- Do not default to a square canvas unless ${requestedSize} is square.`;
+}
+
 function parseResponseError(data, status) {
   return (
     data?.error?.message
@@ -225,6 +245,7 @@ export async function generateWithOpenAICompatibleChatImage({
   apiKeyHeader,
   model,
   prompt,
+  imageSize = "1:1",
 }) {
   const data = await postJson({
     apiBase,
@@ -236,7 +257,7 @@ export async function generateWithOpenAICompatibleChatImage({
       messages: [
         {
           role: "user",
-          content: String(prompt || "").trim(),
+          content: buildChatImagePrompt(prompt, imageSize),
         },
       ],
     },
@@ -252,6 +273,7 @@ export async function editWithOpenAICompatibleChatImage({
   model,
   prompt,
   image,
+  imageSize = "1:1",
 }) {
   const images = normalizeImageInput(image);
   if (images.length === 0) {
@@ -259,7 +281,7 @@ export async function editWithOpenAICompatibleChatImage({
   }
 
   const content = [
-    { type: "text", text: String(prompt || "").trim() },
+    { type: "text", text: buildChatImagePrompt(prompt, imageSize) },
     ...images.map((url) => ({
       type: "image_url",
       image_url: { url },

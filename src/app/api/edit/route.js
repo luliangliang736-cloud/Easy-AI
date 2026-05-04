@@ -188,6 +188,7 @@ export async function POST(request) {
             model: resolveOpenAICompatNanoModel(model),
             prompt,
             image,
+            imageSize: image_size || "1:1",
           })
         : await editWithOpenAICompatibleImage({
             apiBase: API_BASE,

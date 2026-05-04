@@ -130,6 +130,7 @@ export async function POST(request) {
             apiKeyHeader: API_KEY_HEADER,
             model: resolveOpenAICompatNanoModel(model),
             prompt,
+            imageSize: image_size || "1:1",
           })
         : await generateWithOpenAICompatibleImage({
             apiBase: API_BASE,
