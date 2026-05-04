@@ -88,7 +88,7 @@ const MODEL_TIERS = [
   },
 ];
 
-const STANDARD_RATIOS = ["auto", "1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "4:5", "5:4"];
+const STANDARD_RATIOS = ["auto", "1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "2:1", "1:2", "4:5", "5:4"];
 const EXTENDED_RATIOS = ["21:9", "1:4", "4:1", "8:1", "1:8"];
 const GPT_IMAGE_2_PRESET_SIZES = [
   "1024x1024",

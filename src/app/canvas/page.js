@@ -54,6 +54,8 @@ const ASPECT_RATIO_CANDIDATES = [
   { value: "3:4", ratio: 3 / 4 },
   { value: "3:2", ratio: 3 / 2 },
   { value: "2:3", ratio: 2 / 3 },
+  { value: "2:1", ratio: 2 / 1 },
+  { value: "1:2", ratio: 1 / 2 },
   { value: "4:5", ratio: 4 / 5 },
   { value: "5:4", ratio: 5 / 4 },
   { value: "21:9", ratio: 21 / 9 },
@@ -79,6 +81,9 @@ const ASPECT_RATIO_RULES = [
   { value: "2:3", score: 4, keywords: ["电影海报", "摄影竖图", "书籍封面", "小说封面", "专辑封面", "杂志封面"] },
   { value: "3:2", score: 6, keywords: ["3:2", "3：2", "3比2"] },
   { value: "3:2", score: 4, keywords: ["摄影横图", "相机画幅", "横向摄影", "横向展示图", "产品横图"] },
+  { value: "2:1", score: 6, keywords: ["2:1", "2：1", "2比1"] },
+  { value: "2:1", score: 5, keywords: ["wa海报", "whatsapp海报", "营销海报横版", "横版营销海报"] },
+  { value: "1:2", score: 6, keywords: ["1:2", "1：2", "1比2"] },
   { value: "4:5", score: 6, keywords: ["4:5", "4：5", "4比5"] },
   { value: "4:5", score: 5, keywords: ["小红书封面", "ins封面", "instagram封面", "社媒封面", "笔记封面", "朋友圈配图"] },
   { value: "4:5", score: 4, keywords: ["社交媒体封面", "商品种草图", "内容封面", "穿搭封面", "美食封面", "种草封面"] },
@@ -466,6 +471,7 @@ function parseAspectRatio(imageSize) {
 
 const REQUEST_TIMEOUT_MS = 90000;
 const IMAGE_REQUEST_TIMEOUT_MS = 5 * 60 * 1000;
+const GENERATION_STALE_MS = IMAGE_REQUEST_TIMEOUT_MS + 30 * 1000;
 const MAX_PARALLEL_GENERATIONS = 1;
 const STORAGE_VERSION = "9";
 const DEFAULT_CONVERSATION_TITLE = "新建对话";
@@ -549,7 +555,7 @@ function detectRefImageMeta(src) {
       const height = img.naturalHeight || img.height || 0;
       const candidates = [
         [1, 1], [16, 9], [9, 16], [4, 3], [3, 4],
-        [3, 2], [2, 3], [4, 5], [5, 4],
+        [3, 2], [2, 3], [2, 1], [1, 2], [4, 5], [5, 4],
         [21, 9], [1, 4], [4, 1], [8, 1], [1, 8],
       ];
       let ratio = "1:1";
@@ -596,6 +602,28 @@ function sanitizeMessagesForStorage(messages) {
       tasks: Array.isArray(msg.tasks)
         ? msg.tasks.map((t) => ({ ...t, url: isHttpsUrl(t.url) ? t.url : null }))
         : msg.tasks,
+    };
+  });
+}
+
+function restoreInterruptedMessages(messages) {
+  if (!Array.isArray(messages)) return [];
+  return messages.map((msg) => {
+    if (msg?.status !== "generating") return msg;
+    const tasks = Array.isArray(msg.tasks)
+      ? msg.tasks.map((task) => (
+        task?.status === "completed"
+          ? task
+          : { ...task, status: "failed", error: "生成连接已中断，请重试。" }
+      ))
+      : msg.tasks;
+    const urls = Array.isArray(tasks) ? tasks.filter((task) => task?.url).map((task) => task.url) : msg.urls;
+    return {
+      ...msg,
+      status: Array.isArray(tasks) && tasks.some((task) => task?.status === "completed") ? "completed" : "failed",
+      tasks,
+      urls,
+      error: "生成连接已中断，请重试。",
     };
   });
 }
@@ -940,7 +968,10 @@ function HomeInner() {
       if (saved) {
         const parsedConversations = JSON.parse(saved);
         if (Array.isArray(parsedConversations) && parsedConversations.length > 0) {
-          setConversations(parsedConversations);
+          setConversations(parsedConversations.map((conversation) => ({
+            ...conversation,
+            messages: restoreInterruptedMessages(conversation.messages || []),
+          })));
           setActiveConversationId(
             parsedConversations.some((conversation) => conversation.id === savedActiveConversationId)
               ? savedActiveConversationId
@@ -1001,6 +1032,66 @@ function HomeInner() {
       setActiveConversationId(conversations[0].id);
     }
   }, [activeConversationId, conversations]);
+
+  useEffect(() => {
+    if (!canvasGeneratingItems.length) return undefined;
+
+    const clearStaleGeneratingItems = () => {
+      const now = Date.now();
+      const staleItems = canvasGeneratingItems.filter((item) => (
+        item?.isGeneratingPlaceholder &&
+        item?.createdAt &&
+        now - item.createdAt > GENERATION_STALE_MS
+      ));
+      if (!staleItems.length) return;
+
+      const staleItemIds = new Set(staleItems.map((item) => item.id));
+      const staleTaskIdsByMessage = staleItems.reduce((acc, item) => {
+        if (!item.aiMsgId || !item.taskId) return acc;
+        if (!acc.has(item.aiMsgId)) acc.set(item.aiMsgId, new Set());
+        acc.get(item.aiMsgId).add(item.taskId);
+        return acc;
+      }, new Map());
+
+      setCanvasGeneratingItems((prev) => prev.filter((item) => !staleItemIds.has(item.id)));
+      setConversations((prev) => prev.map((conversation) => ({
+        ...conversation,
+        messages: conversation.messages.map((msg) => {
+          const staleTaskIds = staleTaskIdsByMessage.get(msg.id);
+          if (!staleTaskIds) return msg;
+          const tasks = Array.isArray(msg.tasks)
+            ? msg.tasks.map((task) => (
+              staleTaskIds.has(task.id) && task.status !== "completed"
+                ? { ...task, status: "failed", error: "生成连接已中断，请重试。" }
+                : task
+            ))
+            : msg.tasks;
+          const hasCompleted = Array.isArray(tasks) && tasks.some((task) => task?.status === "completed");
+          const hasPending = Array.isArray(tasks) && tasks.some((task) => ["pending", "generating"].includes(task?.status));
+          const urls = Array.isArray(tasks) ? tasks.filter((task) => task?.url).map((task) => task.url) : msg.urls;
+          return {
+            ...msg,
+            tasks,
+            urls,
+            status: hasPending ? msg.status : hasCompleted ? "completed" : "failed",
+            error: hasPending || hasCompleted ? null : "生成连接已中断，请重试。",
+          };
+        }),
+      })));
+
+      const activeAiMsgId = activeGenerationRef.current?.aiMsgId;
+      if (activeAiMsgId && staleTaskIdsByMessage.has(activeAiMsgId)) {
+        activeGenerationRef.current?.controller?.abort();
+        activeGenerationRef.current = null;
+        generationAbortRef.current = null;
+        setIsGenerating(false);
+      }
+    };
+
+    clearStaleGeneratingItems();
+    const interval = window.setInterval(clearStaleGeneratingItems, 15000);
+    return () => window.clearInterval(interval);
+  }, [canvasGeneratingItems]);
 
   // Persist conversations
   useEffect(() => {
@@ -1506,6 +1597,7 @@ function HomeInner() {
           generationStatus: "pending",
           placeholderAspectRatio,
           mediaType: isKlingVideoRequest ? "video" : "image",
+          createdAt: ts,
         })),
       ]);
 
