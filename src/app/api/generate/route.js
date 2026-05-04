@@ -6,6 +6,7 @@ import {
   generateWithOpenAICompatibleChatImage,
   generateWithOpenAICompatibleImage,
 } from "@/lib/server/openaiImageCompat";
+import { saveGenerationResult } from "@/lib/server/generationResultStore";
 
 export const maxDuration = 300;
 
@@ -61,6 +62,7 @@ function formatRouteError(err) {
 
 export async function POST(request) {
   const meta = createRequestMeta("generate");
+  let clientRequestId = "";
   if (!API_KEY || API_KEY === "sk-your-api-key-here") {
     logGenerateEvent(meta, "config_error", { reason: "missing_api_key" });
     return NextResponse.json(
@@ -82,7 +84,9 @@ export async function POST(request) {
       output_format,
       output_compression,
       moderation,
+      clientRequestId: requestIdFromClient,
     } = body;
+    clientRequestId = String(requestIdFromClient || "").trim();
 
     logGenerateEvent(meta, "start", {
       model: model || "gemini-3.1-flash-image-preview",
@@ -116,10 +120,12 @@ export async function POST(request) {
         provider: "gpt-image-2",
         urlCount: urls.filter(Boolean).length,
       });
-      return NextResponse.json({
+      const responseBody = {
         success: true,
         data: { urls, tasks },
-      });
+      };
+      await saveGenerationResult(clientRequestId, responseBody);
+      return NextResponse.json(responseBody);
     }
 
     if (API_STYLE === "openai") {
@@ -148,10 +154,12 @@ export async function POST(request) {
         provider: "openai-compatible",
         urlCount: urls.filter(Boolean).length,
       });
-      return NextResponse.json({
+      const responseBody = {
         success: true,
         data: { urls, tasks },
-      });
+      };
+      await saveGenerationResult(clientRequestId, responseBody);
+      return NextResponse.json(responseBody);
     }
 
     const payload = {
@@ -210,10 +218,12 @@ export async function POST(request) {
       .filter(Boolean)
       .map((url, index) => ({ id: `nano-${index}`, index, url, status: "completed" }));
 
-    return NextResponse.json({
+    const responseBody = {
       success: true,
       data: { urls, tasks },
-    });
+    };
+    await saveGenerationResult(clientRequestId, responseBody);
+    return NextResponse.json(responseBody);
   } catch (err) {
     console.error("[Generate] Error:", err);
     logGenerateEvent(meta, "error", {

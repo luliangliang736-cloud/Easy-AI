@@ -46,6 +46,8 @@ const GENERATION_STAGE_MIN_MS = 650;
 const GENERATION_SAVING_STAGE_MS = 350;
 const ONE_CLICK_REQUEST_TIMEOUT_MS = 3 * 60 * 1000;
 const WA_QUALITY_CLIENT_TIMEOUT_MS = 18 * 1000;
+const GENERATION_RECOVERY_POLL_MS = 2000;
+const GENERATION_RECOVERY_MAX_ATTEMPTS = 60;
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -101,6 +103,30 @@ async function withTimeout(promise, timeoutMs, fallbackValue = null) {
   } finally {
     window.clearTimeout(timer);
   }
+}
+
+function createClientRequestId(prefix = "oneclick") {
+  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+async function recoverGenerationResult(clientRequestId) {
+  if (!clientRequestId) return null;
+  for (let attempt = 0; attempt < GENERATION_RECOVERY_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      const res = await fetch(`/api/generation-results/${encodeURIComponent(clientRequestId)}`, {
+        cache: "no-store",
+      });
+      if (res.ok) {
+        const data = await res.json().catch(() => null);
+        if (data?.success && Array.isArray(data?.data?.urls) && data.data.urls.length > 0) {
+          return data;
+        }
+      }
+      if (res.status !== 202) return null;
+    } catch {}
+    await wait(GENERATION_RECOVERY_POLL_MS);
+  }
+  return null;
 }
 
 const HERO_LAYOUT_PRESETS = {
@@ -1231,6 +1257,7 @@ export default function HomePage() {
     setFloatingGenerationStage("understanding");
     setFloatingIsGenerating(true);
     setFloatingOutputError("");
+    let activeClientRequestId = "";
 
     try {
       await showFloatingGenerationStage("understanding");
@@ -1302,6 +1329,7 @@ export default function HomePage() {
           : quickImageSize;
       const endpoint = hasImages ? "/api/edit" : "/api/generate";
       const finalPrompt = isAgentMode ? buildAgentPrompt(generationPrompt, submittedImages) : generationPrompt;
+      activeClientRequestId = createClientRequestId("floating");
       const payload = hasImages
         ? {
             prompt: finalPrompt,
@@ -1310,6 +1338,7 @@ export default function HomePage() {
             image_size: imageSize,
             num: 1,
             service_tier: isAgentMode ? agentParams.service_tier : FLOATING_DEFAULT_SERVICE_TIER,
+            clientRequestId: activeClientRequestId,
           }
         : {
             prompt: finalPrompt,
@@ -1318,6 +1347,7 @@ export default function HomePage() {
             num: 1,
             ref_images: submittedImages,
             service_tier: isAgentMode ? agentParams.service_tier : FLOATING_DEFAULT_SERVICE_TIER,
+            clientRequestId: activeClientRequestId,
           };
 
       setFloatingGenerationStage("generating");
@@ -1362,6 +1392,19 @@ export default function HomePage() {
           });
       }
     } catch (err) {
+      const recovered = await recoverGenerationResult(activeClientRequestId);
+      const recoveredUrls = Array.isArray(recovered?.data?.urls) ? recovered.data.urls.filter(Boolean) : [];
+      if (recoveredUrls.length > 0) {
+        setFloatingMessages((prev) => [
+          ...prev,
+          createFloatingMessage("assistant", "刚刚连接中断，但我已经恢复到生成结果。", {
+            images: recoveredUrls,
+            modelLabel: "已恢复的生成结果",
+          }),
+        ]);
+        setFloatingOutputError("");
+        return;
+      }
       setFloatingMessages((prev) => [
         ...prev,
         createFloatingMessage("assistant", formatFloatingGenerationError(err)),

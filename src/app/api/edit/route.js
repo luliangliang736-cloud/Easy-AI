@@ -6,6 +6,7 @@ import {
   editWithOpenAICompatibleChatImage,
   editWithOpenAICompatibleImage,
 } from "@/lib/server/openaiImageCompat";
+import { saveGenerationResult } from "@/lib/server/generationResultStore";
 
 const API_BASE = process.env.NANO_API_BASE || "https://api.nanobananaapi.dev";
 const API_KEY = process.env.NANO_API_KEY;
@@ -98,6 +99,7 @@ async function runTrueCutout(image) {
 
 export async function POST(request) {
   const meta = createRequestMeta("edit");
+  let clientRequestId = "";
   try {
     const body = await request.json();
     const {
@@ -112,7 +114,9 @@ export async function POST(request) {
       output_format,
       output_compression,
       moderation,
+      clientRequestId: requestIdFromClient,
     } = body;
+    clientRequestId = String(requestIdFromClient || "").trim();
 
     const imageCount = Array.isArray(image) ? image.length : image ? 1 : 0;
     logEditEvent(meta, "start", {
@@ -137,14 +141,16 @@ export async function POST(request) {
 
     if (mode === "cutout") {
       const url = await runTrueCutout(image);
-      logEditEvent(meta, "success", { provider: "local-cutout", urlCount: 1 });
-      return NextResponse.json({
+      const responseBody = {
         success: true,
         data: {
           urls: [url],
           tasks: [{ id: "cutout-0", index: 0, url, status: "completed" }],
         },
-      });
+      };
+      await saveGenerationResult(clientRequestId, responseBody);
+      logEditEvent(meta, "success", { provider: "local-cutout", urlCount: 1 });
+      return NextResponse.json(responseBody);
     }
 
     if (isGptImage2Model(model)) {
@@ -165,10 +171,12 @@ export async function POST(request) {
         provider: "gpt-image-2",
         urlCount: urls.filter(Boolean).length,
       });
-      return NextResponse.json({
+      const responseBody = {
         success: true,
         data: { urls, tasks },
-      });
+      };
+      await saveGenerationResult(clientRequestId, responseBody);
+      return NextResponse.json(responseBody);
     }
 
     if (!API_KEY || API_KEY === "sk-your-api-key-here") {
@@ -207,10 +215,12 @@ export async function POST(request) {
         provider: "openai-compatible",
         urlCount: urls.filter(Boolean).length,
       });
-      return NextResponse.json({
+      const responseBody = {
         success: true,
         data: { urls, tasks },
-      });
+      };
+      await saveGenerationResult(clientRequestId, responseBody);
+      return NextResponse.json(responseBody);
     }
 
     const payload = {
@@ -266,10 +276,12 @@ export async function POST(request) {
       .filter(Boolean)
       .map((url, index) => ({ id: `nano-${index}`, index, url, status: "completed" }));
 
-    return NextResponse.json({
+    const responseBody = {
       success: true,
       data: { urls, tasks },
-    });
+    };
+    await saveGenerationResult(clientRequestId, responseBody);
+    return NextResponse.json(responseBody);
   } catch (err) {
     console.error("[Edit] Error:", err);
     logEditEvent(meta, "error", {
