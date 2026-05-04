@@ -35,16 +35,72 @@ const FLOATING_AGENT_DEFAULT_MODEL = "gemini-3.1-flash-image-preview";
 const FLOATING_AGENT_DEFAULT_SERVICE_TIER = "priority";
 const FLOATING_EDIT_MODEL = "gpt-image-2";
 const FLOATING_HISTORY_STORAGE_KEY = "lovart-floating-entry-home-history";
+const FLOATING_SESSION_STORAGE_KEY = "lovart-floating-entry-home-session";
 const EZFAMILY_ASSET_URL = "/api/ezfamily";
 const EZLOGO_ASSET_URL = "/api/ezlogo";
 const WA_TEMPLATE_ASSET_URL = "/api/wa-templates";
 const WA_LOCKUP_ASSET_URL = "/api/wa-lockup";
 const WA_SMILE_LOGO_ASSET_URL = "/api/wa-smile-logo";
+const FLOATING_MAX_STORED_DATA_IMAGE_CHARS = 900_000;
 const GENERATION_STAGE_MIN_MS = 650;
 const GENERATION_SAVING_STAGE_MS = 350;
+const ONE_CLICK_REQUEST_TIMEOUT_MS = 3 * 60 * 1000;
+const WA_QUALITY_CLIENT_TIMEOUT_MS = 18 * 1000;
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function createTimeoutError(message = "请求等待时间过长，请稍后重试。") {
+  const error = new Error(message);
+  error.name = "TimeoutError";
+  return error;
+}
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = ONE_CLICK_REQUEST_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(createTimeoutError()), timeoutMs);
+  const externalSignal = options.signal;
+  const abortFromExternal = () => controller.abort(externalSignal?.reason);
+
+  if (externalSignal) {
+    if (externalSignal.aborted) {
+      controller.abort(externalSignal.reason);
+    } else {
+      externalSignal.addEventListener("abort", abortFromExternal, { once: true });
+    }
+  }
+
+  try {
+    return await fetch(url, {
+      ...options,
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (controller.signal.aborted && error?.name === "AbortError" && !externalSignal?.aborted) {
+      throw createTimeoutError();
+    }
+    throw error;
+  } finally {
+    window.clearTimeout(timer);
+    if (externalSignal) {
+      externalSignal.removeEventListener("abort", abortFromExternal);
+    }
+  }
+}
+
+async function withTimeout(promise, timeoutMs, fallbackValue = null) {
+  let timer = 0;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((resolve) => {
+        timer = window.setTimeout(() => resolve(fallbackValue), timeoutMs);
+      }),
+    ]);
+  } finally {
+    window.clearTimeout(timer);
+  }
 }
 
 const HERO_LAYOUT_PRESETS = {
@@ -91,9 +147,86 @@ function createFloatingMessage(role, text = "", extra = {}) {
   };
 }
 
+function safeParseStorageObject(value) {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(value);
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function safeParseStorageArray(value) {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function isRestorableImageUrl(value) {
+  return typeof value === "string" && (
+    /^https?:\/\//i.test(value)
+    || value.startsWith("/")
+    || (/^data:image\//i.test(value) && value.length <= FLOATING_MAX_STORED_DATA_IMAGE_CHARS)
+  );
+}
+
+function sanitizeFloatingImageList(images, limit = 6) {
+  if (!Array.isArray(images)) return [];
+  return images.filter(isRestorableImageUrl).slice(0, limit);
+}
+
+function sanitizeFloatingAttachments(attachments, limit = 8) {
+  if (!Array.isArray(attachments)) return [];
+  return attachments.slice(0, limit).map((attachment) => ({
+    id: attachment?.id || `attachment-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    name: String(attachment?.name || "附件"),
+    mimeType: String(attachment?.mimeType || ""),
+    size: Number(attachment?.size || 0),
+    excerpt: String(attachment?.excerpt || "").slice(0, 1200),
+  }));
+}
+
+function sanitizeFloatingMessages(messages, limit = 20) {
+  if (!Array.isArray(messages)) return [];
+  return messages.slice(-limit).map((message) => ({
+    ...message,
+    images: sanitizeFloatingImageList(message?.images, 6),
+    refImages: sanitizeFloatingImageList(message?.refImages, 6),
+    attachments: sanitizeFloatingAttachments(message?.attachments, 4),
+  }));
+}
+
+function sanitizeFloatingSessionForStorage({ prompt = "", refImages = [], attachments = [], messages = [], runtimeMode = "quick" } = {}) {
+  return {
+    prompt: String(prompt || ""),
+    refImages: sanitizeFloatingImageList(refImages, 6),
+    attachments: sanitizeFloatingAttachments(attachments, 8),
+    messages: sanitizeFloatingMessages(messages, 20),
+    runtimeMode: runtimeMode === "agent" ? "agent" : "quick",
+    updatedAt: Date.now(),
+  };
+}
+
+function sanitizeFloatingHistoryEntry(entry) {
+  return {
+    id: entry?.id || `floating-history-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    title: String(entry?.title || buildFloatingHistoryTitle(entry || {})),
+    updatedAt: Number(entry?.updatedAt || Date.now()),
+    prompt: String(entry?.prompt || ""),
+    refImages: sanitizeFloatingImageList(entry?.refImages, 6),
+    attachments: sanitizeFloatingAttachments(entry?.attachments, 8),
+    messages: sanitizeFloatingMessages(entry?.messages, 20),
+  };
+}
+
 function formatFloatingGenerationError(error) {
   const message = String(error?.message || "").trim();
-  if (/failed to fetch/i.test(message)) {
+  if (error?.name === "TimeoutError" || /failed to fetch|请求等待时间过长/i.test(message)) {
     return "生成请求连接中断或超时，请稍后重试。";
   }
   return message || "处理失败，请稍后重试。";
@@ -124,9 +257,9 @@ function createFloatingHistoryEntry({ prompt = "", refImages = [], attachments =
     title: buildFloatingHistoryTitle({ prompt, messages }),
     updatedAt: Date.now(),
     prompt: String(prompt || ""),
-    refImages: Array.isArray(refImages) ? refImages.slice(0, 6) : [],
-    attachments: Array.isArray(attachments) ? attachments.slice(0, 8) : [],
-    messages: Array.isArray(messages) ? messages.slice(-20) : [],
+    refImages: sanitizeFloatingImageList(refImages, 6),
+    attachments: sanitizeFloatingAttachments(attachments, 8),
+    messages: sanitizeFloatingMessages(messages, 20),
   };
 }
 
@@ -637,6 +770,7 @@ export default function HomePage() {
   const [floatingHistory, setFloatingHistory] = useState([]);
   const [floatingRuntimeMode, setFloatingRuntimeMode] = useState("quick");
   const [isModeMenuOpen, setIsModeMenuOpen] = useState(false);
+  const floatingStorageReadyRef = useRef(false);
   const effectShowcaseRef = useRef(null);
   const businessShowcaseRef = useRef(null);
   const bottomSummaryRef = useRef(null);
@@ -810,24 +944,62 @@ export default function HomePage() {
   useEffect(() => {
     if (typeof window === "undefined") return;
     try {
-      const raw = window.localStorage.getItem(FLOATING_HISTORY_STORAGE_KEY);
-      if (!raw) return;
-      const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) {
-        setFloatingHistory(parsed);
+      const parsedHistory = safeParseStorageArray(window.localStorage.getItem(FLOATING_HISTORY_STORAGE_KEY));
+      if (parsedHistory) {
+        setFloatingHistory(parsedHistory.map(sanitizeFloatingHistoryEntry).slice(0, 12));
       }
-    } catch {}
+
+      const session = safeParseStorageObject(window.localStorage.getItem(FLOATING_SESSION_STORAGE_KEY));
+      if (hasFloatingSessionContent(session || {})) {
+        setFloatingPrompt(String(session.prompt || ""));
+        setFloatingRefImages(sanitizeFloatingImageList(session.refImages, 6));
+        setFloatingAttachments(sanitizeFloatingAttachments(session.attachments, 8));
+        setFloatingMessages(sanitizeFloatingMessages(session.messages, 20));
+        setFloatingRuntimeMode(session.runtimeMode === "agent" ? "agent" : "quick");
+      }
+    } catch {
+      // 保留旧数据，避免一次读取异常把一键创作历史清空。
+    } finally {
+      floatingStorageReadyRef.current = true;
+    }
   }, []);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
+    if (!floatingStorageReadyRef.current) return;
     try {
       window.localStorage.setItem(
         FLOATING_HISTORY_STORAGE_KEY,
-        JSON.stringify(floatingHistory.slice(0, 12))
+        JSON.stringify(floatingHistory.map(sanitizeFloatingHistoryEntry).slice(0, 12))
       );
-    } catch {}
+    } catch {
+      // 容量超限时保留上一次可用历史。
+    }
   }, [floatingHistory]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (!floatingStorageReadyRef.current) return;
+    const session = {
+      prompt: floatingPrompt,
+      refImages: floatingRefImages,
+      attachments: floatingAttachments,
+      messages: floatingMessages,
+      runtimeMode: floatingRuntimeMode,
+    };
+    try {
+      if (!hasFloatingSessionContent(session)) {
+        window.localStorage.removeItem(FLOATING_SESSION_STORAGE_KEY);
+        return;
+      }
+      window.localStorage.setItem(
+        FLOATING_SESSION_STORAGE_KEY,
+        JSON.stringify(sanitizeFloatingSessionForStorage(session))
+      );
+    } catch {
+      // 保存失败时不删除旧 session，刷新后至少能恢复上一次状态。
+    }
+  }, [floatingAttachments, floatingMessages, floatingPrompt, floatingRefImages, floatingRuntimeMode]);
 
   const heroPreset = HERO_LAYOUT_PRESETS[heroLayoutPreset] || HERO_LAYOUT_PRESETS.desktop;
 
@@ -1072,7 +1244,7 @@ export default function HomePage() {
             assistantModel: submittedImages.length > 0 ? "直连 GPT Image 2" : "直连 Nano",
           }
         : await (async () => {
-            const plannerRes = await fetch("/api/floating-assistant", {
+            const plannerRes = await fetchWithTimeout("/api/floating-assistant", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
@@ -1081,7 +1253,7 @@ export default function HomePage() {
                 refImages: submittedImages,
                 attachments: submittedAttachments,
               }),
-            });
+            }, 60 * 1000);
             const plannerData = await parseApiResponse(plannerRes);
             if (!plannerRes.ok || plannerData.error) {
               throw new Error(plannerData.error || `对话判断失败（${plannerRes.status}）`);
@@ -1149,7 +1321,7 @@ export default function HomePage() {
           };
 
       setFloatingGenerationStage("generating");
-      const res = await fetch(endpoint, {
+      const res = await fetchWithTimeout(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -1165,21 +1337,30 @@ export default function HomePage() {
       }
 
       await showFloatingGenerationStage("saving", GENERATION_SAVING_STAGE_MS);
-      const qualityCheck = waTemplateRequest ? await runWaQualityCheck(urls[0]) : null;
-      const qualityImprovement = buildWaQualityImprovement(override?.qualityCheck, qualityCheck);
-      setFloatingMessages((prev) => [
-        ...prev,
-        createFloatingMessage(
-          "assistant",
-          assistantText || (resolvedMode === "agent" ? "我已经按你的要求整理并生成了一版结果。" : "我已经帮你快速生成了一版结果。"),
-          {
-            images: urls,
-            qualityCheck,
-            qualityImprovement,
-            modelLabel: `${plan.assistantModel || "gpt-5.4"} · ${generationModel}`,
-          }
-        ),
-      ]);
+      const assistantMessage = createFloatingMessage(
+        "assistant",
+        assistantText || (resolvedMode === "agent" ? "我已经按你的要求整理并生成了一版结果。" : "我已经帮你快速生成了一版结果。"),
+        {
+          images: urls,
+          qualityCheck: null,
+          qualityImprovement: null,
+          modelLabel: `${plan.assistantModel || "gpt-5.4"} · ${generationModel}`,
+        }
+      );
+      setFloatingMessages((prev) => [...prev, assistantMessage]);
+
+      if (waTemplateRequest) {
+        void withTimeout(runWaQualityCheck(urls[0]), WA_QUALITY_CLIENT_TIMEOUT_MS, null)
+          .then((qualityCheck) => {
+            if (!qualityCheck) return;
+            const qualityImprovement = buildWaQualityImprovement(override?.qualityCheck, qualityCheck);
+            setFloatingMessages((prev) => prev.map((message) => (
+              message.id === assistantMessage.id
+                ? { ...message, qualityCheck, qualityImprovement }
+                : message
+            )));
+          });
+      }
     } catch (err) {
       setFloatingMessages((prev) => [
         ...prev,

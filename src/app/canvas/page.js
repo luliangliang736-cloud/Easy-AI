@@ -635,6 +635,16 @@ function sanitizeConversationsForStorage(conversations) {
   }));
 }
 
+function safeParseStorageArray(value) {
+  if (!value) return null;
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
 function sanitizeCanvasImagesForStorage(items) {
   if (!Array.isArray(items)) return [];
   // base64 图片/视频太大，只保留 HTTPS URL（Nano/Kling API / CDN 链接）
@@ -942,13 +952,9 @@ function HomeInner() {
       const ver = localStorage.getItem("lovart-version");
       if (ver !== STORAGE_VERSION) {
         const legacyMessages = localStorage.getItem("lovart-messages");
-        localStorage.removeItem("lovart-conversations");
-        localStorage.removeItem("lovart-active-conversation");
-        localStorage.removeItem("lovart-canvas-images");
-        localStorage.removeItem("lovart-canvas-texts");
         localStorage.setItem("lovart-version", STORAGE_VERSION);
-        if (legacyMessages) {
-          const parsedMessages = JSON.parse(legacyMessages);
+        if (legacyMessages && !localStorage.getItem("lovart-conversations")) {
+          const parsedMessages = safeParseStorageArray(legacyMessages) || [];
           const migratedConversation = createConversation({
             title: deriveConversationTitle(DEFAULT_CONVERSATION_TITLE, parsedMessages),
             messages: parsedMessages,
@@ -957,52 +963,35 @@ function HomeInner() {
           setActiveConversationId(migratedConversation.id);
           localStorage.removeItem("lovart-messages");
         }
-        persistReadyRef.current = true;
-        return;
       }
       const saved = localStorage.getItem("lovart-conversations");
       const savedActiveConversationId = localStorage.getItem("lovart-active-conversation");
       const savedImages = localStorage.getItem("lovart-canvas-images");
       const savedTexts = localStorage.getItem("lovart-canvas-texts");
       const savedShapes = localStorage.getItem("lovart-canvas-shapes");
-      if (saved) {
-        const parsedConversations = JSON.parse(saved);
-        if (Array.isArray(parsedConversations) && parsedConversations.length > 0) {
-          setConversations(parsedConversations.map((conversation) => ({
-            ...conversation,
-            messages: restoreInterruptedMessages(conversation.messages || []),
-          })));
-          setActiveConversationId(
-            parsedConversations.some((conversation) => conversation.id === savedActiveConversationId)
-              ? savedActiveConversationId
-              : parsedConversations[0].id
-          );
-        }
+      const parsedConversations = safeParseStorageArray(saved);
+      if (parsedConversations?.length > 0) {
+        setConversations(parsedConversations.map((conversation) => ({
+          ...conversation,
+          messages: restoreInterruptedMessages(conversation.messages || []),
+        })));
+        setActiveConversationId(
+          parsedConversations.some((conversation) => conversation.id === savedActiveConversationId)
+            ? savedActiveConversationId
+            : parsedConversations[0].id
+        );
       }
-      if (savedImages) canvasHistory.setState(JSON.parse(savedImages));
-      if (savedTexts) {
-        try {
-          const parsed = JSON.parse(savedTexts);
-          if (Array.isArray(parsed)) canvasTextsHistory.setState(parsed);
-        } catch {
-          localStorage.removeItem("lovart-canvas-texts");
-        }
-      }
-      if (savedShapes) {
-        try {
-          const parsed = JSON.parse(savedShapes);
-          if (Array.isArray(parsed)) canvasShapesHistory.setState(parsed);
-        } catch {
-          localStorage.removeItem("lovart-canvas-shapes");
-        }
-      }
+
+      const parsedImages = safeParseStorageArray(savedImages);
+      if (parsedImages) canvasHistory.setState(parsedImages);
+
+      const parsedTexts = safeParseStorageArray(savedTexts);
+      if (parsedTexts) canvasTextsHistory.setState(parsedTexts);
+
+      const parsedShapes = safeParseStorageArray(savedShapes);
+      if (parsedShapes) canvasShapesHistory.setState(parsedShapes);
     } catch {
-      // 读取失败时只清除损坏的数据，逐项尝试避免全部丢失
-      try { localStorage.removeItem("lovart-conversations"); } catch {}
-      try { localStorage.removeItem("lovart-active-conversation"); } catch {}
-      try { localStorage.removeItem("lovart-canvas-images"); } catch {}
-      try { localStorage.removeItem("lovart-canvas-texts"); } catch {}
-      try { localStorage.removeItem("lovart-canvas-shapes"); } catch {}
+      // 读取失败时保留旧数据，避免一次异常把历史记录清空。
     } finally {
       // 无论成功或失败，标记加载完成，之后的持久化 effect 才允许写入
       persistReadyRef.current = true;
@@ -1100,9 +1089,7 @@ function HomeInner() {
       localStorage.setItem("lovart-conversations", JSON.stringify(sanitizeConversationsForStorage(conversations)));
       localStorage.setItem("lovart-active-conversation", activeConversationId || "");
     } catch {
-      // 写入失败时只清空对话，不波及 canvas 图片
-      try { localStorage.removeItem("lovart-conversations"); } catch {}
-      try { localStorage.removeItem("lovart-active-conversation"); } catch {}
+      // 写入失败多半是容量超限；保留上一次可用历史，不主动清空。
     }
   }, [activeConversationId, conversations]);
 
@@ -1149,7 +1136,7 @@ function HomeInner() {
     try {
       localStorage.setItem("lovart-canvas-images", JSON.stringify(sanitizeCanvasImagesForStorage(canvasImages).slice(0, 100)));
     } catch {
-      localStorage.removeItem("lovart-canvas-images");
+      // 保留上一次可用画布，避免刷新后整页变空。
     }
   }, [canvasImages]);
 
@@ -1158,7 +1145,7 @@ function HomeInner() {
     try {
       localStorage.setItem("lovart-canvas-texts", JSON.stringify(canvasTexts.slice(0, 100)));
     } catch {
-      localStorage.removeItem("lovart-canvas-texts");
+      // 保留上一次可用文本数据。
     }
   }, [canvasTexts]);
 
@@ -1167,7 +1154,7 @@ function HomeInner() {
     try {
       localStorage.setItem("lovart-canvas-shapes", JSON.stringify(canvasShapes.slice(0, 200)));
     } catch {
-      localStorage.removeItem("lovart-canvas-shapes");
+      // 保留上一次可用形状数据。
     }
   }, [canvasShapes]);
 

@@ -63,9 +63,63 @@ const FLOATING_AGENT_DEFAULT_SERVICE_TIER = "priority";
 const FLOATING_EDIT_MODEL = "gpt-image-2";
 const GENERATION_STAGE_MIN_MS = 650;
 const GENERATION_SAVING_STAGE_MS = 350;
+const ONE_CLICK_REQUEST_TIMEOUT_MS = 3 * 60 * 1000;
+const WA_QUALITY_CLIENT_TIMEOUT_MS = 18 * 1000;
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function createTimeoutError(message = "请求等待时间过长，请稍后重试。") {
+  const error = new Error(message);
+  error.name = "TimeoutError";
+  return error;
+}
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = ONE_CLICK_REQUEST_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timer = window.setTimeout(() => controller.abort(createTimeoutError()), timeoutMs);
+  const externalSignal = options.signal;
+  const abortFromExternal = () => controller.abort(externalSignal?.reason);
+
+  if (externalSignal) {
+    if (externalSignal.aborted) {
+      controller.abort(externalSignal.reason);
+    } else {
+      externalSignal.addEventListener("abort", abortFromExternal, { once: true });
+    }
+  }
+
+  try {
+    return await fetch(url, {
+      ...options,
+      signal: controller.signal,
+    });
+  } catch (error) {
+    if (controller.signal.aborted && error?.name === "AbortError" && !externalSignal?.aborted) {
+      throw createTimeoutError();
+    }
+    throw error;
+  } finally {
+    window.clearTimeout(timer);
+    if (externalSignal) {
+      externalSignal.removeEventListener("abort", abortFromExternal);
+    }
+  }
+}
+
+async function withTimeout(promise, timeoutMs, fallbackValue = null) {
+  let timer = 0;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((resolve) => {
+        timer = window.setTimeout(() => resolve(fallbackValue), timeoutMs);
+      }),
+    ]);
+  } finally {
+    window.clearTimeout(timer);
+  }
 }
 
 async function fetchImageAsDataUrl(url) {
@@ -315,7 +369,7 @@ function createMessage(role, text = "", extra = {}) {
 
 function formatGenerationError(error) {
   const message = String(error?.message || "").trim();
-  if (/failed to fetch/i.test(message)) {
+  if (error?.name === "TimeoutError" || /failed to fetch|请求等待时间过长/i.test(message)) {
     return "生成请求连接中断或超时，请稍后重试。";
   }
   return message || "处理失败，请稍后重试。";
@@ -825,12 +879,12 @@ export default function ChatPage() {
             assistantModel: submittedImages.length > 0 ? "直连 GPT Image 2" : "直连 Nano",
           }
         : await (async () => {
-            const res = await fetch("/api/floating-assistant", {
+            const res = await fetchWithTimeout("/api/floating-assistant", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ messages: historyForApi, currentInput: apiText, refImages: submittedImages, attachments: [] }),
               signal: abortController.signal,
-            });
+            }, 60 * 1000);
             const data = await res.json().catch(() => ({}));
             if (!res.ok || data.error) throw new Error(data.error || "对话判断失败");
             return data.data || {};
@@ -871,7 +925,7 @@ export default function ChatPage() {
         : { prompt: finalPrompt, model: generationModel, image_size: imageSize, num: 1, ref_images: submittedImages, service_tier: isAgentMode ? agentParams.service_tier : FLOATING_DEFAULT_SERVICE_TIER };
 
       setGenerationStage("generating");
-      const genRes = await fetch(endpoint, {
+      const genRes = await fetchWithTimeout(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
@@ -883,17 +937,30 @@ export default function ChatPage() {
       if (!urls.length) throw new Error("未返回结果图片");
 
       await showGenerationStage("saving", GENERATION_SAVING_STAGE_MS, abortController.signal);
-      const qualityCheck = waTemplateRequest ? await runWaQualityCheck(urls[0]) : null;
-      const qualityImprovement = buildWaQualityImprovement(override?.qualityCheck, qualityCheck);
-      setMessages((prev) => [
-        ...prev,
-        createMessage("assistant", assistantText || (resolvedMode === "agent" ? "我已经按你的要求整理并生成了一版结果。" : "我已经帮你快速生成了一版结果。"), {
+      const assistantMessage = createMessage(
+        "assistant",
+        assistantText || (resolvedMode === "agent" ? "我已经按你的要求整理并生成了一版结果。" : "我已经帮你快速生成了一版结果。"),
+        {
           images: urls,
-          qualityCheck,
-          qualityImprovement,
+          qualityCheck: null,
+          qualityImprovement: null,
           modelLabel: `${plan.assistantModel || ""} · ${generationModel}`.replace(/^ · /, ""),
-        }),
-      ]);
+        }
+      );
+      setMessages((prev) => [...prev, assistantMessage]);
+
+      if (waTemplateRequest) {
+        void withTimeout(runWaQualityCheck(urls[0]), WA_QUALITY_CLIENT_TIMEOUT_MS, null)
+          .then((qualityCheck) => {
+            if (!qualityCheck) return;
+            const qualityImprovement = buildWaQualityImprovement(override?.qualityCheck, qualityCheck);
+            setMessages((prev) => prev.map((message) => (
+              message.id === assistantMessage.id
+                ? { ...message, qualityCheck, qualityImprovement }
+                : message
+            )));
+          });
+      }
 
       // 保存图片历史
       const imgEntry = { id: `img-${Date.now()}`, prompt: text.slice(0, 40) || "图片生成", urls: urls.slice(0, 4), createdAt: Date.now() };
