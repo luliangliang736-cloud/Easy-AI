@@ -150,6 +150,12 @@ async function recoverGenerationResult(clientRequestId) {
   return null;
 }
 
+async function waitForRecoveredGenerationResult(clientRequestId) {
+  const recovered = await recoverGenerationResult(clientRequestId);
+  if (recovered) return { data: recovered, recovered: true };
+  return new Promise(() => {});
+}
+
 const HERO_LAYOUT_PRESETS = {
   desktop: {
     container: "pb-10 lg:pb-14",
@@ -1385,14 +1391,27 @@ EZlogo trigger instructions:
           };
 
       setFloatingGenerationStage("generating");
-      const res = await fetchWithTimeout(endpoint, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      }, generationModel === "gpt-image-2" ? GPT_IMAGE_2_CLIENT_TIMEOUT_MS : ONE_CLICK_REQUEST_TIMEOUT_MS);
-      const data = await parseApiResponse(res);
-      if (!res.ok || data.error) {
-        throw createNonRecoverableError(data.error || `生成失败（${res.status}）`, res.status);
+      const generationAbortController = new AbortController();
+      const requestPromise = (async () => {
+        const res = await fetchWithTimeout(endpoint, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+          signal: generationAbortController.signal,
+        }, generationModel === "gpt-image-2" ? GPT_IMAGE_2_CLIENT_TIMEOUT_MS : ONE_CLICK_REQUEST_TIMEOUT_MS);
+        const responseData = await parseApiResponse(res);
+        if (!res.ok || responseData.error) {
+          throw createNonRecoverableError(responseData.error || `生成失败（${res.status}）`, res.status);
+        }
+        return { data: responseData, recovered: false };
+      })();
+      const { data, recovered } = await Promise.race([
+        requestPromise,
+        waitForRecoveredGenerationResult(activeClientRequestId),
+      ]);
+      if (recovered) {
+        generationAbortController.abort(createTimeoutError("已恢复生成结果，停止等待原始连接。"));
+        await requestPromise.catch(() => null);
       }
 
       const urls = Array.isArray(data.data?.urls) ? data.data.urls.filter(Boolean) : [];

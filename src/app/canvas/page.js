@@ -760,6 +760,12 @@ async function recoverGenerationResult(clientRequestId) {
   return null;
 }
 
+async function waitForRecoveredGenerationResult(clientRequestId) {
+  const recovered = await recoverGenerationResult(clientRequestId);
+  if (recovered) return { data: recovered, recovered: true };
+  return new Promise(() => {});
+}
+
 async function runWithConcurrency(items, limit, worker) {
   const results = new Array(items.length);
   let nextIndex = 0;
@@ -1703,70 +1709,77 @@ function HomeInner() {
           );
 
           try {
-            let res;
+            let requestUrl = "/api/generate";
+            let requestBody = {
+              prompt: requestPrompt,
+              model: requestParams.model,
+              image_size: imageSize,
+              num: 1,
+              service_tier: requestParams.service_tier,
+              quality: requestParams.quality,
+              output_format: requestParams.output_format,
+              output_compression: requestParams.output_compression,
+              moderation: requestParams.moderation,
+              ref_images: preparedImages,
+              clientRequestId,
+            };
+
             if (isKlingVideoRequest) {
-              res = await fetchWithTimeout("/api/kling-video", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                signal: requestController.signal,
-                body: JSON.stringify({
-                  prompt: requestPrompt,
-                  model: requestParams.model,
-                  image_size: imageSize,
-                  aspect_ratio: imageSize,
-                  duration: requestParams.duration || "5",
-                  mode: requestParams.mode || "pro",
-                  sound: requestParams.sound || "off",
-                  ref_images: preparedImages.slice(0, 2),
-                }),
-              }, taskRequestTimeoutMs);
+              requestUrl = "/api/kling-video";
+              requestBody = {
+                prompt: requestPrompt,
+                model: requestParams.model,
+                image_size: imageSize,
+                aspect_ratio: imageSize,
+                duration: requestParams.duration || "5",
+                mode: requestParams.mode || "pro",
+                sound: requestParams.sound || "off",
+                ref_images: preparedImages.slice(0, 2),
+              };
             } else if (shouldUseEditApi) {
-              res = await fetchWithTimeout("/api/edit", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                signal: requestController.signal,
-                body: JSON.stringify({
-                  prompt: requestPrompt,
-                  image: imagePayload,
-                  model: requestParams.model,
-                  image_size: imageSize,
-                  num: 1,
-                  mode: editMode,
-                  service_tier: requestParams.service_tier,
-                  quality: requestParams.quality,
-                  output_format: requestParams.output_format,
-                  output_compression: requestParams.output_compression,
-                  moderation: requestParams.moderation,
-                  clientRequestId,
-                }),
-              }, taskRequestTimeoutMs);
-            } else {
-              res = await fetchWithTimeout("/api/generate", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                signal: requestController.signal,
-                body: JSON.stringify({
-                  prompt: requestPrompt,
-                  model: requestParams.model,
-                  image_size: imageSize,
-                  num: 1,
-                  service_tier: requestParams.service_tier,
-                  quality: requestParams.quality,
-                  output_format: requestParams.output_format,
-                  output_compression: requestParams.output_compression,
-                  moderation: requestParams.moderation,
-                  ref_images: preparedImages,
-                  clientRequestId,
-                }),
-              }, taskRequestTimeoutMs);
+              requestUrl = "/api/edit";
+              requestBody = {
+                prompt: requestPrompt,
+                image: imagePayload,
+                model: requestParams.model,
+                image_size: imageSize,
+                num: 1,
+                mode: editMode,
+                service_tier: requestParams.service_tier,
+                quality: requestParams.quality,
+                output_format: requestParams.output_format,
+                output_compression: requestParams.output_compression,
+                moderation: requestParams.moderation,
+                clientRequestId,
+              };
             }
 
-            const data = await parseApiResponse(res);
+            const requestPromise = (async () => {
+              const res = await fetchWithTimeout(requestUrl, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                signal: requestController.signal,
+                body: JSON.stringify(requestBody),
+              }, taskRequestTimeoutMs);
+              const responseData = await parseApiResponse(res);
+              return { res, data: responseData, recovered: false };
+            })();
+            const recoveredPromise = isKlingVideoRequest
+              ? new Promise(() => {})
+              : waitForRecoveredGenerationResult(clientRequestId);
+            const { res, data, recovered } = await Promise.race([
+              requestPromise,
+              recoveredPromise,
+            ]);
+            if (recovered) {
+              requestController.abort();
+              await requestPromise.catch(() => null);
+            }
             if (shouldCancelTaskForStaleGeneration()) {
               return { status: "cancelled" };
             }
 
-            if (!res.ok || data.error) {
+            if (!recovered && (!res.ok || data.error)) {
               const errorMessage = errStr(data.error || `请求失败（${res.status}）`);
               patchTask(conversationId, aiMsgId, taskId, {
                 status: "failed",

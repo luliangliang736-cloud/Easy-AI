@@ -167,6 +167,12 @@ async function recoverGenerationResult(clientRequestId) {
   return null;
 }
 
+async function waitForRecoveredGenerationResult(clientRequestId) {
+  const recovered = await recoverGenerationResult(clientRequestId);
+  if (recovered) return { data: recovered, recovered: true };
+  return new Promise(() => {});
+}
+
 async function fetchImageAsDataUrl(url) {
   const res = await fetch(url);
   if (!res.ok) return null;
@@ -951,15 +957,26 @@ EZlogo trigger instructions:
         : { prompt: finalPrompt, model: generationModel, image_size: imageSize, num: 1, ref_images: submittedImages, service_tier: isAgentMode ? agentParams.service_tier : FLOATING_DEFAULT_SERVICE_TIER, clientRequestId: activeClientRequestId };
 
       setGenerationStage("generating");
-      const genRes = await fetchWithTimeout(endpoint, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-        signal: abortController.signal,
-      }, generationModel === "gpt-image-2" ? GPT_IMAGE_2_CLIENT_TIMEOUT_MS : ONE_CLICK_REQUEST_TIMEOUT_MS);
-      const genData = await genRes.json().catch(() => ({}));
-      if (!genRes.ok || genData.error) {
-        throw createNonRecoverableError(genData.error || "生成失败", genRes.status);
+      const requestPromise = (async () => {
+        const genRes = await fetchWithTimeout(endpoint, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+          signal: abortController.signal,
+        }, generationModel === "gpt-image-2" ? GPT_IMAGE_2_CLIENT_TIMEOUT_MS : ONE_CLICK_REQUEST_TIMEOUT_MS);
+        const responseData = await genRes.json().catch(() => ({}));
+        if (!genRes.ok || responseData.error) {
+          throw createNonRecoverableError(responseData.error || "生成失败", genRes.status);
+        }
+        return { data: responseData, recovered: false };
+      })();
+      const { data: genData, recovered } = await Promise.race([
+        requestPromise,
+        waitForRecoveredGenerationResult(activeClientRequestId),
+      ]);
+      if (recovered) {
+        abortController.abort(createTimeoutError("已恢复生成结果，停止等待原始连接。"));
+        await requestPromise.catch(() => null);
       }
       const urls = Array.isArray(genData.data?.urls) ? genData.data.urls.filter(Boolean) : [];
       if (!urls.length) throw new Error("未返回结果图片");
