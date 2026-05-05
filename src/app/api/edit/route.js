@@ -48,7 +48,7 @@ function resolveOpenAICompatNanoModel(model) {
 }
 
 export const runtime = "nodejs";
-export const maxDuration = 300;
+export const maxDuration = 600;
 
 function formatRouteError(err) {
   const code = err?.cause?.code || err?.code || "";

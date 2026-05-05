@@ -25,7 +25,7 @@ const GPT_IMAGE_2_API_KEY_HEADER = (
   || "authorization"
 ).trim().toLowerCase();
 const GPT_IMAGE_2_MODEL = process.env.GPT_IMAGE_2_MODEL || "gpt-image-2";
-const GPT_IMAGE_2_TIMEOUT_MS = Number(process.env.GPT_IMAGE_2_TIMEOUT_MS || 150 * 1000);
+const GPT_IMAGE_2_TIMEOUT_MS = Number(process.env.GPT_IMAGE_2_TIMEOUT_MS || 300 * 1000);
 const GPT_IMAGE_2_RETRY_COUNT = Math.max(0, Number(process.env.GPT_IMAGE_2_RETRY_COUNT || 1) || 0);
 const GPT_IMAGE_2_RETRY_DELAY_MS = Math.max(0, Number(process.env.GPT_IMAGE_2_RETRY_DELAY_MS || 800) || 0);
 const GPT_IMAGE_2_QUALITY = normalizeQuality(process.env.GPT_IMAGE_2_QUALITY || "medium");
@@ -96,7 +96,7 @@ function mapImageSize(imageSize = "1:1", hasImageInput = false) {
     return `${exactSize.width}x${exactSize.height}`;
   }
   if (ratio === "auto") {
-    return "auto";
+    return hasImageInput ? "auto" : "1024x1024";
   }
   if (["1:1"].includes(ratio)) return "1024x1024";
   if (["16:9", "4:3", "3:2", "5:4", "21:9", "4:1", "8:1"].includes(ratio)) return "1536x1024";
@@ -214,6 +214,10 @@ function isTransientFetchError(error) {
   );
 }
 
+function isRetryableStatus(status) {
+  return [408, 409, 425, 429, 500, 502, 503, 504].includes(status);
+}
+
 function formatFetchError(error, url) {
   if (error?.name === "AbortError") {
     return "图片服务响应超时，请稍后重试。";
@@ -240,7 +244,13 @@ async function fetchWithRetry(url, createOptions) {
     const timer = setTimeout(() => controller.abort(), GPT_IMAGE_2_TIMEOUT_MS);
     try {
       const options = await createOptions(controller.signal, attempt);
-      return await fetch(requestUrl, options);
+      const response = await fetch(requestUrl, options);
+      if (isRetryableStatus(response.status) && attempt < GPT_IMAGE_2_RETRY_COUNT) {
+        lastError = new Error(`Retryable GPT Image 2 status ${response.status}`);
+        await sleep(GPT_IMAGE_2_RETRY_DELAY_MS * (attempt + 1));
+        continue;
+      }
+      return response;
     } catch (error) {
       lastError = error;
       if (!isTransientFetchError(error) || attempt >= GPT_IMAGE_2_RETRY_COUNT) break;

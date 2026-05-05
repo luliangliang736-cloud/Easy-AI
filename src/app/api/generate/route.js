@@ -8,7 +8,7 @@ import {
 } from "@/lib/server/openaiImageCompat";
 import { saveGenerationResult } from "@/lib/server/generationResultStore";
 
-export const maxDuration = 300;
+export const maxDuration = 600;
 
 const API_BASE = process.env.NANO_API_BASE || "https://api.nanobananaapi.dev";
 const API_KEY = process.env.NANO_API_KEY;

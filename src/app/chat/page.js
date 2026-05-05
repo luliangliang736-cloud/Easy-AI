@@ -62,6 +62,7 @@ const FLOATING_EDIT_MODEL = "gpt-image-2";
 const GENERATION_STAGE_MIN_MS = 650;
 const GENERATION_SAVING_STAGE_MS = 350;
 const ONE_CLICK_REQUEST_TIMEOUT_MS = 3 * 60 * 1000;
+const GPT_IMAGE_2_CLIENT_TIMEOUT_MS = 10 * 60 * 1000;
 const WA_QUALITY_CLIENT_TIMEOUT_MS = 18 * 1000;
 const GENERATION_RECOVERY_POLL_MS = 2000;
 const GENERATION_RECOVERY_MAX_ATTEMPTS = 60;
@@ -74,6 +75,26 @@ function createTimeoutError(message = "请求等待时间过长，请稍后重�
   const error = new Error(message);
   error.name = "TimeoutError";
   return error;
+}
+
+function createNonRecoverableError(message, status = null) {
+  const error = new Error(message);
+  error.status = status;
+  error.noRecovery = true;
+  return error;
+}
+
+function shouldAttemptGenerationRecovery(error) {
+  if (!error || error.noRecovery) return false;
+  if (error.name === "AbortError" || error.name === "TimeoutError") return true;
+  const message = String(error.message || "").toLowerCase();
+  return (
+    message.includes("fetch")
+    || message.includes("network")
+    || message.includes("connection")
+    || message.includes("timeout")
+    || message.includes("请求等待时间过长")
+  );
 }
 
 async function fetchWithTimeout(url, options = {}, timeoutMs = ONE_CLICK_REQUEST_TIMEOUT_MS) {
@@ -271,6 +292,7 @@ function computeGptImage2EditSize(width, height) {
   const MAX_RATIO = 3;
   const MIN_PIXELS = 655360;
   const MAX_PIXELS = 8294400;
+  const TARGET_PIXELS = 1050000;
   const MULTIPLE = 16;
 
   let w = width;
@@ -289,6 +311,12 @@ function computeGptImage2EditSize(width, height) {
   const maxEdge = Math.max(w, h);
   if (maxEdge > MAX_EDGE) {
     const scale = MAX_EDGE / maxEdge;
+    w = Math.round(w * scale);
+    h = Math.round(h * scale);
+  }
+
+  if (w * h > TARGET_PIXELS) {
+    const scale = Math.sqrt(TARGET_PIXELS / (w * h));
     w = Math.round(w * scale);
     h = Math.round(h * scale);
   }
@@ -928,9 +956,11 @@ EZlogo trigger instructions:
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
         signal: abortController.signal,
-      });
+      }, generationModel === "gpt-image-2" ? GPT_IMAGE_2_CLIENT_TIMEOUT_MS : ONE_CLICK_REQUEST_TIMEOUT_MS);
       const genData = await genRes.json().catch(() => ({}));
-      if (!genRes.ok || genData.error) throw new Error(genData.error || "生成失败");
+      if (!genRes.ok || genData.error) {
+        throw createNonRecoverableError(genData.error || "生成失败", genRes.status);
+      }
       const urls = Array.isArray(genData.data?.urls) ? genData.data.urls.filter(Boolean) : [];
       if (!urls.length) throw new Error("未返回结果图片");
 
@@ -980,14 +1010,16 @@ EZlogo trigger instructions:
       if (err?.name === "AbortError") {
         // 用户手动取消，不添加错误消息
       } else {
-        const recovered = await recoverGenerationResult(activeClientRequestId);
-        const recoveredUrls = Array.isArray(recovered?.data?.urls) ? recovered.data.urls.filter(Boolean) : [];
-        if (recoveredUrls.length > 0) {
-          setMessages((prev) => [...prev, createMessage("assistant", "刚刚连接中断，但我已经恢复到生成结果。", {
-            images: recoveredUrls,
-            modelLabel: "已恢复的生成结果",
-          })]);
-          return;
+        if (shouldAttemptGenerationRecovery(err)) {
+          const recovered = await recoverGenerationResult(activeClientRequestId);
+          const recoveredUrls = Array.isArray(recovered?.data?.urls) ? recovered.data.urls.filter(Boolean) : [];
+          if (recoveredUrls.length > 0) {
+            setMessages((prev) => [...prev, createMessage("assistant", "刚刚连接中断，但我已经恢复到生成结果。", {
+              images: recoveredUrls,
+              modelLabel: "已恢复的生成结果",
+            })]);
+            return;
+          }
         }
         setMessages((prev) => [...prev, createMessage("assistant", formatGenerationError(err))]);
       }

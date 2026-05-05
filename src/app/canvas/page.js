@@ -100,6 +100,7 @@ function computeGptImage2EditSize(width, height) {
   const MAX_RATIO = 3;
   const MIN_PIXELS = 655360;
   const MAX_PIXELS = 8294400;
+  const TARGET_PIXELS = 1050000;
   const MULTIPLE = 16;
 
   let w = width;
@@ -121,6 +122,12 @@ function computeGptImage2EditSize(width, height) {
   const maxEdge = Math.max(w, h);
   if (maxEdge > MAX_EDGE) {
     const scale = MAX_EDGE / maxEdge;
+    w = Math.round(w * scale);
+    h = Math.round(h * scale);
+  }
+
+  if (w * h > TARGET_PIXELS) {
+    const scale = Math.sqrt(TARGET_PIXELS / (w * h));
     w = Math.round(w * scale);
     h = Math.round(h * scale);
   }
@@ -471,6 +478,7 @@ function parseAspectRatio(imageSize) {
 
 const REQUEST_TIMEOUT_MS = 90000;
 const IMAGE_REQUEST_TIMEOUT_MS = 5 * 60 * 1000;
+const GPT_IMAGE_2_REQUEST_TIMEOUT_MS = 10 * 60 * 1000;
 const VIDEO_REQUEST_TIMEOUT_MS = 10 * 60 * 1000;
 const GENERATION_STALE_MS = IMAGE_REQUEST_TIMEOUT_MS + 30 * 1000;
 const VIDEO_GENERATION_STALE_MS = VIDEO_REQUEST_TIMEOUT_MS + 30 * 1000;
@@ -716,6 +724,20 @@ async function fetchWithTimeout(url, options, timeoutMs = REQUEST_TIMEOUT_MS) {
     }
     cleanup();
   }
+}
+
+function shouldAttemptGenerationRecovery(error) {
+  if (!error || error.noRecovery) return false;
+  if (error.name === "AbortError" || error.name === "TimeoutError") return true;
+  const message = String(error.message || "").toLowerCase();
+  return (
+    message.includes("fetch")
+    || message.includes("network")
+    || message.includes("connection")
+    || message.includes("timeout")
+    || message.includes("请求超时")
+    || message.includes("请求等待时间过长")
+  );
 }
 
 async function recoverGenerationResult(clientRequestId) {
@@ -1057,7 +1079,11 @@ function HomeInner() {
       const now = Date.now();
       const staleItems = canvasGeneratingItems.filter((item) => {
         if (!item?.isGeneratingPlaceholder || !item?.createdAt) return false;
-        const staleMs = item.mediaType === "video" ? VIDEO_GENERATION_STALE_MS : GENERATION_STALE_MS;
+        const staleMs = item.requestTimeoutMs
+          ? item.requestTimeoutMs + 30 * 1000
+          : item.mediaType === "video"
+            ? VIDEO_GENERATION_STALE_MS
+            : GENERATION_STALE_MS;
         return now - item.createdAt > staleMs;
       });
       if (!staleItems.length) return;
@@ -1592,6 +1618,11 @@ function HomeInner() {
       );
       const imagePayload =
         preparedImages.length === 1 ? preparedImages[0] : preparedImages;
+      const taskRequestTimeoutMs = isKlingVideoRequest
+        ? VIDEO_REQUEST_TIMEOUT_MS
+        : isGptImage2Request
+          ? GPT_IMAGE_2_REQUEST_TIMEOUT_MS
+          : IMAGE_REQUEST_TIMEOUT_MS;
 
       setCanvasGeneratingItems((prev) => [
         ...prev,
@@ -1607,6 +1638,7 @@ function HomeInner() {
           generationStatus: "pending",
           placeholderAspectRatio,
           mediaType: isKlingVideoRequest ? "video" : "image",
+          requestTimeoutMs: taskRequestTimeoutMs,
           createdAt: ts,
         })),
       ]);
@@ -1687,7 +1719,7 @@ function HomeInner() {
                   sound: requestParams.sound || "off",
                   ref_images: preparedImages.slice(0, 2),
                 }),
-              }, VIDEO_REQUEST_TIMEOUT_MS);
+              }, taskRequestTimeoutMs);
             } else if (shouldUseEditApi) {
               res = await fetchWithTimeout("/api/edit", {
                 method: "POST",
@@ -1707,7 +1739,7 @@ function HomeInner() {
                   moderation: requestParams.moderation,
                   clientRequestId,
                 }),
-              }, IMAGE_REQUEST_TIMEOUT_MS);
+              }, taskRequestTimeoutMs);
             } else {
               res = await fetchWithTimeout("/api/generate", {
                 method: "POST",
@@ -1726,7 +1758,7 @@ function HomeInner() {
                   ref_images: preparedImages,
                   clientRequestId,
                 }),
-              }, IMAGE_REQUEST_TIMEOUT_MS);
+              }, taskRequestTimeoutMs);
             }
 
             const data = await parseApiResponse(res);
@@ -1735,8 +1767,6 @@ function HomeInner() {
             }
 
             if (!res.ok || data.error) {
-              const recoveredResult = await tryRecoverTaskResult();
-              if (recoveredResult) return recoveredResult;
               const errorMessage = errStr(data.error || `请求失败（${res.status}）`);
               patchTask(conversationId, aiMsgId, taskId, {
                 status: "failed",
@@ -1790,7 +1820,7 @@ function HomeInner() {
             ) {
               return { status: "cancelled" };
             }
-            if (!activeGenerationRef.current?.cancelled) {
+            if (!activeGenerationRef.current?.cancelled && shouldAttemptGenerationRecovery(err)) {
               const recoveredResult = await tryRecoverTaskResult();
               if (recoveredResult) return recoveredResult;
             }
