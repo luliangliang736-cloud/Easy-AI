@@ -65,7 +65,7 @@ const ONE_CLICK_REQUEST_TIMEOUT_MS = 3 * 60 * 1000;
 const GPT_IMAGE_2_CLIENT_TIMEOUT_MS = 10 * 60 * 1000;
 const WA_QUALITY_CLIENT_TIMEOUT_MS = 18 * 1000;
 const GENERATION_RECOVERY_POLL_MS = 2000;
-const GENERATION_RECOVERY_MAX_ATTEMPTS = 60;
+const GENERATION_RECOVERY_MAX_ATTEMPTS = Math.ceil((12 * 60 * 1000) / GENERATION_RECOVERY_POLL_MS);
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
