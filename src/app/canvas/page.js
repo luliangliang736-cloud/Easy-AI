@@ -96,8 +96,7 @@ const ASPECT_RATIO_RULES = [
 /** 根据参考图真实像素尺寸，计算 GPT Image 2 edit 合法的精确输出尺寸 */
 function computeGptImage2EditSize(width, height) {
   if (!width || !height || width <= 0 || height <= 0) return "auto";
-  const API_MAX_EDGE = 3840;
-  const STABLE_AUTO_MAX_EDGE = 1280;
+  const MAX_EDGE = 3840;
   const MAX_RATIO = 3;
   const MIN_PIXELS = 655360;
   const MAX_PIXELS = 8294400;
@@ -118,11 +117,10 @@ function computeGptImage2EditSize(width, height) {
     h = Math.ceil(h * scale);
   }
 
-  // auto 模式按原图比例出图，但限制最长边，避免大图 edit 在上游排队到超时。
+  // 最长边超限则等比缩小
   const maxEdge = Math.max(w, h);
-  const targetMaxEdge = Math.min(API_MAX_EDGE, STABLE_AUTO_MAX_EDGE);
-  if (maxEdge > targetMaxEdge) {
-    const scale = targetMaxEdge / maxEdge;
+  if (maxEdge > MAX_EDGE) {
+    const scale = MAX_EDGE / maxEdge;
     w = Math.round(w * scale);
     h = Math.round(h * scale);
   }
@@ -132,7 +130,7 @@ function computeGptImage2EditSize(width, height) {
   h = Math.round(h / MULTIPLE) * MULTIPLE || MULTIPLE;
 
   // 最终校验
-  if (Math.max(w, h) > API_MAX_EDGE || w * h > MAX_PIXELS || w * h < MIN_PIXELS) return "auto";
+  if (Math.max(w, h) > MAX_EDGE || w * h > MAX_PIXELS || w * h < MIN_PIXELS) return "auto";
 
   return `${w}x${h}`;
 }
@@ -476,6 +474,8 @@ const IMAGE_REQUEST_TIMEOUT_MS = 5 * 60 * 1000;
 const VIDEO_REQUEST_TIMEOUT_MS = 10 * 60 * 1000;
 const GENERATION_STALE_MS = IMAGE_REQUEST_TIMEOUT_MS + 30 * 1000;
 const VIDEO_GENERATION_STALE_MS = VIDEO_REQUEST_TIMEOUT_MS + 30 * 1000;
+const GENERATION_RECOVERY_POLL_MS = 2000;
+const GENERATION_RECOVERY_MAX_ATTEMPTS = 60;
 const MAX_PARALLEL_GENERATIONS = 1;
 const STORAGE_VERSION = "9";
 const DEFAULT_CONVERSATION_TITLE = "新建对话";
@@ -496,6 +496,10 @@ function createConversation(overrides = {}) {
     createdAt: overrides.createdAt || now,
     updatedAt: overrides.updatedAt || now,
   };
+}
+
+function createClientRequestId(prefix = "canvas") {
+  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
 function deriveConversationTitle(currentTitle, messages) {
@@ -712,6 +716,26 @@ async function fetchWithTimeout(url, options, timeoutMs = REQUEST_TIMEOUT_MS) {
     }
     cleanup();
   }
+}
+
+async function recoverGenerationResult(clientRequestId) {
+  if (!clientRequestId) return null;
+  for (let attempt = 0; attempt < GENERATION_RECOVERY_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      const res = await fetch(`/api/generation-results/${encodeURIComponent(clientRequestId)}`, {
+        cache: "no-store",
+      });
+      if (res.ok) {
+        const data = await res.json().catch(() => null);
+        if (data?.success && Array.isArray(data?.data?.urls) && data.data.urls.length > 0) {
+          return data;
+        }
+      }
+      if (res.status !== 202) return null;
+    } catch {}
+    await new Promise((resolve) => window.setTimeout(resolve, GENERATION_RECOVERY_POLL_MS));
+  }
+  return null;
 }
 
 async function runWithConcurrency(items, limit, worker) {
@@ -1603,6 +1627,40 @@ function HomeInner() {
             task.index,
             variantDescriptors[task.index] || ""
           );
+          const clientRequestId = createClientRequestId("canvas");
+          const completeTaskWithUrl = (url, mediaTypeOverride = null) => {
+            if (shouldCancelTaskForStaleGeneration()) {
+              return { status: "cancelled" };
+            }
+            const mediaType = mediaTypeOverride || (isKlingVideoRequest ? "video" : "image");
+            patchTask(conversationId, aiMsgId, taskId, {
+              status: "completed",
+              url,
+              type: mediaType,
+              error: null,
+            });
+            setCanvasGeneratingItems((prev) =>
+              prev.filter((item) => item.id !== canvasItemId)
+            );
+            canvasHistory.push((prev) => [
+              ...prev,
+              {
+                id: canvasItemId,
+                image_url: url,
+                media_type: mediaType,
+                prompt: displayText,
+              },
+            ]);
+            return { status: "completed" };
+          };
+          const tryRecoverTaskResult = async () => {
+            const recovered = await recoverGenerationResult(clientRequestId);
+            const recoveredUrls = Array.isArray(recovered?.data?.urls)
+              ? recovered.data.urls.filter(Boolean)
+              : [];
+            if (recoveredUrls.length === 0) return null;
+            return completeTaskWithUrl(recoveredUrls[0], recovered?.data?.mediaType);
+          };
           patchTask(conversationId, aiMsgId, taskId, { status: "generating" });
           setCanvasGeneratingItems((prev) =>
             prev.map((item) =>
@@ -1647,6 +1705,7 @@ function HomeInner() {
                   output_format: requestParams.output_format,
                   output_compression: requestParams.output_compression,
                   moderation: requestParams.moderation,
+                  clientRequestId,
                 }),
               }, IMAGE_REQUEST_TIMEOUT_MS);
             } else {
@@ -1665,6 +1724,7 @@ function HomeInner() {
                   output_compression: requestParams.output_compression,
                   moderation: requestParams.moderation,
                   ref_images: preparedImages,
+                  clientRequestId,
                 }),
               }, IMAGE_REQUEST_TIMEOUT_MS);
             }
@@ -1675,6 +1735,8 @@ function HomeInner() {
             }
 
             if (!res.ok || data.error) {
+              const recoveredResult = await tryRecoverTaskResult();
+              if (recoveredResult) return recoveredResult;
               const errorMessage = errStr(data.error || `请求失败（${res.status}）`);
               patchTask(conversationId, aiMsgId, taskId, {
                 status: "failed",
@@ -1727,6 +1789,10 @@ function HomeInner() {
               )
             ) {
               return { status: "cancelled" };
+            }
+            if (!activeGenerationRef.current?.cancelled) {
+              const recoveredResult = await tryRecoverTaskResult();
+              if (recoveredResult) return recoveredResult;
             }
             if (err?.name === "AbortError") {
               if (!activeGenerationRef.current?.cancelled) {
