@@ -42,8 +42,6 @@ import {
   buildIpSceneExtensionPrompt,
   detectIpSceneExtension,
 } from "@/lib/ipSceneExtensionRules";
-import SKILLS from "@/config/skills";
-import IP_ASSETS from "@/config/ipAssets";
 
 const CHAT_SESSION_KEY = "lovart-chat-fullscreen-session";
 const IMAGE_HISTORY_KEY = "lovart-chat-image-history";
@@ -505,8 +503,6 @@ export default function ChatPage() {
   const [theme, setTheme] = useState("dark");
   const [messages, setMessages] = useState([]);
   const [prompt, setPrompt] = useState("");
-  const [skillsOpen, setSkillsOpen] = useState(false);
-  const skillsRef = useRef(null);
   const [refImages, setRefImages] = useState([]);
   const [isGenerating, setIsGenerating] = useState(false);
   const [generationStage, setGenerationStage] = useState("understanding");
@@ -763,37 +759,6 @@ export default function ChatPage() {
     const files = e.dataTransfer?.files;
     if (files?.length) void handleFilesAdd(files);
   };
-
-  useEffect(() => {
-    if (!skillsOpen) return undefined;
-    const handler = (e) => {
-      if (skillsRef.current && !skillsRef.current.contains(e.target)) {
-        setSkillsOpen(false);
-      }
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [skillsOpen]);
-
-  const handleSkillClick = useCallback(async (skill) => {
-    setSkillsOpen(false);
-    if (skill.ipBased && IP_ASSETS.length > 0) {
-      const pick = IP_ASSETS[Math.floor(Math.random() * IP_ASSETS.length)];
-      try {
-        const res = await fetch(pick.url);
-        const blob = await res.blob();
-        const ext = (pick.url.split(".").pop() || "png").split("?")[0];
-        const file = new File([blob], `ip-ref.${ext}`, { type: blob.type || "image/png" });
-        await handleFilesAdd([file]);
-      } catch { /* 静默跳过 */ }
-    } else if (skill.ipBased && IP_ASSETS.length === 0) {
-      setPrompt("（请先在 src/config/ipAssets.js 中添加您的IP图片）" + skill.prompt);
-      return;
-    }
-    setPrompt(skill.prompt);
-    if (skill.autoSend) setTimeout(() => handleSubmit(), 80);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [handleFilesAdd]);
 
   const handleSubmit = async (override = null) => {
     const activePrompt = override?.prompt ?? prompt;
@@ -1588,59 +1553,6 @@ EZlogo trigger instructions:
                 title="添加图片">
                 <Plus size={16} />
               </button>
-
-              {/* Skills 下拉按钮 */}
-              {SKILLS.length > 0 && (
-                <div className="relative self-end mb-0.5" ref={skillsRef}>
-                  <button
-                    type="button"
-                    onClick={() => setSkillsOpen((v) => !v)}
-                    title="快捷技能"
-                    className={`shrink-0 h-8 px-2 rounded-full flex items-center gap-1 text-[11px] font-medium transition-all ${
-                      skillsOpen
-                        ? isLightTheme
-                          ? "bg-[#9CFF3F]/10 text-[#9CFF3F] border border-[#9CFF3F]/20"
-                          : "bg-[#9CFF3F]/20 text-[#9CFF3F] border border-[#9CFF3F]/30"
-                        : isLightTheme
-                          ? "bg-black/[0.05] text-black/50 hover:bg-black/[0.09] hover:text-black/80"
-                          : "bg-white/[0.07] text-white/50 hover:bg-white/[0.12] hover:text-white/80"
-                    }`}
-                  >
-                    <span>Skills</span>
-                    <ChevronUp size={12} className={`transition-transform ${skillsOpen ? "" : "rotate-180"}`} />
-                  </button>
-
-                  {skillsOpen && (
-                    <div className={`absolute bottom-full left-0 mb-2 w-52 rounded-2xl shadow-xl border overflow-hidden z-50 ${
-                      isLightTheme ? "bg-white border-black/8" : "bg-[#1c1c1e] border-white/10"
-                    }`}>
-                      <div className={`px-3 py-2 text-[10px] font-semibold tracking-widest uppercase ${isLightTheme ? "text-black/30 border-b border-black/6" : "text-white/25 border-b border-white/6"}`}>
-                        Skills
-                      </div>
-                      {SKILLS.map((skill) => (
-                        <button
-                          key={skill.id}
-                          type="button"
-                          onClick={() => handleSkillClick(skill)}
-                          className={`w-full flex items-center gap-2.5 px-3 py-2.5 text-left text-[13px] transition-colors ${
-                            isLightTheme ? "hover:bg-black/[0.04] text-[#111]" : "hover:bg-white/[0.06] text-white"
-                          }`}
-                        >
-                          <span className="text-base leading-none">{skill.icon}</span>
-                          <div className="flex-1 min-w-0">
-                            <div className="font-medium">{skill.label}</div>
-                            <div className={`text-[11px] truncate mt-0.5 ${isLightTheme ? "text-black/35" : "text-white/35"}`}>
-                              {skill.ipBased && IP_ASSETS.length > 0
-                                ? `将随机选取 ${IP_ASSETS.length} 张IP图之一作参考`
-                                : skill.prompt.slice(0, 36) + "…"}
-                            </div>
-                          </div>
-                        </button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              )}
 
               <textarea
                 ref={promptTextareaRef}

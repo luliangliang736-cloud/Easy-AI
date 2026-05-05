@@ -2,8 +2,6 @@
 
 import Image from "next/image";
 import { useEffect, useMemo, useRef, useState } from "react";
-import SKILLS from "@/config/skills";
-import IP_ASSETS from "@/config/ipAssets";
 import BrandLogo from "@/components/BrandLogo";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -394,8 +392,6 @@ export default function FloatingEntryWidget({
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [panelTheme, setPanelTheme] = useState("dark");
   const [isLogoMenuOpen, setIsLogoMenuOpen] = useState(false);
-  const [skillsOpen, setSkillsOpen] = useState(false);
-  const skillsRef = useRef(null);
 
   // ── 随机问候气泡 ──────────────────────────────────────
   const GREET_MESSAGES = [
@@ -428,28 +424,6 @@ export default function FloatingEntryWidget({
   }, [expanded]);
   // ─────────────────────────────────────────────────────
 
-  async function handleSkillClick(skill) {
-    setSkillsOpen(false);
-    // IP 技能：随机取一张 IP 参考图载入
-    if (skill.ipBased && IP_ASSETS.length > 0) {
-      const pick = IP_ASSETS[Math.floor(Math.random() * IP_ASSETS.length)];
-      try {
-        const res = await fetch(pick.url);
-        const blob = await res.blob();
-        const ext = (pick.url.split(".").pop() || "png").split("?")[0];
-        const file = new File([blob], `ip-ref.${ext}`, { type: blob.type || "image/png" });
-        onFilesAdd?.([file]);
-      } catch {
-        // 加载失败则静默跳过，仍然填入 prompt
-      }
-    } else if (skill.ipBased && IP_ASSETS.length === 0) {
-      // 未配置 IP 资产时给出提示
-      onPromptChange?.("（请先在 src/config/ipAssets.js 中添加您的IP图片）" + skill.prompt);
-      return;
-    }
-    onPromptChange?.(skill.prompt);
-    if (skill.autoSend) setTimeout(() => onSubmit?.(), 80);
-  }
   const [isHistoryPanelOpen, setIsHistoryPanelOpen] = useState(false);
   const outputEndRef = useRef(null);
   const logoMenuRef = useRef(null);
@@ -573,15 +547,6 @@ export default function FloatingEntryWidget({
     document.addEventListener("pointerdown", handlePointerDown);
     return () => document.removeEventListener("pointerdown", handlePointerDown);
   }, [isLogoMenuOpen]);
-
-  useEffect(() => {
-    if (!skillsOpen) return undefined;
-    const handler = (e) => {
-      if (skillsRef.current && !skillsRef.current.contains(e.target)) setSkillsOpen(false);
-    };
-    document.addEventListener("pointerdown", handler);
-    return () => document.removeEventListener("pointerdown", handler);
-  }, [skillsOpen]);
 
   useEffect(() => {
     if (!expanded) {
@@ -1845,59 +1810,6 @@ export default function FloatingEntryWidget({
                 >
                   <Plus size={16} />
                 </button>
-
-                {/* Skills 下拉按钮 */}
-                {SKILLS.length > 0 && (
-                  <div className="relative flex-shrink-0" ref={skillsRef}>
-                    <button
-                      type="button"
-                      onClick={() => setSkillsOpen((v) => !v)}
-                      title="快捷技能"
-                      className={`h-8 px-2.5 rounded-lg flex items-center gap-1 text-[11px] font-medium transition-all ${
-                        skillsOpen
-                          ? isLightTheme
-                            ? "bg-accent/10 text-accent"
-                            : "bg-accent/20 text-accent"
-                          : isLightTheme
-                            ? "text-black/45 hover:bg-black/[0.05] hover:text-black/80"
-                            : "text-text-tertiary hover:bg-bg-hover hover:text-text-primary"
-                      }`}
-                    >
-                      <span>Skills</span>
-                      <ChevronUp size={11} className={`transition-transform ${skillsOpen ? "" : "rotate-180"}`} />
-                    </button>
-
-                    {skillsOpen && (
-                      <div className={`absolute bottom-full left-0 mb-2 w-52 rounded-2xl shadow-xl border overflow-hidden z-50 ${
-                        isLightTheme ? "bg-white border-black/8" : "bg-[#1c1c1c] border-white/10"
-                      }`}>
-                        <div className={`px-3 py-2 text-[10px] font-semibold tracking-widest uppercase ${isLightTheme ? "text-black/30 border-b border-black/6" : "text-white/25 border-b border-white/8"}`}>
-                          Skills
-                        </div>
-                        {SKILLS.map((skill) => (
-                          <button
-                            key={skill.id}
-                            type="button"
-                            onClick={() => handleSkillClick(skill)}
-                            className={`w-full flex items-center gap-2.5 px-3 py-2.5 text-left text-[13px] transition-colors ${
-                              isLightTheme ? "hover:bg-black/[0.04] text-[#111]" : "hover:bg-white/[0.06] text-white"
-                            }`}
-                          >
-                            <span className="text-base leading-none">{skill.icon}</span>
-                            <div className="flex-1 min-w-0">
-                              <div className="font-medium">{skill.label}</div>
-                              <div className={`text-[11px] truncate mt-0.5 ${isLightTheme ? "text-black/35" : "text-white/35"}`}>
-                                {skill.ipBased && IP_ASSETS.length > 0
-                                  ? `将随机选取 ${IP_ASSETS.length} 张IP图之一作参考`
-                                  : skill.prompt.slice(0, 36) + "…"}
-                              </div>
-                            </div>
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )}
                 <textarea
                   value={prompt}
                   onChange={(event) => onPromptChange?.(event.target.value)}
