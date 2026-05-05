@@ -96,7 +96,8 @@ const ASPECT_RATIO_RULES = [
 /** 根据参考图真实像素尺寸，计算 GPT Image 2 edit 合法的精确输出尺寸 */
 function computeGptImage2EditSize(width, height) {
   if (!width || !height || width <= 0 || height <= 0) return "auto";
-  const MAX_EDGE = 3840;
+  const API_MAX_EDGE = 3840;
+  const STABLE_AUTO_MAX_EDGE = 1280;
   const MAX_RATIO = 3;
   const MIN_PIXELS = 655360;
   const MAX_PIXELS = 8294400;
@@ -117,10 +118,11 @@ function computeGptImage2EditSize(width, height) {
     h = Math.ceil(h * scale);
   }
 
-  // 最长边超限则等比缩小
+  // auto 模式按原图比例出图，但限制最长边，避免大图 edit 在上游排队到超时。
   const maxEdge = Math.max(w, h);
-  if (maxEdge > MAX_EDGE) {
-    const scale = MAX_EDGE / maxEdge;
+  const targetMaxEdge = Math.min(API_MAX_EDGE, STABLE_AUTO_MAX_EDGE);
+  if (maxEdge > targetMaxEdge) {
+    const scale = targetMaxEdge / maxEdge;
     w = Math.round(w * scale);
     h = Math.round(h * scale);
   }
@@ -130,7 +132,7 @@ function computeGptImage2EditSize(width, height) {
   h = Math.round(h / MULTIPLE) * MULTIPLE || MULTIPLE;
 
   // 最终校验
-  if (Math.max(w, h) > MAX_EDGE || w * h > MAX_PIXELS || w * h < MIN_PIXELS) return "auto";
+  if (Math.max(w, h) > API_MAX_EDGE || w * h > MAX_PIXELS || w * h < MIN_PIXELS) return "auto";
 
   return `${w}x${h}`;
 }
