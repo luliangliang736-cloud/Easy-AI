@@ -1745,29 +1745,6 @@ export default function ChatPanel({
                       )}
                     </div>
                     <div>
-                      <span className="block text-[11px] text-text-tertiary mb-1.5">输出分辨率</span>
-                      <div className="flex gap-1.5 flex-wrap">
-                        {GPT_IMAGE_2_RESOLUTION_OPTIONS.map((item) => (
-                          <button
-                            key={item.value}
-                            type="button"
-                            onClick={() => applyGptImage2Resolution(item.value)}
-                            className={`px-2.5 py-1.5 rounded-lg text-[11px] font-medium transition-all ${
-                              currentGptResolution === String(item.value).toUpperCase()
-                                || (currentGptResolution === "auto" && item.value === "auto")
-                                ? PARAM_ACTIVE_CLASS
-                                : "bg-bg-tertiary text-text-secondary hover:bg-bg-hover border border-border-primary"
-                            }`}
-                          >
-                            {item.label}
-                          </button>
-                        ))}
-                      </div>
-                      <p className="text-[10px] text-text-tertiary mt-1.5">
-                        选择 2K/4K 时会按当前宽高比传入精确尺寸；Auto 保持原有 API 自动尺寸逻辑。
-                      </p>
-                    </div>
-                    <div>
                       <span className="block text-[11px] text-text-tertiary mb-1.5">渲染质量</span>
                       <div className="flex gap-1.5 flex-wrap">
                         {GPT_IMAGE_2_QUALITY_OPTIONS.map((item) => (
