@@ -1,10 +1,12 @@
-import { readdir, readFile } from "fs/promises";
+import { readdir, readFile, stat } from "fs/promises";
 import path from "path";
 import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
 
 const HERO_ASSET_DIR = path.resolve(process.cwd(), "public", "images", "home-hero-carousel");
+const HERO_ASSET_LIST_CACHE = "public, max-age=60, stale-while-revalidate=300";
+const HERO_MEDIA_CACHE = "public, max-age=31536000, immutable";
 const MEDIA_TYPES = {
   ".gif": { contentType: "image/gif", type: "image" },
   ".jpg": { contentType: "image/jpeg", type: "image" },
@@ -35,7 +37,7 @@ export async function GET(request) {
       const range = request.headers.get("range");
       const headers = {
         "Accept-Ranges": "bytes",
-        "Cache-Control": "no-store",
+        "Cache-Control": HERO_MEDIA_CACHE,
         "Content-Type": meta.contentType,
       };
 
@@ -75,20 +77,24 @@ export async function GET(request) {
     }
 
     const entries = await readdir(HERO_ASSET_DIR, { withFileTypes: true });
-    const items = entries
+    const mediaEntries = entries
       .filter((entry) => entry.isFile() && getMediaMeta(entry.name))
       .map((entry) => ({ name: entry.name, meta: getMediaMeta(entry.name) }))
-      .sort((a, b) => a.name.localeCompare(b.name, "zh-Hans-CN", { numeric: true }))
-      .map(({ name, meta }, index) => ({
+      .sort((a, b) => a.name.localeCompare(b.name, "zh-Hans-CN", { numeric: true }));
+    const items = await Promise.all(mediaEntries.map(async ({ name, meta }, index) => {
+      const assetStat = await stat(path.resolve(HERO_ASSET_DIR, name));
+      const version = `${assetStat.size}-${Math.floor(assetStat.mtimeMs)}`;
+      return {
         type: meta.type,
-        src: `/api/home-hero-assets?file=${encodeURIComponent(name)}`,
+        src: `/api/home-hero-assets?file=${encodeURIComponent(name)}&v=${encodeURIComponent(version)}`,
         label: `EasyAI 创作首页封面 ${index + 1}`,
         name,
-      }));
+      };
+    }));
 
     return NextResponse.json({ items }, {
       headers: {
-        "Cache-Control": "no-store",
+        "Cache-Control": HERO_ASSET_LIST_CACHE,
       },
     });
   } catch {

@@ -817,7 +817,6 @@ export default function HomePage() {
   const [heroSlideIndex, setHeroSlideIndex] = useState(0);
   const [heroCarouselItems, setHeroCarouselItems] = useState(HERO_CAROUSEL_FALLBACK_ITEMS);
   const heroVideoRefs = useRef([]);
-  const heroLoadedVideoSrcsRef = useRef(new Set());
   const [effectCardSpread, setEffectCardSpread] = useState(0);
   const [businessCardSpread, setBusinessCardSpread] = useState(0);
   const [bottomSummaryParallax, setBottomSummaryParallax] = useState(0);
@@ -918,7 +917,7 @@ export default function HomePage() {
 
     async function loadHeroCarouselItems() {
       try {
-        const res = await fetch("/api/home-hero-assets", { cache: "no-store" });
+        const res = await fetch("/api/home-hero-assets");
         const data = await res.json();
         if (!cancelled && Array.isArray(data.items) && data.items.length > 0) {
           setHeroCarouselItems(data.items);
@@ -944,16 +943,6 @@ export default function HomePage() {
 
     return () => window.clearInterval(timer);
   }, [heroCarouselItems.length]);
-
-  useEffect(() => {
-    heroCarouselItems.forEach((item, index) => {
-      if (item.type !== "video" || heroLoadedVideoSrcsRef.current.has(item.src)) return;
-      const video = heroVideoRefs.current[index];
-      if (!video) return;
-      video.load();
-      heroLoadedVideoSrcsRef.current.add(item.src);
-    });
-  }, [heroCarouselItems]);
 
   useEffect(() => {
     heroVideoRefs.current.forEach((video, index) => {
@@ -1552,6 +1541,10 @@ EZlogo trigger instructions:
       <section className="relative w-full h-screen min-h-[600px] overflow-hidden">
         {heroCarouselItems.map((item, index) => {
           const isActive = index === heroSlideIndex;
+          const nextSlideIndex = heroCarouselItems.length > 1
+            ? (heroSlideIndex + 1) % heroCarouselItems.length
+            : heroSlideIndex;
+          const shouldWarmNextVideo = index === nextSlideIndex;
           const sharedClassName = `absolute inset-0 h-full w-full object-cover transition-opacity duration-1000 ease-out ${
             isActive ? "opacity-100" : "opacity-0"
           }`;
@@ -1565,11 +1558,11 @@ EZlogo trigger instructions:
               src={item.src}
               aria-label={item.label}
               className={sharedClassName}
-              autoPlay
+              autoPlay={isActive}
               muted
               loop
               playsInline
-              preload="auto"
+              preload={isActive ? "auto" : shouldWarmNextVideo ? "metadata" : "none"}
             />
           ) : (
             <img
