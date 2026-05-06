@@ -142,6 +142,43 @@ function computeGptImage2EditSize(width, height) {
   return `${w}x${h}`;
 }
 
+function computeGptImage2UpscaleSize(width, height, targetSize = "2K") {
+  if (!width || !height || width <= 0 || height <= 0) return "auto";
+
+  const MAX_EDGE = 3840;
+  const MAX_RATIO = 3;
+  const MIN_PIXELS = 655360;
+  const MAX_PIXELS = 8294400;
+  const MULTIPLE = 16;
+  const targetLongEdge = {
+    "1K": 1024,
+    "2K": 2048,
+    "4K": 3840,
+  }[String(targetSize || "").toUpperCase()] || 2048;
+
+  const longEdge = Math.max(width, height);
+  const shortEdge = Math.min(width, height);
+  if (shortEdge === 0 || longEdge / shortEdge > MAX_RATIO) return "auto";
+
+  const minScale = Math.sqrt(MIN_PIXELS / (width * height));
+  const maxScale = Math.min(
+    MAX_EDGE / longEdge,
+    Math.sqrt(MAX_PIXELS / (width * height))
+  );
+  const requestedScale = targetLongEdge / longEdge;
+  const scale = Math.min(maxScale, Math.max(requestedScale, minScale));
+  let w = Math.round((width * scale) / MULTIPLE) * MULTIPLE;
+  let h = Math.round((height * scale) / MULTIPLE) * MULTIPLE;
+  w = Math.max(MULTIPLE, w);
+  h = Math.max(MULTIPLE, h);
+
+  if (Math.max(w, h) > MAX_EDGE || w * h > MAX_PIXELS || w * h < MIN_PIXELS) {
+    return "auto";
+  }
+
+  return `${w}x${h}`;
+}
+
 function findClosestAspectRatio(width, height) {
   if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
     return "1:1";
@@ -825,7 +862,7 @@ const UPSCALE_MODELS = {
 };
 
 function resolveUpscaleModel(currentModel, targetSize) {
-  return "gemini-3-pro-image-preview";
+  return GPT_IMAGE_2_MODEL;
 }
 
 function normalizeTextEditBlocks(blocks = []) {
@@ -1380,6 +1417,7 @@ function HomeInner() {
       : baseText;
     const preserveComposer = Boolean(retryPayload?.preserveComposer);
     const hidePlaceholderPrompt = Boolean(retryPayload?.hidePlaceholderPrompt);
+    const hideConversationMessages = Boolean(retryPayload?.hideConversationMessages);
     const editMode = retryPayload?.editMode || null;
     if (!text || !activeConversationId) return;
 
@@ -1575,7 +1613,9 @@ function HomeInner() {
       composerMode: activeComposerMode,
     };
 
-    updateConversationMessages(conversationId, (prev) => [...prev, userMsg, aiMsg]);
+    if (!hideConversationMessages) {
+      updateConversationMessages(conversationId, (prev) => [...prev, userMsg, aiMsg]);
+    }
     setIsGenerating(true);
     if (!preserveComposer) {
       setPrompt("");
@@ -2284,6 +2324,9 @@ function HomeInner() {
 
     const meta = await detectRefImageMeta(img.image_url);
     const model = resolveUpscaleModel(params.model, targetSize);
+    const imageSize = model === GPT_IMAGE_2_MODEL
+      ? computeGptImage2UpscaleSize(meta.width, meta.height, targetSize)
+      : "auto";
     setTextEditBlocks([]);
     setTextEditPanelVisible(false);
       setSemanticSelection(null);
@@ -2292,13 +2335,17 @@ function HomeInner() {
       params: {
         ...params,
         model,
-        image_size: "auto",
+        image_size: imageSize,
         _autoRatio: meta.ratio,
         _autoDimensions: meta.dimensionsLabel || undefined,
+        _autoWidth: meta.width || undefined,
+        _autoHeight: meta.height || undefined,
         num: 1,
       },
       refImages: [img.image_url],
       preserveComposer: true,
+      hidePlaceholderPrompt: true,
+      hideConversationMessages: true,
       disableAgentDefaults: true,
       composerMode: "manual",
     });

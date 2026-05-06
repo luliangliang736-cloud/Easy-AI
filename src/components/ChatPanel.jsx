@@ -100,6 +100,12 @@ const GPT_IMAGE_2_PRESET_SIZES = [
   "3840x2160",
   "2160x3840",
 ];
+const GPT_IMAGE_2_RESOLUTION_OPTIONS = [
+  { value: "auto", label: "Auto" },
+  { value: "1K", label: "1K" },
+  { value: "2K", label: "2K" },
+  { value: "4K", label: "4K" },
+];
 const GPT_IMAGE_2_QUALITY_OPTIONS = [
   { value: "auto", label: "Auto" },
   { value: "low", label: "低" },
@@ -173,6 +179,65 @@ function getClosestRatioForSize(value) {
     }
   }
   return `${best[0]}:${best[1]}`;
+}
+
+function getRatioParts(ratio = "1:1") {
+  const normalized = String(ratio || "1:1").trim().toLowerCase();
+  const [w, h] = normalized.split(":").map(Number);
+  if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) {
+    return [1, 1];
+  }
+  return [w, h];
+}
+
+function roundToMultiple(value, multiple = 16) {
+  return Math.max(multiple, Math.round(value / multiple) * multiple);
+}
+
+function computeGptImage2SizeForResolution(ratio = "1:1", resolution = "auto") {
+  const target = String(resolution || "auto").toUpperCase();
+  if (target === "AUTO") return "";
+
+  const [ratioW, ratioH] = getRatioParts(ratio);
+  const longRatio = Math.max(ratioW, ratioH);
+  const shortRatio = Math.min(ratioW, ratioH);
+  if (longRatio / shortRatio > GPT_IMAGE_2_SIZE_LIMITS.maxAspectRatio) return "";
+
+  if (target === "1K") {
+    if (ratioW === ratioH) return "1024x1024";
+    return ratioW > ratioH ? "1536x1024" : "1024x1536";
+  }
+
+  const targetLongEdge = target === "4K" ? 3840 : 2048;
+  const scale = targetLongEdge / longRatio;
+  let width = roundToMultiple(ratioW * scale);
+  let height = roundToMultiple(ratioH * scale);
+
+  if (width > GPT_IMAGE_2_SIZE_LIMITS.maxEdge || height > GPT_IMAGE_2_SIZE_LIMITS.maxEdge) {
+    const shrink = GPT_IMAGE_2_SIZE_LIMITS.maxEdge / Math.max(width, height);
+    width = roundToMultiple(width * shrink);
+    height = roundToMultiple(height * shrink);
+  }
+
+  if (width * height > GPT_IMAGE_2_SIZE_LIMITS.maxPixels) {
+    const shrink = Math.sqrt(GPT_IMAGE_2_SIZE_LIMITS.maxPixels / (width * height));
+    width = roundToMultiple(width * shrink);
+    height = roundToMultiple(height * shrink);
+  }
+
+  const validationError = validateGptImage2CustomSize(width, height);
+  return validationError ? "" : `${width}x${height}`;
+}
+
+function inferGptImage2Resolution(imageSize = "", explicitResolution = "") {
+  const value = String(explicitResolution || "").toUpperCase();
+  if (["AUTO", "1K", "2K", "4K"].includes(value)) return value;
+  const exact = parseExactSizeValue(imageSize);
+  if (!exact) return "auto";
+  const longEdge = Math.max(exact.width, exact.height);
+  if (longEdge >= 3000) return "4K";
+  if (longEdge >= 1800) return "2K";
+  return "1K";
 }
 
 function validateGptImage2CustomSize(width, height) {
@@ -689,6 +754,12 @@ export default function ChatPanel({
   const isGptImage2Tier = currentTier.id === "chatgpt-image2";
   const showServiceTierOptions = !isGptImage2Tier && currentTier.serviceTierOptions !== false;
   const exactSize = parseExactSizeValue(params.image_size);
+  const currentGptRatio = exactSize
+    ? (params._gptRatio || getClosestRatioForSize(params.image_size))
+    : (params.image_size || "auto");
+  const currentGptResolution = isGptImage2Tier
+    ? inferGptImage2Resolution(params.image_size, params._gptResolution)
+    : "auto";
   const currentGptQuality = isGptImage2Tier ? String(params.quality || "auto").trim().toLowerCase() : "auto";
   const currentGptFormat = isGptImage2Tier ? String(params.output_format || "png").trim().toLowerCase() : "png";
   const currentGptModeration = isGptImage2Tier ? String(params.moderation || "auto").trim().toLowerCase() : "auto";
@@ -820,6 +891,8 @@ export default function ChatPanel({
           onParamsChange((p) => ({
             ...p,
             image_size: "auto",
+            _gptResolution: "auto",
+            _gptRatio: undefined,
             _autoRatio: meta.ratio,
             _autoDimensions: meta.dimensionsLabel || undefined,
             _autoWidth: meta.width || undefined,
@@ -829,6 +902,8 @@ export default function ChatPanel({
           onParamsChange((p) => ({
             ...p,
             image_size: "auto",
+            _gptResolution: "auto",
+            _gptRatio: undefined,
             _autoRatio: undefined,
             _autoDimensions: undefined,
             _autoWidth: undefined,
@@ -837,17 +912,69 @@ export default function ChatPanel({
         }
         return;
       }
+      if (isGptImage2Tier && currentGptResolution !== "auto") {
+        const exactGptSize = computeGptImage2SizeForResolution(r, currentGptResolution);
+        if (exactGptSize) {
+          onParamsChange((p) => ({
+            ...p,
+            image_size: exactGptSize,
+            _gptResolution: currentGptResolution,
+            _gptRatio: r,
+            _autoRatio: undefined,
+            _autoDimensions: undefined,
+            _autoWidth: undefined,
+            _autoHeight: undefined,
+          }));
+          return;
+        }
+      }
       onParamsChange((p) => ({
         ...p,
         image_size: r,
+        _gptResolution: "auto",
+        _gptRatio: undefined,
         _autoRatio: undefined,
         _autoDimensions: undefined,
         _autoWidth: undefined,
         _autoHeight: undefined,
       }));
     },
-    [refImages, onParamsChange]
+    [currentGptResolution, isGptImage2Tier, refImages, onParamsChange]
   );
+
+  const applyGptImage2Resolution = useCallback((resolution) => {
+    const nextResolution = String(resolution || "auto").toUpperCase();
+    if (nextResolution === "AUTO") {
+      const fallbackRatio = exactSize ? getClosestRatioForSize(params.image_size) : (params.image_size || "auto");
+      onParamsChange((p) => ({
+        ...p,
+        image_size: fallbackRatio,
+        _gptResolution: "auto",
+        _gptRatio: undefined,
+        _autoRatio: fallbackRatio === "auto" ? p._autoRatio : undefined,
+        _autoDimensions: fallbackRatio === "auto" ? p._autoDimensions : undefined,
+        _autoWidth: fallbackRatio === "auto" ? p._autoWidth : undefined,
+        _autoHeight: fallbackRatio === "auto" ? p._autoHeight : undefined,
+      }));
+      return;
+    }
+
+    const sourceRatio = currentGptRatio === "auto"
+      ? (params._autoRatio || "1:1")
+      : currentGptRatio;
+    const exactGptSize = computeGptImage2SizeForResolution(sourceRatio, nextResolution);
+    if (!exactGptSize) return;
+    onParamsChange((p) => ({
+      ...p,
+      image_size: exactGptSize,
+      _gptResolution: nextResolution,
+      _gptRatio: sourceRatio,
+      _autoRatio: undefined,
+      _autoDimensions: undefined,
+      _autoWidth: undefined,
+      _autoHeight: undefined,
+    }));
+  }, [currentGptRatio, exactSize, onParamsChange, params._autoRatio, params.image_size]);
 
   const addImages = useCallback(async (files) => {
     const remaining = maxImages - (refImages?.length || 0);
@@ -878,6 +1005,8 @@ export default function ChatPanel({
       onParamsChange((p) => ({
         ...p,
         image_size: "auto",
+        _gptResolution: "auto",
+        _gptRatio: undefined,
         _autoRatio: meta.ratio,
         _autoDimensions: meta.dimensionsLabel || undefined,
         _autoWidth: meta.width || undefined,
@@ -1579,10 +1708,11 @@ export default function ChatPanel({
                 <CollapsibleParamSection
                   title="GPT 高级参数"
                   summary={[
-                    params.image_size === "auto"
+                    currentGptRatio === "auto"
                       ? `宽高比 Auto`
-                      : `宽高比 ${params.image_size}`,
+                      : `宽高比 ${currentGptRatio}`,
                     exactSize ? `精确 ${exactSize.width}x${exactSize.height}` : null,
+                    `分辨率 ${currentGptResolution === "auto" ? "Auto" : currentGptResolution}`,
                     `质量 ${currentGptQualityLabel}`,
                     `格式 ${currentGptFormatLabel}`,
                     `审核 ${currentGptModerationLabel}`,
@@ -1598,7 +1728,7 @@ export default function ChatPanel({
                       <div className="flex gap-1 flex-wrap">
                         {availableRatios.map((r) => (
                           <button key={r} onClick={() => void applyRatio(r)}
-                            className={`px-2 py-1 rounded-md text-[10px] font-medium transition-all ${params.image_size === r ? PARAM_ACTIVE_CLASS : "bg-bg-tertiary text-text-secondary hover:bg-bg-hover border border-border-primary"}`}>
+                            className={`px-2 py-1 rounded-md text-[10px] font-medium transition-all ${currentGptRatio === r ? PARAM_ACTIVE_CLASS : "bg-bg-tertiary text-text-secondary hover:bg-bg-hover border border-border-primary"}`}>
                             {r === "auto" ? "Auto" : r}
                           </button>
                         ))}
@@ -1613,6 +1743,29 @@ export default function ChatPanel({
                           GPT Image 2 将交给 API 自动决定尺寸
                         </p>
                       )}
+                    </div>
+                    <div>
+                      <span className="block text-[11px] text-text-tertiary mb-1.5">输出分辨率</span>
+                      <div className="flex gap-1.5 flex-wrap">
+                        {GPT_IMAGE_2_RESOLUTION_OPTIONS.map((item) => (
+                          <button
+                            key={item.value}
+                            type="button"
+                            onClick={() => applyGptImage2Resolution(item.value)}
+                            className={`px-2.5 py-1.5 rounded-lg text-[11px] font-medium transition-all ${
+                              currentGptResolution === String(item.value).toUpperCase()
+                                || (currentGptResolution === "auto" && item.value === "auto")
+                                ? PARAM_ACTIVE_CLASS
+                                : "bg-bg-tertiary text-text-secondary hover:bg-bg-hover border border-border-primary"
+                            }`}
+                          >
+                            {item.label}
+                          </button>
+                        ))}
+                      </div>
+                      <p className="text-[10px] text-text-tertiary mt-1.5">
+                        选择 2K/4K 时会按当前宽高比传入精确尺寸；Auto 保持原有 API 自动尺寸逻辑。
+                      </p>
                     </div>
                     <div>
                       <span className="block text-[11px] text-text-tertiary mb-1.5">渲染质量</span>
