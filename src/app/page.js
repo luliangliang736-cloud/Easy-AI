@@ -1204,6 +1204,31 @@ export default function HomePage() {
       hasUserReferenceImages: activeRefImages.length > 0,
       isWaTemplate: Boolean(waTemplateRequest),
     });
+    const inheritedImages = shouldReusePreviousGeneratedImages(prompt, activeRefImages)
+      ? getLatestGeneratedImages(floatingMessages)
+      : [];
+    const submittedAttachments = [...activeAttachments];
+    const hasAutoReferenceIntent = Boolean(waTemplateRequest || ipSceneRequest || ezFamilyRole || hasEzLogoTrigger);
+    const displayRefImages = hasAutoReferenceIntent ? activeRefImages : [...activeRefImages, ...inheritedImages];
+    const nextUserMessage = createFloatingMessage("user", prompt, {
+      refImages: displayRefImages,
+      attachments: submittedAttachments,
+    });
+    const historyForAssistant = [...floatingMessages, nextUserMessage].map((message) => ({
+      role: message.role,
+      text: message.text || "",
+      images: Array.isArray(message.images) ? message.images.slice(0, 3) : [],
+      refImages: Array.isArray(message.refImages) ? message.refImages.slice(0, 3) : [],
+      attachments: Array.isArray(message.attachments) ? message.attachments.slice(0, 4) : [],
+    }));
+
+    setFloatingMessages((prev) => [...prev, nextUserMessage]);
+    setFloatingPrompt("");
+    setFloatingRefImages([]);
+    setFloatingAttachments([]);
+    setFloatingGenerationStage("understanding");
+    setFloatingIsGenerating(true);
+    setFloatingOutputError("");
 
     if (waTemplateRequest) {
       try {
@@ -1255,10 +1280,6 @@ EZlogo trigger instructions:
     }
     // ─────────────────────────────────────────────────────
 
-    const inheritedImages = shouldReusePreviousGeneratedImages(prompt, activeRefImages)
-      ? getLatestGeneratedImages(floatingMessages)
-      : [];
-
     // WA 模板/EZlogo：系统资产必须作为第一参考图；其它图仅作为风格/场景参考
     // 无触发：正常使用 floatingRefImages
     const submittedImages = autoRefImages.length > 0
@@ -1268,35 +1289,13 @@ EZlogo trigger instructions:
           ? [...autoRefImages, ...activeRefImages, ...inheritedImages]
         : (activeRefImages.length > 0 ? [...activeRefImages, ...autoRefImages] : [...autoRefImages, ...inheritedImages]))
       : [...activeRefImages, ...inheritedImages];
-    const submittedAttachments = [...activeAttachments];
     const predictedMode = detectOneClickEntryMode(apiPromptText, submittedImages);
     const bypassPlannerForDirectGenerate = autoRefImages.length > 0 || isObviousOneClickGenerateRequest(
       apiPromptText,
       submittedImages,
       submittedAttachments
     );
-    // 自动参考图只用于生成，不在气泡里展示
-    const displayRefImages = autoRefImages.length > 0 ? activeRefImages : submittedImages;
-    const nextUserMessage = createFloatingMessage("user", prompt, {
-      refImages: displayRefImages,
-      attachments: submittedAttachments,
-    });
-    const historyForAssistant = [...floatingMessages, nextUserMessage].map((message) => ({
-      role: message.role,
-      text: message.text || "",
-      images: Array.isArray(message.images) ? message.images.slice(0, 3) : [],
-      refImages: Array.isArray(message.refImages) ? message.refImages.slice(0, 3) : [],
-      attachments: Array.isArray(message.attachments) ? message.attachments.slice(0, 4) : [],
-    }));
-
-    setFloatingMessages((prev) => [...prev, nextUserMessage]);
-    setFloatingPrompt("");
-    setFloatingRefImages([]);
-    setFloatingAttachments([]);
     setFloatingRuntimeMode(predictedMode);
-    setFloatingGenerationStage("understanding");
-    setFloatingIsGenerating(true);
-    setFloatingOutputError("");
     let activeClientRequestId = "";
 
     try {

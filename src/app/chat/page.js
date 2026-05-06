@@ -812,6 +812,25 @@ export default function ChatPage() {
       hasUserReferenceImages: activeRefImages.length > 0,
       isWaTemplate: Boolean(waTemplateRequest),
     });
+    // 先把用户输入显示出来，自动素材仍按原逻辑继续准备生成 payload。
+    const inheritedImages = shouldReusePreviousGeneratedImages(text, activeRefImages)
+      ? getLatestGeneratedImages(messages)
+      : [];
+    const hasAutoReferenceIntent = Boolean(waTemplateRequest || ipSceneRequest || ezFamilyRole || hasEzLogoTrigger);
+    const displayRefImages = hasAutoReferenceIntent ? activeRefImages : [...activeRefImages, ...inheritedImages];
+    const userMsg = createMessage("user", text, { refImages: displayRefImages });
+    const historyForApi = [...messages, userMsg].map((m) => ({
+      role: m.role, text: m.text || "",
+      images: Array.isArray(m.images) ? m.images.slice(0, 3) : [],
+      refImages: Array.isArray(m.refImages) ? m.refImages.slice(0, 3) : [],
+      attachments: [],
+    }));
+
+    setMessages((prev) => [...prev, userMsg]);
+    setPrompt("");
+    setRefImages([]);
+    setGenerationStage("understanding");
+    setIsGenerating(true);
 
     if (waTemplateRequest) {
       try {
@@ -863,11 +882,6 @@ EZlogo trigger instructions:
     }
     // ─────────────────────────────────────────────────────
 
-    // 继承上一条消息中生成的图片（与悬浮框逻辑一致）
-    const inheritedImages = shouldReusePreviousGeneratedImages(text, activeRefImages)
-      ? getLatestGeneratedImages(messages)
-      : [];
-
     // WA 模板/EZlogo：系统资产必须作为第一参考图；其它图仅作为风格/场景参考
     // 无触发：正常使用 refImages
     const submittedImages = autoRefImages.length > 0
@@ -879,22 +893,6 @@ EZlogo trigger instructions:
       : [...activeRefImages, ...inheritedImages];
     const predictedMode = detectOneClickEntryMode(apiText, submittedImages);
     const bypassPlanner = autoRefImages.length > 0 || isObviousOneClickGenerateRequest(apiText, submittedImages, []);
-
-    // 自动参考图只用于生成，不在气泡里展示
-    const displayRefImages = autoRefImages.length > 0 ? activeRefImages : submittedImages;
-    const userMsg = createMessage("user", text, { refImages: displayRefImages });
-    const historyForApi = [...messages, userMsg].map((m) => ({
-      role: m.role, text: m.text || "",
-      images: Array.isArray(m.images) ? m.images.slice(0, 3) : [],
-      refImages: Array.isArray(m.refImages) ? m.refImages.slice(0, 3) : [],
-      attachments: [],
-    }));
-
-    setMessages((prev) => [...prev, userMsg]);
-    setPrompt("");
-    setRefImages([]);
-    setGenerationStage("understanding");
-    setIsGenerating(true);
     let activeClientRequestId = "";
 
     const abortController = new AbortController();
