@@ -393,6 +393,16 @@ function inferAspectRatioFromPrompt(text) {
   return "1:1";
 }
 
+function buildEzLogoReferenceInstructions(hasUserReferenceImages = false) {
+  if (hasUserReferenceImages) {
+    return `- 用户上传的参考图排在前面，是主要的风格、版式、构图、主体数量、材质和画面类型参考；请优先贴近第一张用户参考图的表达方式。
+- 后面的 EZlogo 系统参考图只用于说明要替换/生成的品牌符号结构：笑脸弧线、点状元素、整体几何关系和品牌识别必须来自 EZlogo。
+- 不要直接复刻用户参考图里的原 logo、字母或符号；应把用户参考图中的视觉语言自然迁移到 EZlogo 上。`;
+  }
+
+  return "- 第一张参考图是 EZlogo 的品牌标志结构锚点，必须以它的笑脸弧线、点状元素、整体几何关系和品牌识别为主体。";
+}
+
 function detectRefImageMeta(dataUrl) {
   return new Promise((resolve) => {
     const img = new window.Image();
@@ -896,10 +906,7 @@ export default function ChatPage() {
         apiText = `${apiText || "参考图中的图形标志进行设计。"}
 
 EZlogo trigger instructions:
-- 第一张参考图是 EZlogo 的品牌标志结构锚点，必须以它的笑脸弧线、点状元素、整体几何关系和品牌识别为主体。
-- 其它参考图只用于学习材质、色彩、光影、排版或超级符号风格，不要复刻其它参考图里的主体字母、符号或图形。
-- 如果其它参考图呈现的是多个 logo / 多个超级符号 / 多种材质变体的集合，请保留“多枚集合展示”的意图，生成多枚 EZlogo 变体，而不是只生成单个放大的 EZlogo。
-- 多枚 EZlogo 变体应共享第一张参考图的 EZlogo 核心结构，但分别学习其它参考图中的不同材质、色彩、高光、透明感、立体感、排列方式和黑/白/彩色背景关系；数量和排布尽量接近用户参考图，除非用户明确要求只做一个。
+${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
 - “EZlogo”只是系统触发词，不要在画面中生成“EZlogo”文字，也不要把它理解成要生成英文字母“EZ”。`;
       } catch { /* 静默跳过 */ }
     }
@@ -908,13 +915,15 @@ EZlogo trigger instructions:
     }
     // ─────────────────────────────────────────────────────
 
-    // WA 模板/EZlogo：系统资产必须作为第一参考图；其它图仅作为风格/场景参考
+    // WA 模板：系统资产必须作为第一参考图；EZlogo 有用户参考图时让用户图优先引导风格/版式
     // 无触发：正常使用 refImages
     const submittedImages = autoRefImages.length > 0
       ? (waTemplateRequest
         ? [...autoRefImages, ...activeRefImages, ...inheritedImages]
         : hasEzLogoTrigger
-          ? [...autoRefImages, ...activeRefImages, ...inheritedImages]
+          ? (activeRefImages.length > 0
+            ? [...activeRefImages, ...autoRefImages, ...inheritedImages]
+            : [...autoRefImages, ...inheritedImages])
         : (activeRefImages.length > 0 ? [...activeRefImages, ...autoRefImages] : [...autoRefImages, ...inheritedImages]))
       : [...activeRefImages, ...inheritedImages];
     const predictedMode = detectOneClickEntryMode(apiText, submittedImages);
