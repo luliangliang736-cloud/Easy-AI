@@ -1,4 +1,4 @@
-import { normalizeGeneratedImageUrls } from "@/lib/server/generatedImageStore";
+import { normalizeGeneratedImageUrls, readGeneratedImage } from "@/lib/server/generatedImageStore";
 
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
 
@@ -85,7 +85,33 @@ function base64ToBlob(dataUrl) {
   return { blob: new Blob([buffer], { type: "image/png" }), mimeType: "image/png" };
 }
 
+function getLocalGeneratedImageFilename(source = "") {
+  const match = String(source || "").match(/^\/api\/generated-images\/([^/?#]+)/i);
+  return match ? decodeURIComponent(match[1]) : "";
+}
+
+async function localGeneratedImageToBuffer(source = "") {
+  const filename = getLocalGeneratedImageFilename(source);
+  if (!filename) return null;
+  const image = await readGeneratedImage(filename);
+  if (!image) {
+    throw new Error("本地生成图已过期或不存在，请重新生成后再作为参考图使用。");
+  }
+  return image;
+}
+
+async function normalizeChatImageSource(source = "") {
+  const localImage = await localGeneratedImageToBuffer(source);
+  if (!localImage) return source;
+  return `data:${localImage.mimeType};base64,${localImage.buffer.toString("base64")}`;
+}
+
 async function imageSourceToBlob(source) {
+  const localImage = await localGeneratedImageToBuffer(source);
+  if (localImage) {
+    return { blob: new Blob([localImage.buffer], { type: localImage.mimeType }), mimeType: localImage.mimeType };
+  }
+
   if (typeof source === "string" && /^https?:\/\//i.test(source)) {
     const res = await fetch(source);
     if (!res.ok) throw new Error(`Failed to fetch reference image (${res.status})`);
@@ -282,9 +308,10 @@ export async function editWithOpenAICompatibleChatImage({
     throw new Error("编辑需要至少 1 张参考图。");
   }
 
+  const normalizedImages = await Promise.all(images.map((url) => normalizeChatImageSource(url)));
   const content = [
     { type: "text", text: buildChatImagePrompt(prompt, imageSize) },
-    ...images.map((url) => ({
+    ...normalizedImages.map((url) => ({
       type: "image_url",
       image_url: { url },
     })),

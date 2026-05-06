@@ -1,4 +1,4 @@
-import { normalizeGeneratedImageUrls } from "@/lib/server/generatedImageStore";
+import { normalizeGeneratedImageUrls, readGeneratedImage } from "@/lib/server/generatedImageStore";
 
 const GPT_IMAGE_2_API_BASE_RAW = (
   process.env.GPT_IMAGE_2_API_BASE
@@ -292,7 +292,21 @@ function base64ToBlob(dataUrl) {
   return { blob: new Blob([buffer], { type: "image/png" }), mimeType: "image/png" };
 }
 
+function getLocalGeneratedImageFilename(source = "") {
+  const match = String(source || "").match(/^\/api\/generated-images\/([^/?#]+)/i);
+  return match ? decodeURIComponent(match[1]) : "";
+}
+
 async function imgSrcToBlob(imgSrc) {
+  const localFilename = getLocalGeneratedImageFilename(imgSrc);
+  if (localFilename) {
+    const image = await readGeneratedImage(localFilename);
+    if (!image) {
+      throw new Error("本地生成图已过期或不存在，请重新生成后再作为参考图使用。");
+    }
+    return { blob: new Blob([image.buffer], { type: image.mimeType }), mimeType: image.mimeType };
+  }
+
   if (typeof imgSrc === "string" && /^https?:\/\//i.test(imgSrc)) {
     const res = await fetch(imgSrc);
     if (!res.ok) throw new Error(`Failed to fetch reference image (${res.status}): ${imgSrc}`);
