@@ -2,10 +2,10 @@
 import { useState, useEffect, useRef } from "react";
 
 const MESSAGES = [
-  { text: "小Q随时为你工作", emoji: "💼" },
+  { text: "小亿随时为你工作", emoji: "💼" },
   { text: "快来陪俺玩耍吧", emoji: "🎮" },
   { text: "我一直在等你", emoji: "👀" },
-  { text: "帮您分忧是小Q的无上使命", emoji: "🫡" },
+  { text: "帮您分忧是小亿的无上使命", emoji: "🫡" },
   { text: "有什么想创作的，尽管说！", emoji: "✨" },
   { text: "今天也要元气满满哦", emoji: "🌟" },
   { text: "让我来帮你搞定一切", emoji: "🚀" },
@@ -17,23 +17,23 @@ export default function FloatingRobot() {
   const timerRef = useRef(null);
 
   useEffect(() => {
+    function triggerShow() {
+      setMsgIndex(Math.floor(Math.random() * MESSAGES.length));
+      setVisible(true);
+
+      timerRef.current = setTimeout(() => {
+        setVisible(false);
+        const nextDelay = 8000 + Math.random() * 7000;
+        timerRef.current = setTimeout(() => triggerShow(), nextDelay);
+      }, 4000);
+    }
+
     const firstShow = setTimeout(() => triggerShow(), 3000);
     return () => {
       clearTimeout(firstShow);
       clearTimeout(timerRef.current);
     };
   }, []);
-
-  function triggerShow() {
-    setMsgIndex(Math.floor(Math.random() * MESSAGES.length));
-    setVisible(true);
-
-    timerRef.current = setTimeout(() => {
-      setVisible(false);
-      const nextDelay = 8000 + Math.random() * 7000;
-      timerRef.current = setTimeout(() => triggerShow(), nextDelay);
-    }, 4000);
-  }
 
   const msg = MESSAGES[msgIndex];
 

@@ -38,7 +38,7 @@ function MicButton({ voiceState, onClick }) {
       ? "#f59e0b"
       : "#16a34a"; // 深绿 = 唤醒常驻
 
-  const title = isActive ? "点击停止" : "点击手动对话（唤醒词也可直接叫「小Q」）";
+  const title = isActive ? "点击停止" : "点击手动对话（唤醒词也可直接叫「小亿」）";
 
   return (
     <button
@@ -395,10 +395,10 @@ export default function FloatingEntryWidget({
 
   // ── 随机问候气泡 ──────────────────────────────────────
   const GREET_MESSAGES = [
-    "小Q随时为你工作 💼",
+    "小亿随时为你工作 💼",
     "快来陪俺玩耍吧 🎮",
     "我一直在等你 👀",
-    "帮您分忧是小Q的无上使命 🫡",
+    "帮您分忧是小亿的无上使命 🫡",
     "有什么想创作的，尽管说！ ✨",
     "今天也要元气满满哦 🌟",
     "让我来帮你搞定一切 🚀",
@@ -557,7 +557,7 @@ export default function FloatingEntryWidget({
 
   // ── 语音 / 唤醒词交互逻辑 ────────────────────────────────
 
-  const WAKE_WORDS = ["小Q", "小Q同学", "小Q你好", "嗨小Q"];
+  const WAKE_WORDS = ["小亿", "小亿同学", "小亿你好", "嗨小亿"];
 
   function setVS(state) {
     voiceStateRef.current = state;

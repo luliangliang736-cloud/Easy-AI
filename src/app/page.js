@@ -422,10 +422,34 @@ async function fetchImageAsDataUrl(url) {
   });
 }
 
+const lastEzFamilyReferenceByRole = new Map();
+
 async function fetchEzFamilyReferenceImages(role) {
   const roleText = String(role || "");
   const singleImageUrl = `${EZFAMILY_ASSET_URL}?role=${encodeURIComponent(roleText)}`;
   if (!roleText.includes("真人版")) {
+    try {
+      const res = await fetch(`${singleImageUrl}&all=1`, { cache: "no-store" });
+      const data = await parseApiResponse(res);
+      const items = Array.isArray(data.items) ? data.items.filter((item) => item?.src) : [];
+      if (items.length > 0) {
+        const roleKey = roleText.toLowerCase();
+        const previousName = lastEzFamilyReferenceByRole.get(roleKey);
+        const candidateItems = items.length > 1
+          ? items.filter((item) => String(item?.name || item?.src || "") !== previousName)
+          : items;
+        const pickPool = candidateItems.length > 0 ? candidateItems : items;
+        const picked = pickPool[Math.floor(Math.random() * pickPool.length)];
+        const image = await fetchImageAsDataUrl(picked.src);
+        if (image) {
+          lastEzFamilyReferenceByRole.set(roleKey, String(picked.name || picked.src || ""));
+          return [image];
+        }
+      }
+    } catch {
+      // Fall back to the original random endpoint if listing fails.
+    }
+
     const image = await fetchImageAsDataUrl(singleImageUrl);
     return image ? [image] : [];
   }
