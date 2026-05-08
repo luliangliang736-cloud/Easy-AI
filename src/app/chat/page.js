@@ -750,7 +750,7 @@ function ImageLightbox({ src, onClose }) {
               {failed ? (
                 <>
                   <p className="text-sm font-medium">本地预览加载失败</p>
-                  <p className="mt-1 text-xs text-white/60">图片已生成，可先在飞书查看。</p>
+                  <p className="mt-1 text-xs text-white/60">图片已生成，请稍后刷新预览或下载查看。</p>
                 </>
               ) : (
                 <>
@@ -784,7 +784,7 @@ function ImageLightbox({ src, onClose }) {
   );
 }
 
-function BatchWaImage({ src, alt, onPreview, onDownload }) {
+function BatchWaImage({ src, alt, onPreview, onDownload, isFeishuBackfilled = false }) {
   const [retry, setRetry] = useState(0);
   const [loaded, setLoaded] = useState(false);
   const [failed, setFailed] = useState(false);
@@ -799,7 +799,9 @@ function BatchWaImage({ src, alt, onPreview, onDownload }) {
               {failed ? (
                 <>
                   <ImageIcon size={19} className="text-[#3FCA58]" />
-                  <p className="text-[11px] leading-5 text-white/45">预览加载失败，图片已回填飞书</p>
+                  <p className="text-[11px] leading-5 text-white/45">
+                    {isFeishuBackfilled ? "预览加载失败，图片已回填飞书" : "预览加载失败，请稍后刷新或下载查看"}
+                  </p>
                 </>
               ) : (
                 <>
@@ -882,6 +884,7 @@ function BatchWaResultGrid({ message, isLightTheme, isGenerating, onStop, onPrev
                     alt={`${item.label || `第 ${index + 1} 张`} 生成结果`}
                     onPreview={() => onPreview(resolveImageSrc(src))}
                     onDownload={() => onDownload(src, index)}
+                    isFeishuBackfilled={message.batchWaSource === "feishu" && item.feishuStatus === "success"}
                   />
                   {item.feishuStatus ? (
                     <div className={`mt-1 text-[10px] leading-4 ${
@@ -1313,6 +1316,7 @@ export default function ChatPage() {
       const userMsg = createMessage("user", text);
       const batchMessage = createMessage("assistant", `批量 WA 海报生成中：已完成 0/${total}。`, {
         modelLabel: "批量 WA",
+        batchWaSource: feishuBatchRequest ? "feishu" : "local",
         batchWaStopped: false,
         batchWaItems: batchWaPrompts.map((item) => ({
           id: `wa-${item.index}`,

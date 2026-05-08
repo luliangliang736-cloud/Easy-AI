@@ -1447,6 +1447,7 @@ export default function HomePage() {
       const batchMessage = createFloatingMessage("assistant", `批量 WA 海报生成中：已完成 0/${total}。`, {
         modelLabel: "批量 WA",
         batchWaTotal: total,
+        batchWaSource: feishuBatchRequest ? "feishu" : "local",
         batchWaStopped: false,
         batchWaItems: batchWaPrompts.map((item) => ({
           id: `wa-${item.index}`,
