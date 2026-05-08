@@ -1418,9 +1418,26 @@ export default function HomePage() {
     let feishuBatchRequest = null;
     if (!override?.skipBatch) {
       feishuBatchRequest = parseFeishuWaBatchRequest(combinedPromptText);
-      batchWaPrompts = feishuBatchRequest
-        ? await fetchFeishuWaBatchPrompts(feishuBatchRequest)
-        : parseBatchWaTemplatePrompts(combinedPromptText);
+      try {
+        batchWaPrompts = feishuBatchRequest
+          ? await fetchFeishuWaBatchPrompts(feishuBatchRequest)
+          : parseBatchWaTemplatePrompts(combinedPromptText);
+      } catch (error) {
+        if (!collectResult) {
+          setFloatingMessages((prev) => [...prev, createFloatingMessage("user", prompt || combinedPromptText, {
+            attachments: activeAttachments,
+          })]);
+          setFloatingMessages((prev) => [...prev, createFloatingMessage("assistant", error?.message || "读取飞书 WA 表格失败", {
+            modelLabel: "飞书 WA",
+          })]);
+          setFloatingPrompt("");
+          setFloatingRefImages([]);
+          setFloatingAttachments([]);
+          setFloatingIsGenerating(false);
+          setFloatingGenerationStage("understanding");
+        }
+        return collectResult ? { urls: [], error: error?.message || "读取飞书 WA 表格失败" } : undefined;
+      }
     }
     if (batchWaPrompts.length > 1 || (feishuBatchRequest && batchWaPrompts.length > 0)) {
       const total = batchWaPrompts.length;

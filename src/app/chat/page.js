@@ -1290,9 +1290,23 @@ export default function ChatPage() {
     let feishuBatchRequest = null;
     if (!override?.skipBatch) {
       feishuBatchRequest = parseFeishuWaBatchRequest(text);
-      batchWaPrompts = feishuBatchRequest
-        ? await fetchFeishuWaBatchPrompts(feishuBatchRequest)
-        : parseBatchWaTemplatePrompts(text);
+      try {
+        batchWaPrompts = feishuBatchRequest
+          ? await fetchFeishuWaBatchPrompts(feishuBatchRequest)
+          : parseBatchWaTemplatePrompts(text);
+      } catch (error) {
+        if (!collectResult) {
+          setMessages((prev) => [...prev, createMessage("user", text)]);
+          setMessages((prev) => [...prev, createMessage("assistant", error?.message || "读取飞书 WA 表格失败", {
+            modelLabel: "飞书 WA",
+          })]);
+          setPrompt("");
+          setRefImages([]);
+          setIsGenerating(false);
+          setGenerationStage("understanding");
+        }
+        return collectResult ? { urls: [], error: error?.message || "读取飞书 WA 表格失败" } : undefined;
+      }
     }
     if (batchWaPrompts.length > 1 || (feishuBatchRequest && batchWaPrompts.length > 0)) {
       const total = batchWaPrompts.length;
