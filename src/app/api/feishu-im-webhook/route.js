@@ -63,6 +63,10 @@ function extractTextMessage(body) {
   };
 }
 
+function summarizeText(text = "") {
+  return String(text || "").replace(/\s+/g, " ").trim().slice(0, 80);
+}
+
 function isWaTableCommand(text = "") {
   const source = String(text || "").replace(/\s+/g, "");
   if (!source) return false;
@@ -226,12 +230,23 @@ export async function POST(request) {
     }
 
     const { text, chatId, messageId } = extractTextMessage(body);
-    if (!text || !chatId || (!isWaTableCommand(text) && !isBatchWaGenerationCommand(text))) {
+    const isBatchCommand = isBatchWaGenerationCommand(text);
+    const isTableCommand = isWaTableCommand(text);
+    console.log("[FeishuIM] received", {
+      hasText: Boolean(text),
+      text: summarizeText(text),
+      chatId: Boolean(chatId),
+      messageId: Boolean(messageId),
+      isBatchCommand,
+      isTableCommand,
+    });
+    if (!text || !chatId || (!isTableCommand && !isBatchCommand)) {
       return NextResponse.json({ ok: true, ignored: true });
     }
 
-    if (isBatchWaGenerationCommand(text)) {
+    if (isBatchCommand) {
       const task = await createFeishuWaTask({ prompt: text, chatId, messageId });
+      console.log("[FeishuIM] queued batch task", { taskId: task.id, status: task.status });
       await sendTextMessage(chatId, `已同步到 EasyAI 一键创作任务队列：${text}\n任务 ID：${task.id}\n请打开一键创作页面，任务会自动进入现有批量 WA 生成流程。`);
       return NextResponse.json({ ok: true, taskId: task.id });
     }
