@@ -18,7 +18,7 @@ export function buildEzFamilyTriggerPrompt(promptText, role, { hasUserReferenceI
 - 后续自动加入的参考图是 ${identityName} 身份锚点，必须用它替换目标图中的主要人物/角色。`
     : `- 自动加入的参考图是 ${identityName} 身份锚点，必须把 ${identityName} 作为画面主角。`;
   const roleInstruction = isRobot
-    ? "不要生成通用机器人、圆头机器人或陌生机器人；必须保留 EasyFamily Robot 的核心外形、脸部/屏幕比例、身体结构和品牌识别度。"
+    ? "不要生成通用机器人、圆头机器人或陌生机器人；Robot 只能使用库里的 EasyFamily Robot 标准形态，最多改变姿势/朝向/手势，不能改变外形、颜色、屏幕脸、身体结构或服饰。"
     : `不要生成通用 ${baseRole.toLowerCase()}、小男孩、小女孩、陌生真人或随机卡通人物；必须保留 ${identityName} 的核心脸型、发型轮廓、眼镜/五官比例、年轻亲和气质和品牌角色识别度。`;
 
   return `${originalPrompt}
@@ -27,7 +27,7 @@ EZfamily trigger instructions:
 - “${baseRole.toLowerCase()}” 是系统触发词，只用于选择 ${identityName} 参考素材；不要把它理解成普通英文含义，也不要在画面中写出 “${baseRole.toLowerCase()}”。
 ${targetInstruction}
 - ${roleInstruction}
-- 可以根据用户需求调整服装、姿势、表情、道具和画面风格，但身份必须来自 ${identityName} 参考图。
+- ${isRobot ? "Robot 不允许调整服装、机身设计、颜色、屏幕脸或身体结构；最多只能根据构图需要改变姿势、朝向、手势和与道具的关系。" : "可以根据用户需求调整服装、姿势、表情、道具和画面风格，但身份必须来自 " + identityName + " 参考图。"}
 - 如果用户说“复制/复刻/替换到这张图/海报”，优先保持目标图整体画面，只替换主人物身份，不要重做成全新无关构图。`;
 }
 
@@ -443,6 +443,20 @@ function detectWaVisualStyle(text = "") {
   return "";
 }
 
+function detectWaRequestedRole(text = "") {
+  const explicit = pickLabeledLine(
+    text,
+    ["人物", "角色", "IP", "ip", "character", "role"],
+    ["主标题", "标题", "副标题", "副文案", "服饰", "服装", "穿搭", "风格", "画面风格", "视觉风格", "headline", "subline", "subtitle", "outfit", "clothing", "style"]
+  );
+  const compact = String(explicit || "").toLowerCase().replace(/\s+/g, "");
+  if (!compact) return "";
+  if (/(robot|机器人)/i.test(compact)) return "Robot";
+  if (/(boy|男孩|男生|男)/i.test(compact)) return explicit.includes("真人版") ? "Boy真人版" : "Boy";
+  if (/(girl|女孩|女生|女)/i.test(compact)) return "Girl";
+  return "";
+}
+
 export function parseWaTemplateRequest(promptText) {
   const text = String(promptText || "").trim();
   if (!text) return null;
@@ -456,12 +470,46 @@ export function parseWaTemplateRequest(promptText) {
   return {
     headline,
     subline,
+    role: detectWaRequestedRole(text),
     outfitStyle: detectWaOutfitStyle(text),
     visualStyle: detectWaVisualStyle(text),
   };
 }
 
-export function chooseWaTemplateIpRole({ headline = "", subline = "" } = {}) {
+export function parseBatchWaTemplatePrompts(inputText) {
+  const text = String(inputText || "").trim();
+  if (!text) return [];
+
+  const markerPattern = /(?:^|\n)\s*第\s*([0-9一二三四五六七八九十两]+)\s*张\s*[:：]?\s*/g;
+  const markers = [];
+  let match;
+  while ((match = markerPattern.exec(text)) !== null) {
+    markers.push({
+      indexLabel: match[1],
+      start: match.index,
+      contentStart: markerPattern.lastIndex,
+    });
+  }
+  if (markers.length < 2) return [];
+
+  const prefix = text.slice(0, markers[0].start).trim();
+  const items = markers.map((marker, index) => {
+    const next = markers[index + 1];
+    const body = text.slice(marker.contentStart, next ? next.start : text.length).trim();
+    const prompt = [prefix, body].filter(Boolean).join("\n\n").trim();
+    return {
+      index,
+      label: `第${marker.indexLabel}张`,
+      prompt,
+      request: parseWaTemplateRequest(prompt),
+    };
+  }).filter((item) => item.prompt && item.request);
+
+  return items.length > 1 ? items : [];
+}
+
+export function chooseWaTemplateIpRole({ headline = "", subline = "", role = "" } = {}) {
+  if (role) return role;
   const compact = `${headline} ${subline}`.toLowerCase().replace(/\s+/g, "");
   if (/(robot|科技|安全|自动|cepat|5menit|menit|cair|limit)/i.test(compact)) return "Robot";
   if (/(hemat|bebas|cicilan|promo|diskon|extra|ekstra|优惠|省钱|促销)/i.test(compact)) return "Boy";
@@ -493,7 +541,7 @@ function chooseWaTemplateBackgroundStyle(visualStyle = "") {
     "low-saturation thin line grid, parallel diagonal lines, dotted frame, hexagon or circle outlines only near the edges",
     "diffused low-saturation gradient using brand green plus white or light gray, center kept clean",
     "minimal fluid or soft wave lines in pale green or pale blue, only on top/bottom edges or corners",
-    "low-opacity brand icon matrix using smile logo, phone, coin, or small financial icons at 10%-20% opacity near edges only",
+    "low-opacity neutral financial icon matrix using phone, coin, check, shield, arrow, dots, or small abstract financial icons at 10%-20% opacity near edges only; do not use smile logo or Easycash logo as background decoration",
     "brand green tiny dots, small squares, or minimal particles sparsely distributed on background edges",
     "soft same-color light halo behind the character, subtle enough to separate subject from background",
     "slight edge blur or gentle vignette to guide focus toward text and character",
@@ -541,19 +589,69 @@ function chooseWaTemplateRightPanelStyle(visualStyle = "") {
   ]);
 }
 
+function normalizeWaEmphasisText(text = "") {
+  const emphasis = [];
+  const normalized = String(text || "")
+    .replace(/【([^】]+)】/g, (_, value) => {
+      emphasis.push(String(value || "").trim());
+      return value;
+    })
+    .replace(/\[([^\]]+)\]/g, (_, value) => {
+      emphasis.push(String(value || "").trim());
+      return value;
+    })
+    .replace(/「([^」]+)」/g, (_, value) => {
+      emphasis.push(String(value || "").trim());
+      return value;
+    })
+    .replace(/《([^》]+)》/g, (_, value) => {
+      emphasis.push(String(value || "").trim());
+      return value;
+    })
+    .replace(/\s+/g, " ")
+    .trim();
+  return {
+    text: normalized,
+    emphasis: emphasis.filter(Boolean),
+  };
+}
+
 export function buildWaTemplatePrompt({ headline = "", subline = "", outfitStyle = "", visualStyle = "" } = {}, role = "Girl") {
+  const headlineCopy = normalizeWaEmphasisText(headline);
+  const sublineCopy = normalizeWaEmphasisText(subline);
+  const displayHeadline = headlineCopy.text || String(headline || "").trim();
+  const displaySubline = sublineCopy.text || String(subline || "").trim();
+  const emphasisTerms = [...headlineCopy.emphasis, ...sublineCopy.emphasis];
+  const emphasisInstruction = emphasisTerms.length > 0
+    ? `- 强调标记只用于设计理解，不属于最终文案。最终画面里禁止出现【】、[]、「」、《》这些括号符号；请把 ${emphasisTerms.map((item) => `“${item}”`).join("、")} 作为重点词，用更醒目的字号、字重、品牌绿色/金色高亮、标签底板或局部描边强调。`
+    : "- 如果主标题或副标题里出现【...】、[...]、「...」、《...》，这些括号只表示括号内文案需要强调；最终画面必须去掉括号符号，只保留括号内文字并高亮强调。";
   const isRealisticRole = String(role || "").includes("真人版");
   const baseRole = String(role || "").replace("真人版", "") || role;
-  const prop = chooseWaTemplateProp({ headline, subline });
+  const isRobotRole = String(baseRole || "").toLowerCase() === "robot";
+  const prop = chooseWaTemplateProp({ headline: displayHeadline, subline: displaySubline });
   const backgroundStyle = chooseWaTemplateBackgroundStyle(visualStyle);
   const characterVariation = chooseWaTemplateCharacterVariation(outfitStyle);
   const characterRenderStyle = isRealisticRole
     ? `真人版商业视觉质感：参考图是 EasyFamily ${baseRole} 的真人版身份素材，必须保留 ${baseRole} 的核心脸型、发型轮廓、五官比例、眼镜、年轻亲和气质和品牌角色识别度；整体呈现为真实人物摄影/半写实商业广告质感，不要退回 3D 卡通、公仔、玩偶，也不要变成陌生真人模特`
+    : isRobotRole
+      ? "强身份复制 EasyFamily Robot 标准形态：Robot 只能使用库里的 Robot标准形态作为唯一外形来源，必须保持原始头身轮廓、屏幕脸比例、机身形状、标准绿色主体机身、黑色屏幕脸、银白机械臂/脚部和原始机械臂结构；最多只允许改变姿势、朝向、手势和与道具的关系，不允许更换服饰、增加配饰、改变颜色、改变脸部表情结构或重新设计身体"
     : chooseWaTemplateCharacterRenderStyle(visualStyle);
   const realisticRoleRequirement = isRealisticRole
     ? `- 真人版是 ${baseRole} 的独立视觉变体，只在用户明确写“真人版”时启用；本次必须以参考图中的真人版 ${baseRole} 身份为准，不能混用普通卡通版 ${baseRole} 素材，也不能改变原有 EasyFamily 身份特征。
 - 真人版 ${baseRole} 的正视图是身份锚点：优先保留其脸型、发型轮廓、眼镜、眉眼比例、鼻口关系、年龄气质和亲和表情；服装、姿势和场景可以变化，但不能换成参考场景里的陌生人物脸。
 - 真人版的侧视图、背视图和三视图只用于校准头部轮廓、发型体积、侧脸结构、背面发型和整体比例一致性；它们不是构图参考，不要生成三视图排版、角色设定图或多角度展示板。`
+    : "";
+  const robotRoleRequirement = isRobotRole
+    ? `- Robot 是 EasyFamily 的固定 IP 角色，不是通用机器人；本次只能使用库里的 Robot标准形态作为唯一角色外形来源，不允许参考其它穿服饰版本来改变头身结构、脸部结构、机身曲线、颜色或机械臂。
+- 第二张参考图是唯一 Robot 外形标准；第一张 WA 模板只用于版式、背景、文字区域、品牌合规区和右侧主视觉占位，不提供 Robot 外形参考。
+- 生成右侧 Robot 时必须以第二张参考图的绿色 Robot 本体作为唯一角色来源；不能根据模型常识自行生成白色机器人、通用机器人或其它机器人配色/结构。
+- Robot 不允许穿外套、制服、职业背心、围巾、胸牌、节日配饰、帽子、耳机、头盔、手套或任何新增服饰/配饰；即使用户/飞书字段写了服装，也必须忽略 Robot 的服装变化，只保留库里标准 Robot 本体。
+- 必须保持 Robot标准形态的屏幕脸/脸部区域比例、头身轮廓、机身曲线、标准绿色主体机身、黑色屏幕脸、银白机械臂/脚部、短小机械臂、亲和表情和整体品牌识别度；只允许小幅改变姿势、朝向、手势、站位、道具关系和局部光影。
+- Robot 的主体机身必须是标准图里的绿色，不是白色机身；禁止把 Robot 改成白色主体、浅色主体、白绿拼接主体、其它绿色比例、其它材质或其它配色方案。
+- 禁止把 Robot 改成圆头机器人、胶囊机器人、陌生玩具机器人、人形机甲、其它品牌机器人、戴耳机机器人、带大头盔机器人、穿衣机器人或没有参考图特征的通用机器人。
+- Robot 只能有原本结构中合理的两只机械臂/夹爪/手部表达；禁止多出第三只手、额外手臂、额外手指、人类皮肤手、漂浮手、断裂手、重复手或从身体错误位置长出的手。
+- 如果需要拿道具或指向元素，只能使用现有两只机械臂中的一只完成动作；不要为了拿道具新增手臂或手。
+- Robot 身体、胸口、脸侧、耳罩状部件、手臂和机身边缘不要新增 smile logo / Easycash logo / EZlogo；如果参考标准形态本身没有该 logo 点位，就保持机身纯净。`
     : "";
   const rightPanelStyle = chooseWaTemplateRightPanelStyle(visualStyle);
   return `请基于第一张参考图的 WA 横版营销模板重新生成一张 2:1 设计图，并严格替换模板中的主标题和副标题。
@@ -562,6 +660,8 @@ export function buildWaTemplatePrompt({ headline = "", subline = "", outfitStyle
 - 画面比例必须保持 2:1 横版。
 - 保持第一张参考图的整体版式逻辑：左侧文案区，右侧人物/IP/营销元素区。
 - Logo + OJK 合规标识是固定品牌资产：参考第三张图中的 logo+OJK lockup，只能整体复制/替换，不要重绘、改字、拆分或改变比例。
+- Logo + OJK 合规标识的颜色必须 1:1 保持第三张参考资产的原始颜色；禁止根据背景或风格把 OJK 盾牌、OJK 小字、Easycash logo 或 lockup 底色改成白色、浅色、单色、渐变色、透明色、反白版、描边版或其它颜色版本。
+- Logo + OJK 合规标识不能被套滤镜、蒙版、半透明、阴影染色、发光、渐变叠加或整体调色；如果背景影响可读性，只能微调周围留白/位置或简化背景，不能改动 lockup 本身颜色。
 - Logo + OJK 合规标识必须放回第一张模板图中原来的品牌合规区位置，通常在左下或左上；只允许为适配背景做轻微位置微调，不要移动到右侧。
 - Logo + OJK 合规标识可以与主标题/副标题位于同一左侧版面，但必须和标题文案区保持清晰安全距离；不要贴近、挤压或碰到主标题/副标题。
 - 当 Logo + OJK 位于左下时，它与副标题底部之间至少保留约 8%-12% 画面高度的留白；当 Logo + OJK 位于左上时，它与主标题顶部之间也要保留明显留白。
@@ -571,18 +671,23 @@ export function buildWaTemplatePrompt({ headline = "", subline = "", outfitStyle
 - 任何单独出现的 smile logo / Easycash logo / app logo，底板或图标底色只能是纯白色或 #3FCA58 品牌绿色；不要使用蓝色、紫色、橙色、红色、灰色或渐变底。
 - 如果 logo 出现在手机屏幕、卡片、贴纸、徽章或小图标里，也必须使用纯白色或 #3FCA58 作为 logo 底色。
 - 如果出现 “EASYCASH / Easycash” 文字，必须清晰、完整、可读，不要模糊、不要错拼、不要变形。
+- 人物身上最多只允许 1 个小品牌标识，优先放在工牌/胸牌/吊牌上；如果工牌/胸牌/吊牌已经有 smile logo，衣服胸口、领口、袖口、口袋、徽章位就不要再出现任何 smile logo、EZlogo、Easycash logo 或 Easycash 文字。
+- 人物服饰上不允许出现 “Easycash / EASYCASH” 文字，也不允许把 EZlogo 和 Easycash 文字组合成小徽章；服装品牌位如必须出现，只能是一个极简、清晰、低干扰的 smile icon，且不能与工牌/胸牌重复。
+- 如果 logo 可能变形、模糊、错拼、重复或不可读，宁可完全不在人物服饰/道具/背景上生成该 logo；品牌标识准确性优先级高于装饰丰富度。
+- 不要在耳机、耳罩、头戴设备、手套、随机配饰、背景杂物或没有品牌象征意义的位置乱用 smile logo、EZlogo、Easycash logo 或 app icon。
 - 保持大标题、正文、留白、卡片、背景层次的设计节奏。
 - 新元素必须沿用第一张参考图中对应元素的占位位置、大小、层级和视觉重心，只允许轻微微调。
 - 可以更换背景颜色、道具、IP 姿势和营销元素，但不能重新发明右侧构图。
 
 必须使用的文案：
-主标题：${headline}
-副标题：${subline}
+主标题：${displayHeadline}
+副标题：${displaySubline}
 
 文案排版要求：
 - 主标题必须放在第一张参考模板的主标题原始区域内，继承原始左边距、上边距和基线位置；不要整体下移。
 - 主标题垂直位置最多只能相对参考模板微调约 3%，优先保持偏上且稳定的标题重心。
 - 主标题必须是最大字号和最高视觉层级。
+${emphasisInstruction}
 - 副标题必须放在主标题下方的副标题原始区域内，不能侵入主标题区域。
 - 副标题字号必须明显小于主标题，建议为主标题字号的 35%-55%，不要接近主标题大小。
 - 副标题行高和字重保持次级信息，不要用过粗或过大的样式。
@@ -609,13 +714,14 @@ export function buildWaTemplatePrompt({ headline = "", subline = "", outfitStyle
 - 本次背景变化方向：${backgroundStyle}。
 - 背景可以比参考图更有变化，但必须低干扰、低对比、服务主体。
 - 可选方向包括：微渐变噪点、磨砂质感、布纹/纸感肌理、品牌色同色系网点/斜纹/波浪、切割式色块/分屏设计、低饱和线条/网格、弥散渐变、极简流体线条、弱化品牌元素矩阵、品牌色散点、柔和光晕、轻微暗角。
-- 背景装饰优先使用金融、消费信贷、品牌、抽象几何、低干扰纹理相关元素，例如手机、钱包、金币、钞票、check、盾牌、额度卡、箭头、圆点、线条、网格、品牌 smile logo 的低透明图案。
+- 背景装饰优先使用金融、消费信贷、抽象几何、低干扰纹理相关元素，例如手机、钱包、金币、钞票、check、盾牌、额度卡、箭头、圆点、线条、网格；不要把 smile logo / Easycash logo / EZlogo 当作背景低透明图案或角落水印。
 - 允许使用没有强行业含义的中立装饰元素，例如纸飞机、星点、抽象叶片、简单花形、小弧线、小几何符号，但必须低透明、小尺寸、只做边缘点缀。
 - 背景不得出现与金融产品和商务人物差别太大的行业符号。
 - 背景变化只能发生在原背景层级内，不能抢主标题、IP、Logo+OJK 合规标识。
 - 左侧文案区必须保持高对比度和高可读性；背景纹理在文案区必须弱化。
 - 背景元素主要放在边缘、角落、人物背后或非文案区，中心和文案区保持干净。
-- 背景装饰透明度必须克制：纹理约 1%-5%，品牌图标矩阵约 10%-20%，线条和几何元素保持低饱和。
+- 画面角落、背景层、渐变层、纹理层和装饰层禁止出现残缺、裁切、半透明、变形、错色、带红框或不可识别的 smile logo / Easycash logo / EZlogo；如果无法完整清晰复刻官方 logo，就不要在该位置生成 logo。
+- 背景装饰透明度必须克制：纹理约 1%-5%，中立金融图标矩阵约 10%-20%，线条和几何元素保持低饱和；品牌 logo 不能作为背景图标矩阵使用。
 - 不要每次都使用纯色或单一弧形色块，但也不要做复杂场景背景；如果背景会抢焦点，宁可简化或不要这些背景元素。
 
 右侧人物背板变化要求：
@@ -631,11 +737,12 @@ export function buildWaTemplatePrompt({ headline = "", subline = "", outfitStyle
 - 使用 ${role} 风格的 EZfamily IP 角色作为右侧主视觉参考。
 - 人物渲染方式：${characterRenderStyle}。
 ${realisticRoleRequirement}
-- 本次人物变化方向：${characterVariation}。
-- 如果用户指定了服饰关键词，人物服装必须作为最高优先级之一执行，并在结果中清晰可见；不要只换颜色，不要退回默认 T 恤/卫衣/随机休闲穿搭。
-- 指定服饰时，至少要在上衣、外套、裙装/裤装、帽子/头饰、布料纹样、徽章/胸牌或配饰中体现 3 个以上相关特征。
+${robotRoleRequirement}
+- 本次人物变化方向：${isRobotRole ? "Robot 只能基于标准库图做姿势/朝向/手势变化，不执行服装变化" : characterVariation}。
+${isRobotRole ? "- 本次角色是 Robot：忽略所有服饰/服装/穿搭字段，不要把服饰关键词应用到 Robot 身上。" : "- 如果用户指定了服饰关键词，人物服装必须作为最高优先级之一执行，并在结果中清晰可见；不要只换颜色，不要退回默认 T 恤/卫衣/随机休闲穿搭。"}
+${isRobotRole ? "- 本次角色是 Robot：不要新增上衣、外套、裙装/裤装、帽子/头饰、布料纹样、徽章/胸牌或任何配饰。" : "- 指定服饰时，至少要在上衣、外套、裙装/裤装、帽子/头饰、布料纹样、徽章/胸牌或配饰中体现 3 个以上相关特征。"}
 - 如果指定职业制服或医生制服，必须让角色穿出对应职业感；允许出现制服、白大褂、工装外套、胸牌、整洁领口等服装特征，但不要把背景改成医院或医疗场景。
-- 可以对 IP 做服饰、配饰、手势、姿势、朝向、小道具和渲染方式变化，但必须保持 EZfamily 的核心脸型、眼镜/五官比例、亲和气质和品牌角色识别度。
+- ${isRobotRole ? "Robot 只允许姿势、朝向、手势、小道具关系和局部光影变化；不允许服饰、配饰、机身形态、颜色、屏幕脸或身体结构变化。" : "可以对 IP 做服饰、配饰、手势、姿势、朝向、小道具和渲染方式变化，但必须保持 EZfamily 的核心脸型、眼镜/五官比例、亲和气质和品牌角色识别度。"}
 - 人物变化必须在第一张参考图原人物占位内完成，不要变成全新的陌生角色。
 - 右侧只能有 1 个 IP 主角色，占右侧区域 60%-75% 高度，人物是唯一主焦点。
 - IP 角色必须替换到第一张参考图中原人物/IP 的位置，继承原人物的站位、朝向、尺寸范围和视觉重心；位置偏移不要超过原位置约 8%。
@@ -643,12 +750,15 @@ ${realisticRoleRequirement}
 - 如果第一张参考图没有对应道具位置，核心道具只能放在 IP 手部附近或原右侧主要装饰区域内。
 - 普通品牌口号类文案默认不要让人物拿手机，也不要在手机屏幕上展示 smile logo；只有文案明确提到 app、手机、下载、到账、额度、limit，或第一张模板原本有人物拿手机时才允许出现。
 - 如果必须出现手机，手机屏幕应保持简洁，优先显示纯色界面、check 或简单状态，不要高频展示 Easycash/smile logo。
+- ${isRobotRole ? "Robot 没有服装品牌位；不要给 Robot 添加胸标、制服徽章、小 smile logo、领带、制服轮廓或任何服装装饰。" : "IP 服装可以有合理的品牌胸标/制服徽章/小 smile logo，但应以纯色、几何细节、领带、制服轮廓和低干扰装饰为主；不要在耳机、耳罩、手套、随机配饰或身体边缘放置无意义品牌元素。"}
 - 辅助装饰最多 2 个，必须复用第一张参考图中已有装饰点位；没有装饰点位时不要新增。
 - 所有右侧人物、道具的位置、大小和层级必须参考第一张模板图，整体只做轻微替换和微调；但人物背后的板块允许按“右侧人物背板变化要求”做中等幅度变化。
 - 人物脸部和身体前方保持干净，不要被漂浮元素遮挡。
 - 如果文案没有明确提到 VIP、优惠、折扣、分期，不要生成 VIP 卡、百分号、优惠券、金币堆。
 - 不要同时出现 VIP、百分号、金币、秒表、手机、星星等多个强视觉元素。
 - 普通品牌口号类文案应保持右侧克制，只保留 IP、一个简洁道具和少量背景曲线。
+- 如果出现金币、钞票、现金、钱包、额度卡、优惠券、票券或其它金额相关道具，道具上的文字只能是清晰正确的 “Rp”、简单数字、“0%” 或纯图形；“Rp” 必须是拉丁字母 R + 小写 p，不要生成乱码、反向字符、伪文字、奇怪字母、装饰符号或类似 “&p / R? / ßp” 的错误标识。
+- 如果无法保证钱币/钞票/票券上的 “Rp” 清晰正确，就不要在这些道具上写任何文字，改用纯色金融图形或无字图标。
 
 品牌风格：
 - 金融科技广告 Banner，年轻、可信赖、快捷。
@@ -656,13 +766,16 @@ ${realisticRoleRequirement}
 
 禁止：
 - 不要改写主标题和副标题。
-- 不要伪造、改写或重新排版 logo+OJK 合规标识。
+- 不要伪造、改写、重新排版、拆分、重绘、套滤镜或重新上色 logo+OJK 合规标识；OJK 盾牌和 OJK 文字必须保持参考资产原色，不能变白、变浅、变灰、变绿、变单色、变透明或随背景变色。
 - 不要把单独微笑 logo 改成白/黑/品牌绿以外的颜色。
 - 不要让 logo 使用纯白或 #3FCA58 以外的底色。
 - 不要生成模糊、拼错或不可读的 Easycash 字样。
+- 不要在耳机、耳罩、头戴设备、手套、随机配饰、背景杂物或无品牌象征意义的位置生成 Easycash 小字、EZlogo、smile logo 或 app icon；人物身上已有工牌/胸牌/吊牌 logo 时，服装上禁止再出现任何品牌 logo；服装上禁止出现 Easycash 文字或 EZlogo + Easycash 组合小标。
+- 不要在金币、钞票、现金、优惠券或额度卡上生成乱码、伪文字、错误字母或不可读金额标识；只允许清晰 “Rp”、简单数字、“0%” 或无字图形。
 - 不要出现医疗、医院、健康、红十字、医疗十字标、心电图、药丸、针筒、救护、餐饮、教育、宗教、运动赛事等行业差别太大的背景符号。
 - 不要把安全感表达成医疗十字或健康图标；如果需要表达安全，只能使用金融风格盾牌、check 或锁形图标。
 - 不要为了装饰而额外新增单独微笑 logo；没有明确点位或用途时不要出现。
+- 不要在背景、角落、边框、渐变层或装饰纹理里生成残缺/半透明/变形的 smile logo、Easycash logo 或 EZlogo；背景装饰只能用中立金融图标和抽象几何元素。
 - 不要让主标题整体下沉或偏离参考模板主标题区域。
 - 不要把副标题做得接近主标题大小。
 - 不要让人物遮挡主标题。
@@ -670,6 +783,8 @@ ${realisticRoleRequirement}
 - 不要生成过多小字。
 - 不要在右侧堆叠营销元素。
 - 不要让人物默认拿手机；没有明确手机/app/到账/额度语义时不要出现手机屏幕 logo。
+- 如果本次角色是 Robot，不要改变 Robot 的主体颜色、屏幕脸结构、机身轮廓、身体比例、机械臂数量或标准表情结构；Robot 主体必须保持标准绿色机身，禁止变成白色/浅色主体；不要生成多手、多臂、漂浮手、人手或陌生机器人。
+- 如果本次角色是 Robot，不要把它变成圆头/胶囊/玩具/机甲/陌生机器人；不要给 Robot 添加衣服、围巾、帽子、耳机、头盔、手套、胸牌、徽章或任何新增配饰；不要在 Robot 身体、胸口、脸侧或机身边缘新增 smile logo、Easycash logo 或 EZlogo。
 - 不要新增模板参考图中不存在的大面积漂浮元素。
 - 不要把右侧元素移动到新的构图位置。
 - 不要忽略用户指定的人物服饰关键词；如果用户指定制服、医生制服、传统服饰或职业装，禁止生成默认休闲服装。

@@ -35,6 +35,7 @@ import {
   detectOneClickEntryMode,
   getLatestGeneratedImages,
   isObviousOneClickGenerateRequest,
+  parseBatchWaTemplatePrompts,
   parseWaTemplateRequest,
   shouldReusePreviousGeneratedImages,
 } from "@/lib/oneClickCreationRules";
@@ -66,9 +67,141 @@ const GPT_IMAGE_2_CLIENT_TIMEOUT_MS = 10 * 60 * 1000;
 const WA_QUALITY_CLIENT_TIMEOUT_MS = 18 * 1000;
 const GENERATION_RECOVERY_POLL_MS = 2000;
 const GENERATION_RECOVERY_MAX_ATTEMPTS = Math.ceil((12 * 60 * 1000) / GENERATION_RECOVERY_POLL_MS);
+const BATCH_WA_CONCURRENCY = 10;
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function runWithConcurrency(items = [], limit = 5, worker) {
+  let cursor = 0;
+  const workerCount = Math.min(Math.max(Number(limit) || 1, 1), items.length);
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    while (cursor < items.length) {
+      const item = items[cursor];
+      cursor += 1;
+      await worker(item);
+    }
+  }));
+}
+
+function restoreInterruptedBatchMessages(messages = []) {
+  if (!Array.isArray(messages)) return [];
+  return messages.map((message) => {
+    if (!Array.isArray(message?.batchWaItems)) return message;
+    const hadActiveItems = message.batchWaItems.some((item) => (
+      item.status === "queued"
+      || item.status === "generating"
+      || item.status === "retrying"
+      || item.feishuStatus === "uploading"
+    ));
+    if (!hadActiveItems) return message;
+    const nextItems = message.batchWaItems.map((item) => {
+      if (item.status === "success") {
+        return item.feishuStatus === "uploading"
+          ? { ...item, feishuStatus: "failed", feishuError: "页面刷新/热更新中断，飞书回填状态未知" }
+          : item;
+      }
+      if (item.status === "queued" || item.status === "generating" || item.status === "retrying") {
+        return { ...item, status: "stopped", error: "页面刷新/热更新中断，可重新发起批量任务" };
+      }
+      return item;
+    });
+    const completed = nextItems.filter((item) => item.status === "success").length;
+    return {
+      ...message,
+      text: `批量 WA 海报已中断：已完成 ${completed}/${nextItems.length}。`,
+      batchWaStopped: true,
+      batchWaItems: nextItems,
+    };
+  });
+}
+
+function chineseNumberToInt(value) {
+  const text = String(value || "").trim();
+  if (/^\d+$/.test(text)) return Number(text);
+  const digits = { 零: 0, 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 };
+  if (text === "十") return 10;
+  if (text.includes("十")) {
+    const [tenPart, onePart] = text.split("十");
+    return (digits[tenPart] || 1) * 10 + (digits[onePart] || 0);
+  }
+  return digits[text] || 0;
+}
+
+function parseFeishuWaBatchRequest(text = "") {
+  const source = String(text || "").replace(/\s+/g, "");
+  if (!/(飞书|表格|多维表|base|文档)/i.test(source) || !/(WA|wa|海报)/i.test(source)) return null;
+  if (!/(生成|制作|生图|批量生成|批量制作)/.test(source)) return null;
+  const rangeMatch = source.match(/第([0-9一二两三四五六七八九十]+)(?:张|条|个)?(?:到|至|-|—)(?:第)?([0-9一二两三四五六七八九十]+)(?:张|条|个)?/);
+  if (rangeMatch) {
+    const start = chineseNumberToInt(rangeMatch[1]);
+    const end = chineseNumberToInt(rangeMatch[2]);
+    if (start > 0 && end >= start) return { start, end, limit: Math.min(end - start + 1, 50) };
+  }
+  const singleMatch = source.match(/第([0-9一二两三四五六七八九十]+)(?:张|条|个)/);
+  if (singleMatch) {
+    const start = chineseNumberToInt(singleMatch[1]);
+    if (start > 0) return { start, end: start, limit: 1 };
+  }
+  const tailMatch = source.match(/(?:后|最后)([0-9一二两三四五六七八九十]+)(?:张|条|个)/);
+  if (tailMatch) {
+    const limit = chineseNumberToInt(tailMatch[1]);
+    if (limit > 0) return { limit: Math.min(limit, 50), tail: true };
+  }
+  const headMatch = source.match(/前([0-9一二两三四五六七八九十]+)(?:张|条|个)/);
+  if (headMatch) {
+    const limit = chineseNumberToInt(headMatch[1]);
+    if (limit > 0) return { limit: Math.min(limit, 50) };
+  }
+  return null;
+}
+
+async function fetchFeishuWaBatchPrompts(request) {
+  const payload = typeof request === "number" ? { limit: request } : request;
+  const res = await fetch("/api/feishu-wa-batch", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "prepare", ...(payload || {}) }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || "读取飞书 WA 表格失败");
+  return Array.isArray(data?.data?.items) ? data.data.items : [];
+}
+
+async function uploadFeishuWaImage({ recordId, imageUrl, name }) {
+  if (!recordId || !imageUrl) return;
+  const res = await fetch("/api/feishu-wa-batch", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "upload", recordId, imageUrl, name }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || "飞书回填失败");
+  return data;
+}
+
+function detectFeishuWaCommand(text = "") {
+  const source = String(text || "").replace(/\s+/g, "");
+  if (!source) return false;
+  if (/生成前[0-9一二两三四五六七八九十]+张.*?(WA|wa|海报)/i.test(source)) return false;
+  const hasTableTarget = /(飞书|表格|文档|AI设计图|ai设计图|Robot|robot|机器人|第[0-9一二两三四五六七八九十]+张)/i.test(source);
+  const hasAction = /(修改|改成|改为|设为|设置为|清空|删除|移除|减少|少一些|少一点|不要太多|统计|查看|多少)/.test(source);
+  return hasTableTarget && hasAction;
+}
+
+async function runFeishuWaCommand(text) {
+  const res = await fetch("/api/feishu-wa-command", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || "飞书表格指令处理失败");
+  return {
+    reply: data?.data?.reply || "飞书表格指令已处理。",
+    images: Array.isArray(data?.data?.images) ? data.data.images : [],
+  };
 }
 
 function createTimeoutError(message = "请求等待时间过长，请稍后重试。") {
@@ -197,6 +330,11 @@ async function fetchEzFamilyReferenceImages(role) {
       const items = Array.isArray(data.items) ? data.items.filter((item) => item?.src) : [];
       if (items.length > 0) {
         const roleKey = roleText.toLowerCase();
+        if (roleKey === "robot") {
+          const standardItem = items.find((item) => String(item?.name || "").includes("Robot标准形态"));
+          const standardImage = standardItem ? await fetchImageAsDataUrl(standardItem.src) : null;
+          if (standardImage) return [standardImage];
+        }
         const previousName = lastEzFamilyReferenceByRole.get(roleKey);
         const candidateItems = items.length > 1
           ? items.filter((item) => String(item?.name || item?.src || "") !== previousName)
@@ -476,6 +614,41 @@ function readFileAsDataURL(file) {
   });
 }
 
+function readFileAsText(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result || ""));
+    reader.onerror = reject;
+    reader.readAsText(file);
+  });
+}
+
+function isTextLikeFile(file) {
+  const type = String(file?.type || "").toLowerCase();
+  const name = String(file?.name || "").toLowerCase();
+  return (
+    type.startsWith("text/")
+    || type.includes("json")
+    || type.includes("xml")
+    || type.includes("markdown")
+    || /\.(txt|md|markdown|csv|json|xml|html|htm|rtf)$/i.test(name)
+  );
+}
+
+function resolveImageSrc(src = "") {
+  const value = String(src || "").trim();
+  if (!value) return "";
+  if (value.startsWith("data:") || value.startsWith("blob:") || /^https?:\/\//i.test(value)) return value;
+  return value.startsWith("/") ? value : `/${value}`;
+}
+
+function appendImageRetryParam(src = "", retry = 0) {
+  const value = resolveImageSrc(src);
+  if (!value || value.startsWith("data:") || value.startsWith("blob:")) return value;
+  const separator = value.includes("?") ? "&" : "?";
+  return `${value}${separator}retry=${retry}`;
+}
+
 function formatHistoryTime(value) {
   if (!value) return "";
   try {
@@ -547,6 +720,17 @@ function MarkdownRenderer({ text, isLightTheme }) {
 }
 
 function ImageLightbox({ src, onClose }) {
+  const [retry, setRetry] = useState(0);
+  const [loaded, setLoaded] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const [slow, setSlow] = useState(false);
+  const imageSrc = appendImageRetryParam(src, retry);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setSlow(true), 2500);
+    return () => window.clearTimeout(timer);
+  }, [src]);
+
   useEffect(() => {
     const handler = (e) => { if (e.key === "Escape") onClose(); };
     window.addEventListener("keydown", handler);
@@ -559,8 +743,189 @@ function ImageLightbox({ src, onClose }) {
       onClick={onClose}
     >
       <button type="button" onClick={onClose} className="absolute right-5 top-5 z-10 rounded-xl bg-white/10 p-2 text-white hover:bg-white/20"><X size={20} /></button>
-      <div className="relative h-[90vh] w-[90vw]" onClick={(e) => e.stopPropagation()}>
-        <Image src={src} alt="预览" fill unoptimized className="rounded-xl object-contain shadow-2xl" />
+      <div className="relative flex h-[90vh] w-[90vw] items-center justify-center" onClick={(e) => e.stopPropagation()}>
+        {!loaded ? (
+          <div className="absolute inset-0 flex items-center justify-center">
+            <div className="rounded-2xl bg-black/45 px-5 py-4 text-center text-white shadow-2xl backdrop-blur-sm">
+              {failed ? (
+                <>
+                  <p className="text-sm font-medium">本地预览加载失败</p>
+                  <p className="mt-1 text-xs text-white/60">图片已生成，可先在飞书查看。</p>
+                </>
+              ) : (
+                <>
+                  <Loader2 size={24} className="mx-auto animate-spin text-[#3FCA58]" />
+                  <p className="mt-3 text-sm font-medium">正在加载预览</p>
+                  <p className="mt-1 text-xs text-white/60">{slow ? "本地图片较大，加载可能需要几秒。" : "请稍候..."}</p>
+                </>
+              )}
+            </div>
+          </div>
+        ) : null}
+        <img
+          src={imageSrc}
+          alt="预览"
+          className={`max-h-full max-w-full rounded-xl object-contain shadow-2xl transition-opacity ${loaded ? "opacity-100" : "opacity-0"}`}
+          onLoad={() => {
+            setLoaded(true);
+            setFailed(false);
+          }}
+          onError={() => {
+            setLoaded(false);
+            if (retry < 4) {
+              window.setTimeout(() => setRetry((value) => value + 1), 450);
+            } else {
+              setFailed(true);
+            }
+          }}
+        />
+      </div>
+    </div>
+  );
+}
+
+function BatchWaImage({ src, alt, onPreview, onDownload }) {
+  const [retry, setRetry] = useState(0);
+  const [loaded, setLoaded] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const imageSrc = appendImageRetryParam(src, retry);
+
+  return (
+    <div className="relative aspect-square w-full overflow-hidden rounded-2xl bg-black/[0.04]">
+      <button type="button" className="absolute inset-0" onClick={onPreview} title="放大查看">
+        {!loaded ? (
+          <div className="absolute inset-0 z-10 flex items-center justify-center bg-black/[0.06]">
+            <div className="flex max-w-[170px] flex-col items-center gap-2 px-4 text-center">
+              {failed ? (
+                <>
+                  <ImageIcon size={19} className="text-[#3FCA58]" />
+                  <p className="text-[11px] leading-5 text-white/45">预览加载失败，图片已回填飞书</p>
+                </>
+              ) : (
+                <>
+                  <Loader2 size={18} className="animate-spin text-[#3FCA58]" />
+                  <p className="text-[11px] leading-5 text-white/45">图片已生成，正在加载预览</p>
+                </>
+              )}
+            </div>
+          </div>
+        ) : null}
+        <img
+          src={imageSrc}
+          alt={alt}
+          className={`h-full w-full object-cover transition-opacity hover:opacity-95 ${loaded ? "opacity-100" : "opacity-0"}`}
+          loading="lazy"
+          decoding="async"
+          onLoad={() => {
+            setLoaded(true);
+            setFailed(false);
+          }}
+          onError={() => {
+            setLoaded(false);
+            if (retry < 5) {
+              window.setTimeout(() => setRetry((value) => value + 1), 500);
+            } else {
+              setFailed(true);
+            }
+          }}
+        />
+      </button>
+      <div className="absolute right-2 top-2 z-[1] flex gap-1.5">
+        <button type="button" onClick={(e) => { e.stopPropagation(); onPreview?.(); }} className="rounded-lg bg-black/60 p-1.5 text-white backdrop-blur-sm hover:bg-black/80"><Maximize2 size={14} /></button>
+        <button type="button" onClick={(e) => { e.stopPropagation(); onDownload?.(); }} className="rounded-lg bg-black/60 p-1.5 text-white backdrop-blur-sm hover:bg-black/80"><Download size={14} /></button>
+      </div>
+    </div>
+  );
+}
+
+function BatchWaResultGrid({ message, isLightTheme, isGenerating, onStop, onPreview, onDownload }) {
+  const items = Array.isArray(message.batchWaItems) ? message.batchWaItems : [];
+  if (!items.length) return null;
+  const successCount = items.filter((item) => item.status === "success").length;
+  const isActive = isGenerating && !message.batchWaStopped && items.some((item) => item.status === "queued" || item.status === "generating" || item.status === "retrying");
+
+  return (
+    <div className="mt-2 w-full">
+      <div className="mb-3 flex items-center justify-between gap-3 px-1">
+        <div className={`text-[12px] ${isLightTheme ? "text-black/50" : "text-white/38"}`}>批量进度：{successCount}/{items.length}</div>
+        {isActive ? (
+          <button type="button" onClick={onStop} className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-[11px] text-[#3FCA58] transition-all hover:bg-[#3FCA58]/10">
+            <Square size={11} />
+            停止全部
+          </button>
+        ) : null}
+      </div>
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+        {items.map((item, index) => {
+          const src = item.urls?.[0] || "";
+          const statusText = item.status === "success"
+            ? "已完成"
+            : item.status === "queued"
+              ? "排队中"
+            : item.status === "retrying"
+              ? "重试中"
+              : item.status === "failed"
+                ? "失败"
+                : item.status === "stopped"
+                  ? "已停止"
+                  : "生成中";
+          return (
+            <div key={item.id || `${message.id}-${index}`} className={`rounded-xl p-2 ${isLightTheme ? "border border-black/8 bg-white" : "border border-white/8 bg-black/10"}`}>
+              <div className={`mb-1 flex items-center justify-between gap-2 text-[11px] ${isLightTheme ? "text-black/55" : "text-white/35"}`}>
+                <span>{item.label || `第 ${index + 1} 张`}</span>
+                <span>{statusText}</span>
+              </div>
+              {src ? (
+                <>
+                  <BatchWaImage
+                    src={src}
+                    alt={`${item.label || `第 ${index + 1} 张`} 生成结果`}
+                    onPreview={() => onPreview(resolveImageSrc(src))}
+                    onDownload={() => onDownload(src, index)}
+                  />
+                  {item.feishuStatus ? (
+                    <div className={`mt-1 text-[10px] leading-4 ${
+                      item.feishuStatus === "failed"
+                        ? "text-amber-400"
+                        : isLightTheme ? "text-black/42" : "text-white/38"
+                    }`}>
+                      {item.feishuStatus === "uploading"
+                        ? "正在回填飞书..."
+                        : item.feishuStatus === "success"
+                          ? "已回填飞书"
+                          : `飞书回填失败：${item.feishuError || "请稍后重试"}`}
+                    </div>
+                  ) : null}
+                </>
+              ) : (
+                <div className={`relative aspect-square overflow-hidden rounded-2xl ${isLightTheme ? "bg-[#f1f1f1]" : "bg-white/[0.055]"}`}>
+                  {item.status === "failed" || item.status === "stopped" ? (
+                    <div className={`absolute inset-0 flex items-center justify-center px-4 text-center text-[11px] leading-5 ${isLightTheme ? "text-black/42" : "text-white/38"}`}>
+                      {item.status === "failed" ? (item.error || "生成失败") : statusText}
+                    </div>
+                  ) : (
+                    <>
+                      <div className={`absolute inset-0 animate-pulse ${isLightTheme ? "bg-gradient-to-br from-black/[0.02] via-white/60 to-black/[0.04]" : "bg-gradient-to-br from-white/[0.03] via-white/[0.10] to-white/[0.03]"}`} />
+                      <div className="absolute inset-0 flex items-center justify-center">
+                        <div className="flex max-w-[180px] flex-col items-center gap-2 px-4 text-center">
+                          <Loader2 size={20} className="animate-spin text-[#3FCA58]" />
+                          <div>
+                            <p className={`text-[12px] font-medium ${isLightTheme ? "text-black/70" : "text-white/75"}`}>
+                              {item.status === "queued" ? "等待生成队列" : item.status === "retrying" ? "正在重试生成" : "正在生成图片"}
+                            </p>
+                            <p className={`mt-1 text-[11px] leading-5 ${isLightTheme ? "text-black/42" : "text-white/38"}`}>
+                              {item.status === "queued" ? "前面的图片完成后自动开始" : "生成完成后会自动显示"}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -589,6 +954,11 @@ export default function ChatPage() {
   const [isDragging, setIsDragging] = useState(false);
   const dragCounterRef = useRef(0);
   const abortControllerRef = useRef(null);
+  const batchWaStoppedRef = useRef(false);
+  const batchWaAbortControllersRef = useRef(new Set());
+  const feishuWaTaskPollingRef = useRef(false);
+  const handleSubmitRef = useRef(null);
+  const sessionStorageReadyRef = useRef(false);
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null);
   const promptTextareaRef = useRef(null);
@@ -614,7 +984,7 @@ export default function ChatPage() {
       const raw = window.localStorage.getItem(CHAT_SESSION_KEY);
       if (raw) {
         const session = JSON.parse(raw);
-        if (Array.isArray(session.messages)) setMessages(session.messages);
+        if (Array.isArray(session.messages)) setMessages(restoreInterruptedBatchMessages(session.messages));
         if (typeof session.prompt === "string") setPrompt(session.prompt);
         if (Array.isArray(session.refImages)) setRefImages(session.refImages);
       }
@@ -632,8 +1002,25 @@ export default function ChatPage() {
           );
         }
       }
-    } catch {}
+    } catch {
+    } finally {
+      sessionStorageReadyRef.current = true;
+    }
   }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (!sessionStorageReadyRef.current) return;
+    try {
+      const session = { messages, prompt, refImages, updatedAt: Date.now() };
+      const hasContent = messages.length > 0 || String(prompt || "").trim() || refImages.length > 0;
+      if (!hasContent) {
+        window.localStorage.removeItem(CHAT_SESSION_KEY);
+        return;
+      }
+      window.localStorage.setItem(CHAT_SESSION_KEY, JSON.stringify(session));
+    } catch {}
+  }, [messages, prompt, refImages]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -711,8 +1098,10 @@ export default function ChatPage() {
   };
 
   const handleDownloadImage = async (src, index) => {
+    const imageSrc = resolveImageSrc(src);
+    if (!imageSrc) return;
     try {
-      const res = await fetch(src);
+      const res = await fetch(imageSrc);
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
@@ -721,7 +1110,7 @@ export default function ChatPage() {
       setTimeout(() => URL.revokeObjectURL(url), 1000);
     } catch {
       const a = document.createElement("a");
-      a.href = src; a.download = `easy-ai-${Date.now()}-${index + 1}.png`;
+      a.href = imageSrc; a.download = `easy-ai-${Date.now()}-${index + 1}.png`;
       a.target = "_blank"; document.body.appendChild(a); a.click(); a.remove();
     }
   };
@@ -730,14 +1119,52 @@ export default function ChatPage() {
     setMessages((prev) => prev.filter((message) => message.id !== messageId));
   };
 
+  const handleStopBatchWa = () => {
+    batchWaStoppedRef.current = true;
+    batchWaAbortControllersRef.current.forEach((controller) => controller.abort());
+    batchWaAbortControllersRef.current.clear();
+    setIsGenerating(false);
+    setGenerationStage("understanding");
+    setMessages((prev) => prev.map((message) => {
+      if (!Array.isArray(message.batchWaItems)) return message;
+      const hasActiveItems = message.batchWaItems.some((item) => item.status === "queued" || item.status === "generating" || item.status === "retrying");
+      if (!hasActiveItems) return message;
+      return {
+        ...message,
+        text: "批量 WA 海报已停止。",
+        batchWaStopped: true,
+        batchWaItems: message.batchWaItems.map((item) => (
+          item.status === "success" ? item : { ...item, status: "stopped", error: "已停止" }
+        )),
+      };
+    }));
+  };
+
   const handleFilesAdd = async (files) => {
-    const imageFiles = Array.from(files).filter((f) => f.type?.startsWith("image/"));
-    if (!imageFiles.length) return;
-    const rawUrls = await Promise.all(imageFiles.map(readFileAsDataURL));
-    const compressed = await Promise.all(
-      rawUrls.map(async (url) => { try { return await compressImage(url, 1280, 0.78); } catch { return url; } })
-    );
-    setRefImages((prev) => [...prev, ...compressed]);
+    const fileList = Array.from(files || []);
+    const imageFiles = fileList.filter((f) => f.type?.startsWith("image/"));
+    const textFiles = fileList.filter((f) => !f.type?.startsWith("image/") && isTextLikeFile(f));
+
+    if (imageFiles.length) {
+      const rawUrls = await Promise.all(imageFiles.map(readFileAsDataURL));
+      const compressed = await Promise.all(
+        rawUrls.map(async (url) => { try { return await compressImage(url, 1280, 0.78); } catch { return url; } })
+      );
+      setRefImages((prev) => [...prev, ...compressed]);
+    }
+
+    if (textFiles.length) {
+      const texts = (await Promise.all(textFiles.map(async (file) => {
+        try {
+          return await readFileAsText(file);
+        } catch {
+          return "";
+        }
+      }))).map((text) => String(text || "").trim()).filter(Boolean);
+      if (texts.length) {
+        setPrompt((prev) => [String(prev || "").trim(), ...texts].filter(Boolean).join("\n\n"));
+      }
+    }
   };
 
   const handlePaste = (event) => {
@@ -831,9 +1258,148 @@ export default function ChatPage() {
   const handleSubmit = async (override = null) => {
     const activePrompt = override?.prompt ?? prompt;
     const activeRefImages = Array.isArray(override?.refImages) ? override.refImages : refImages;
+    const allowConcurrent = Boolean(override?.allowConcurrent);
+    const collectResult = Boolean(override?.collectResult);
+    const suppressUserMessage = Boolean(override?.suppressUserMessage);
+    const hideGenerationCard = Boolean(override?.hideGenerationCard);
     const text = String(activePrompt || "").trim();
-    if (!text && activeRefImages.length === 0) return;
-    if (isGenerating) return;
+    if (!override?.skipBatch && !collectResult && detectFeishuWaCommand(text)) {
+      if (!text) return undefined;
+      if (!allowConcurrent && isGenerating) return { aborted: true };
+      const userMsg = createMessage("user", text);
+      setMessages((prev) => [...prev, userMsg]);
+      setPrompt("");
+      setRefImages([]);
+      setGenerationStage("understanding");
+      setIsGenerating(true);
+      try {
+        const result = await runFeishuWaCommand(text);
+        setMessages((prev) => [...prev, createMessage("assistant", result.reply, {
+          images: result.images,
+          modelLabel: "飞书表格助手",
+        })]);
+      } catch (error) {
+        setMessages((prev) => [...prev, createMessage("assistant", error?.message || "飞书表格指令处理失败", { modelLabel: "飞书表格助手" })]);
+      } finally {
+        setIsGenerating(false);
+        setGenerationStage("understanding");
+      }
+      return undefined;
+    }
+    let batchWaPrompts = [];
+    let feishuBatchRequest = null;
+    if (!override?.skipBatch) {
+      feishuBatchRequest = parseFeishuWaBatchRequest(text);
+      batchWaPrompts = feishuBatchRequest
+        ? await fetchFeishuWaBatchPrompts(feishuBatchRequest)
+        : parseBatchWaTemplatePrompts(text);
+    }
+    if (batchWaPrompts.length > 1 || (feishuBatchRequest && batchWaPrompts.length > 0)) {
+      const total = batchWaPrompts.length;
+      const userMsg = createMessage("user", text);
+      const batchMessage = createMessage("assistant", `批量 WA 海报生成中：已完成 0/${total}。`, {
+        modelLabel: "批量 WA",
+        batchWaStopped: false,
+        batchWaItems: batchWaPrompts.map((item) => ({
+          id: `wa-${item.index}`,
+          label: item.label || `第 ${item.index + 1} 张`,
+          status: "queued",
+          attempts: 0,
+          urls: [],
+          error: "",
+        })),
+      });
+      batchWaStoppedRef.current = false;
+      setMessages((prev) => [...prev, userMsg, batchMessage]);
+      setPrompt("");
+      setRefImages([]);
+      setGenerationStage("generating");
+      setIsGenerating(true);
+
+      const updateBatchMessage = (updater) => {
+        setMessages((prev) => prev.map((message) => {
+          if (message.id !== batchMessage.id) return message;
+          const nextItems = updater(Array.isArray(message.batchWaItems) ? message.batchWaItems : []);
+          const completed = nextItems.filter((item) => item.status === "success").length;
+          const failed = nextItems.filter((item) => item.status === "failed").length;
+          const stopped = nextItems.filter((item) => item.status === "stopped").length;
+          const done = completed + failed + stopped;
+          const nextText = batchWaStoppedRef.current
+            ? `批量 WA 海报已停止：已完成 ${completed}/${total}。`
+            : done >= total
+              ? `批量 WA 海报生成完成：已完成 ${completed}/${total}。`
+              : `批量 WA 海报生成中：已完成 ${completed}/${total}。`;
+          return { ...message, text: nextText, batchWaItems: nextItems, batchWaStopped: batchWaStoppedRef.current };
+        }));
+      };
+
+      await runWithConcurrency(batchWaPrompts, BATCH_WA_CONCURRENCY, async (item) => {
+        let attempt = 0;
+        while (!batchWaStoppedRef.current) {
+          attempt += 1;
+          updateBatchMessage((items) => items.map((current) => (
+            current.id === `wa-${item.index}`
+              ? { ...current, status: attempt > 1 ? "retrying" : "generating", attempts: attempt, error: "" }
+              : current
+          )));
+          const result = await handleSubmit({
+            prompt: item.prompt,
+            refImages: activeRefImages,
+            skipBatch: true,
+            allowConcurrent: true,
+            suppressUserMessage: true,
+            collectResult: true,
+            hideGenerationCard: true,
+          });
+          if (result?.aborted || batchWaStoppedRef.current) return;
+          if (Array.isArray(result?.urls) && result.urls.length > 0) {
+            updateBatchMessage((items) => items.map((current) => (
+              current.id === `wa-${item.index}`
+                ? { ...current, status: "success", urls: result.urls, attempts: attempt, error: "", feishuStatus: item.recordId ? "uploading" : "" }
+                : current
+            )));
+            if (item.recordId) {
+              try {
+                await uploadFeishuWaImage({
+                  recordId: item.recordId,
+                  imageUrl: result.urls[0],
+                  name: `wa-${item.index + 1}-${Date.now()}.png`,
+                });
+                updateBatchMessage((items) => items.map((current) => (
+                  current.id === `wa-${item.index}`
+                    ? { ...current, feishuStatus: "success", feishuError: "" }
+                    : current
+                )));
+              } catch (error) {
+                updateBatchMessage((items) => items.map((current) => (
+                  current.id === `wa-${item.index}`
+                    ? { ...current, feishuStatus: "failed", feishuError: error?.message || "飞书回填失败" }
+                    : current
+                )));
+              }
+            }
+            return;
+          }
+          updateBatchMessage((items) => items.map((current) => (
+            current.id === `wa-${item.index}`
+              ? { ...current, status: "retrying", attempts: attempt, error: result?.error || "生成失败，正在重试" }
+              : current
+          )));
+          await wait(Math.min(1500 + attempt * 500, 8000));
+        }
+      });
+
+      updateBatchMessage((items) => items.map((item) => (
+        item.status === "queued" || item.status === "generating" || item.status === "retrying"
+          ? { ...item, status: "stopped", error: "已停止" }
+          : item
+      )));
+      setIsGenerating(false);
+      setGenerationStage("understanding");
+      return;
+    }
+    if (!text && activeRefImages.length === 0) return collectResult ? { urls: [] } : undefined;
+    if (!allowConcurrent && isGenerating) return { aborted: true };
     const qualityFixPrompt = buildWaQualityFixPrompt(override?.qualityCheck);
 
     // ── WA 模板 / EZfamily / EZlogo 关键词自动触发参考图 ─────────────
@@ -860,20 +1426,28 @@ export default function ChatPage() {
       attachments: [],
     }));
 
-    setMessages((prev) => [...prev, userMsg]);
-    setPrompt("");
-    setRefImages([]);
-    setGenerationStage("understanding");
-    setIsGenerating(true);
+    if (!suppressUserMessage) {
+      setMessages((prev) => [...prev, userMsg]);
+      setPrompt("");
+      setRefImages([]);
+    }
+    if (!hideGenerationCard) {
+      setGenerationStage("understanding");
+      setIsGenerating(true);
+    }
 
     if (waTemplateRequest) {
       try {
         const templateImage = await fetchImageAsDataUrl(`${WA_TEMPLATE_ASSET_URL}?random=1`);
         if (templateImage) autoRefImages.push(templateImage);
         const role = ezFamilyRole || chooseWaTemplateIpRole(waTemplateRequest);
-        autoRefImages.push(...await fetchEzFamilyReferenceImages(role));
+        const roleReferenceImages = await fetchEzFamilyReferenceImages(role);
+        autoRefImages.push(...roleReferenceImages);
         const lockupImage = await fetchImageAsDataUrl(WA_LOCKUP_ASSET_URL);
         if (lockupImage) autoRefImages.push(lockupImage);
+        if (String(role || "").toLowerCase() === "robot") {
+          autoRefImages.push(...roleReferenceImages);
+        }
         if (Math.random() < 0.28) {
           const smileLogoImage = await fetchImageAsDataUrl(WA_SMILE_LOGO_ASSET_URL);
           if (smileLogoImage) autoRefImages.push(smileLogoImage);
@@ -931,10 +1505,16 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
     let activeClientRequestId = "";
 
     const abortController = new AbortController();
-    abortControllerRef.current = abortController;
+    if (collectResult) {
+      batchWaAbortControllersRef.current.add(abortController);
+    } else {
+      abortControllerRef.current = abortController;
+    }
 
     try {
-      await showGenerationStage("understanding", GENERATION_STAGE_MIN_MS, abortController.signal);
+      if (!hideGenerationCard) {
+        await showGenerationStage("understanding", GENERATION_STAGE_MIN_MS, abortController.signal);
+      }
       const plan = bypassPlanner
         ? {
             action: "generate",
@@ -958,12 +1538,16 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
       const assistantText = String(plan.assistantText || "").trim();
 
       if (plan.action === "reply") {
-        setMessages((prev) => [...prev, createMessage("assistant", assistantText || "我来给你一些建议。", { modelLabel: plan.assistantModel })]);
-        return;
+        if (!suppressUserMessage) {
+          setMessages((prev) => [...prev, createMessage("assistant", assistantText || "我来给你一些建议。", { modelLabel: plan.assistantModel })]);
+        }
+        return collectResult ? { urls: [], reply: true } : undefined;
       }
 
       // ── 生图逻辑与悬浮框完全一致 ──
-      await showGenerationStage("preparing", GENERATION_STAGE_MIN_MS, abortController.signal);
+      if (!hideGenerationCard) {
+        await showGenerationStage("preparing", GENERATION_STAGE_MIN_MS, abortController.signal);
+      }
       const hasImages = submittedImages.length > 0;
       const isAgentMode = resolvedMode === "agent";
       const firstRefMeta = hasImages ? await detectRefImageMeta(submittedImages[0]) : null;
@@ -989,7 +1573,9 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
         ? { prompt: finalPrompt, image: submittedImages.length === 1 ? submittedImages[0] : submittedImages, model: generationModel, image_size: imageSize, num: 1, service_tier: isAgentMode ? agentParams.service_tier : FLOATING_DEFAULT_SERVICE_TIER, clientRequestId: activeClientRequestId }
         : { prompt: finalPrompt, model: generationModel, image_size: imageSize, num: 1, ref_images: submittedImages, service_tier: isAgentMode ? agentParams.service_tier : FLOATING_DEFAULT_SERVICE_TIER, clientRequestId: activeClientRequestId };
 
-      setGenerationStage("generating");
+      if (!hideGenerationCard) {
+        setGenerationStage("generating");
+      }
       const requestPromise = (async () => {
         const genRes = await fetchWithTimeout(endpoint, {
           method: "POST",
@@ -1014,7 +1600,9 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
       const urls = Array.isArray(genData.data?.urls) ? genData.data.urls.filter(Boolean) : [];
       if (!urls.length) throw new Error("未返回结果图片");
 
-      await showGenerationStage("saving", GENERATION_SAVING_STAGE_MS, abortController.signal);
+      if (!hideGenerationCard) {
+        await showGenerationStage("saving", GENERATION_SAVING_STAGE_MS, abortController.signal);
+      }
       const assistantMessage = createMessage(
         "assistant",
         assistantText || (resolvedMode === "agent" ? "我已经按你的要求整理并生成了一版结果。" : "我已经帮你快速生成了一版结果。"),
@@ -1025,9 +1613,11 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
           modelLabel: `${plan.assistantModel || ""} · ${generationModel}`.replace(/^ · /, ""),
         }
       );
-      setMessages((prev) => [...prev, assistantMessage]);
+      if (!suppressUserMessage) {
+        setMessages((prev) => [...prev, assistantMessage]);
+      }
 
-      if (waTemplateRequest) {
+      if (waTemplateRequest && !suppressUserMessage) {
         void withTimeout(runWaQualityCheck(urls[0]), WA_QUALITY_CLIENT_TIMEOUT_MS, null)
           .then((qualityCheck) => {
             if (!qualityCheck) return;
@@ -1056,7 +1646,11 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
         window.localStorage.setItem(IMAGE_HISTORY_KEY, JSON.stringify(mergedHistory));
       } catch {}
       setImageHistory(mergedHistory);
+      return collectResult ? { urls, modelLabel: `${plan.assistantModel || ""} · ${generationModel}`.replace(/^ · /, "") } : undefined;
     } catch (err) {
+      if (collectResult && err?.name === "AbortError") {
+        return { aborted: true, urls: [] };
+      }
       if (err?.name === "AbortError") {
         // 用户手动取消，不添加错误消息
       } else {
@@ -1064,21 +1658,76 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
           const recovered = await recoverGenerationResult(activeClientRequestId);
           const recoveredUrls = Array.isArray(recovered?.data?.urls) ? recovered.data.urls.filter(Boolean) : [];
           if (recoveredUrls.length > 0) {
-            setMessages((prev) => [...prev, createMessage("assistant", "刚刚连接中断，但我已经恢复到生成结果。", {
-              images: recoveredUrls,
-              modelLabel: "已恢复的生成结果",
-            })]);
-            return;
+            if (!suppressUserMessage) {
+              setMessages((prev) => [...prev, createMessage("assistant", "刚刚连接中断，但我已经恢复到生成结果。", {
+                images: recoveredUrls,
+                modelLabel: "已恢复的生成结果",
+              })]);
+            }
+            return collectResult ? { urls: recoveredUrls, recovered: true } : undefined;
           }
         }
-        setMessages((prev) => [...prev, createMessage("assistant", formatGenerationError(err))]);
+        if (!suppressUserMessage) {
+          setMessages((prev) => [...prev, createMessage("assistant", formatGenerationError(err))]);
+        }
       }
+      return collectResult ? { urls: [], error: err?.message || "生成失败" } : undefined;
     } finally {
-      setIsGenerating(false);
-      setGenerationStage("understanding");
-      abortControllerRef.current = null;
+      if (collectResult) {
+        batchWaAbortControllersRef.current.delete(abortController);
+      }
+      if (!hideGenerationCard) {
+        setIsGenerating(false);
+        setGenerationStage("understanding");
+      }
+      if (!collectResult) {
+        abortControllerRef.current = null;
+      }
     }
   };
+  handleSubmitRef.current = handleSubmit;
+
+  useEffect(() => {
+    let stopped = false;
+
+    const markTask = async (taskId, action, error = "") => {
+      if (!taskId) return;
+      await fetch("/api/feishu-wa-tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action, taskId, error }),
+      }).catch(() => {});
+    };
+
+    const pollFeishuTask = async () => {
+      if (stopped || isGenerating || feishuWaTaskPollingRef.current) return;
+      feishuWaTaskPollingRef.current = true;
+      try {
+        const res = await fetch("/api/feishu-wa-tasks?action=claim&clientId=chat", { cache: "no-store" });
+        const data = await res.json().catch(() => ({}));
+        const task = data?.data?.task;
+        if (!res.ok || !task?.id || !task?.prompt || stopped) return;
+        setMessages((prev) => [...prev, createMessage("assistant", `已接收飞书指令，开始同步到一键创作：${task.prompt}`, {
+          modelLabel: "飞书同步",
+        })]);
+        try {
+          await handleSubmitRef.current?.({ prompt: task.prompt });
+          await markTask(task.id, "complete");
+        } catch (error) {
+          await markTask(task.id, "fail", error?.message || "一键创作任务执行失败");
+        }
+      } finally {
+        feishuWaTaskPollingRef.current = false;
+      }
+    };
+
+    void pollFeishuTask();
+    const timer = window.setInterval(() => void pollFeishuTask(), 5000);
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+    };
+  }, [isGenerating]);
 
   const handleRegenerateMessage = (messageId) => {
     if (isGenerating) return;
@@ -1096,6 +1745,9 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
 
   const handleCancel = () => {
     abortControllerRef.current?.abort();
+    batchWaAbortControllersRef.current.forEach((controller) => controller.abort());
+    batchWaAbortControllersRef.current.clear();
+    batchWaStoppedRef.current = true;
     abortControllerRef.current = null;
     setIsGenerating(false);
     setGenerationStage("understanding");
@@ -1104,6 +1756,11 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
   if (!mounted) return null;
 
   const canSubmit = Boolean(String(prompt || "").trim()) || refImages.length > 0;
+  const hasActiveBatchWa = messages.some((message) => (
+    Array.isArray(message.batchWaItems)
+    && message.batchWaItems.some((item) => item.status === "queued" || item.status === "generating" || item.status === "retrying")
+    && !message.batchWaStopped
+  ));
 
   return (
     <div
@@ -1119,8 +1776,8 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
           <div className={`absolute inset-3 rounded-3xl border-2 border-dashed ${isLightTheme ? "border-[#9CFF3F]/70 bg-[#9CFF3F]/15 backdrop-blur-sm" : "border-[#9CFF3F]/60 bg-[#9CFF3F]/10 backdrop-blur-sm"}`} />
           <div className="relative z-10 flex flex-col items-center gap-2">
             <div className={`text-4xl`}>🖼️</div>
-            <p className="text-base font-medium text-[#9CFF3F]">松开即可添加为参考图</p>
-            <p className="text-xs text-[#9CFF3F]/70">支持 JPG、PNG、WebP、GIF 等图片格式</p>
+            <p className="text-base font-medium text-[#9CFF3F]">松开即可添加文件</p>
+            <p className="text-xs text-[#9CFF3F]/70">支持图片参考图，也支持 TXT 批量 WA 文案</p>
           </div>
         </div>
       )}
@@ -1494,6 +2151,17 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
                       </div>
                     )}
 
+                    {Array.isArray(message.batchWaItems) && message.batchWaItems.length > 0 ? (
+                      <BatchWaResultGrid
+                        message={message}
+                        isLightTheme={isLightTheme}
+                        isGenerating={isGenerating}
+                        onStop={handleStopBatchWa}
+                        onPreview={setPreviewSrc}
+                        onDownload={handleDownloadImage}
+                      />
+                    ) : null}
+
                     {message.role === "user" && (
                       <div className="flex items-center justify-end gap-3 w-full px-0.5 mt-1">
                         <button
@@ -1535,7 +2203,7 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
                 </div>
               ))}
 
-              {isGenerating && (
+              {isGenerating && !hasActiveBatchWa && (
                 <div className="flex gap-4 justify-start items-start">
                   <div className="w-8 h-8 shrink-0 mt-0.5 flex items-center justify-center">
                     <BrandLogo className="h-6" showText={false} />
@@ -1598,7 +2266,7 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
 
       {/* ── Floating input ── */}
       <div
-        className={`absolute bottom-0 right-0 pointer-events-none ${chatMode === "inspiration" ? "left-0 lg:left-auto" : "left-0"}`}
+        className={`absolute bottom-0 right-0 z-[60] pointer-events-none ${chatMode === "inspiration" ? "left-0 lg:left-auto" : "left-0"}`}
         style={chatMode === "inspiration" ? { left: inspirationPanelWidth } : undefined}
       >
         {/* Gradient fade */}

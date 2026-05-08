@@ -19,6 +19,7 @@ import {
   detectOneClickEntryMode,
   getLatestGeneratedImages,
   isObviousOneClickGenerateRequest,
+  parseBatchWaTemplatePrompts,
   parseWaTemplateRequest,
   shouldReusePreviousGeneratedImages,
 } from "@/lib/oneClickCreationRules";
@@ -49,9 +50,141 @@ const GPT_IMAGE_2_CLIENT_TIMEOUT_MS = 10 * 60 * 1000;
 const WA_QUALITY_CLIENT_TIMEOUT_MS = 18 * 1000;
 const GENERATION_RECOVERY_POLL_MS = 2000;
 const GENERATION_RECOVERY_MAX_ATTEMPTS = Math.ceil((12 * 60 * 1000) / GENERATION_RECOVERY_POLL_MS);
+const BATCH_WA_CONCURRENCY = 10;
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function runWithConcurrency(items = [], limit = 5, worker) {
+  let cursor = 0;
+  const workerCount = Math.min(Math.max(Number(limit) || 1, 1), items.length);
+  await Promise.all(Array.from({ length: workerCount }, async () => {
+    while (cursor < items.length) {
+      const item = items[cursor];
+      cursor += 1;
+      await worker(item);
+    }
+  }));
+}
+
+function restoreInterruptedBatchMessages(messages = []) {
+  if (!Array.isArray(messages)) return [];
+  return messages.map((message) => {
+    if (!Array.isArray(message?.batchWaItems)) return message;
+    const hadActiveItems = message.batchWaItems.some((item) => (
+      item.status === "queued"
+      || item.status === "generating"
+      || item.status === "retrying"
+      || item.feishuStatus === "uploading"
+    ));
+    if (!hadActiveItems) return message;
+    const nextItems = message.batchWaItems.map((item) => {
+      if (item.status === "success") {
+        return item.feishuStatus === "uploading"
+          ? { ...item, feishuStatus: "failed", feishuError: "页面刷新/热更新中断，飞书回填状态未知" }
+          : item;
+      }
+      if (item.status === "queued" || item.status === "generating" || item.status === "retrying") {
+        return { ...item, status: "stopped", error: "页面刷新/热更新中断，可重新发起批量任务" };
+      }
+      return item;
+    });
+    const completed = nextItems.filter((item) => item.status === "success").length;
+    return {
+      ...message,
+      text: `批量 WA 海报已中断：已完成 ${completed}/${nextItems.length}。`,
+      batchWaStopped: true,
+      batchWaItems: nextItems,
+    };
+  });
+}
+
+function chineseNumberToInt(value) {
+  const text = String(value || "").trim();
+  if (/^\d+$/.test(text)) return Number(text);
+  const digits = { 零: 0, 一: 1, 二: 2, 两: 2, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 };
+  if (text === "十") return 10;
+  if (text.includes("十")) {
+    const [tenPart, onePart] = text.split("十");
+    return (digits[tenPart] || 1) * 10 + (digits[onePart] || 0);
+  }
+  return digits[text] || 0;
+}
+
+function parseFeishuWaBatchRequest(text = "") {
+  const source = String(text || "").replace(/\s+/g, "");
+  if (!/(飞书|表格|多维表|base|文档)/i.test(source) || !/(WA|wa|海报)/i.test(source)) return null;
+  if (!/(生成|制作|生图|批量生成|批量制作)/.test(source)) return null;
+  const rangeMatch = source.match(/第([0-9一二两三四五六七八九十]+)(?:张|条|个)?(?:到|至|-|—)(?:第)?([0-9一二两三四五六七八九十]+)(?:张|条|个)?/);
+  if (rangeMatch) {
+    const start = chineseNumberToInt(rangeMatch[1]);
+    const end = chineseNumberToInt(rangeMatch[2]);
+    if (start > 0 && end >= start) return { start, end, limit: Math.min(end - start + 1, 50) };
+  }
+  const singleMatch = source.match(/第([0-9一二两三四五六七八九十]+)(?:张|条|个)/);
+  if (singleMatch) {
+    const start = chineseNumberToInt(singleMatch[1]);
+    if (start > 0) return { start, end: start, limit: 1 };
+  }
+  const tailMatch = source.match(/(?:后|最后)([0-9一二两三四五六七八九十]+)(?:张|条|个)/);
+  if (tailMatch) {
+    const limit = chineseNumberToInt(tailMatch[1]);
+    if (limit > 0) return { limit: Math.min(limit, 50), tail: true };
+  }
+  const headMatch = source.match(/前([0-9一二两三四五六七八九十]+)(?:张|条|个)/);
+  if (headMatch) {
+    const limit = chineseNumberToInt(headMatch[1]);
+    if (limit > 0) return { limit: Math.min(limit, 50) };
+  }
+  return null;
+}
+
+async function fetchFeishuWaBatchPrompts(request) {
+  const payload = typeof request === "number" ? { limit: request } : request;
+  const res = await fetch("/api/feishu-wa-batch", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "prepare", ...(payload || {}) }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || "读取飞书 WA 表格失败");
+  return Array.isArray(data?.data?.items) ? data.data.items : [];
+}
+
+async function uploadFeishuWaImage({ recordId, imageUrl, name }) {
+  if (!recordId || !imageUrl) return;
+  const res = await fetch("/api/feishu-wa-batch", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ action: "upload", recordId, imageUrl, name }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || "飞书回填失败");
+  return data;
+}
+
+function detectFeishuWaCommand(text = "") {
+  const source = String(text || "").replace(/\s+/g, "");
+  if (!source) return false;
+  if (/生成前[0-9一二两三四五六七八九十]+张.*?(WA|wa|海报)/i.test(source)) return false;
+  const hasTableTarget = /(飞书|表格|文档|AI设计图|ai设计图|Robot|robot|机器人|第[0-9一二两三四五六七八九十]+张)/i.test(source);
+  const hasAction = /(修改|改成|改为|设为|设置为|清空|删除|移除|减少|少一些|少一点|不要太多|统计|查看|多少)/.test(source);
+  return hasTableTarget && hasAction;
+}
+
+async function runFeishuWaCommand(text) {
+  const res = await fetch("/api/feishu-wa-command", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || "飞书表格指令处理失败");
+  return {
+    reply: data?.data?.reply || "飞书表格指令已处理。",
+    images: Array.isArray(data?.data?.images) ? data.data.images : [],
+  };
 }
 
 function createTimeoutError(message = "请求等待时间过长，请稍后重试。") {
@@ -367,6 +500,7 @@ function buildAttachmentSummary(file, textContent = "") {
     mimeType: file.type || "",
     size: file.size || 0,
     excerpt,
+    content: String(textContent || ""),
   };
 }
 
@@ -434,6 +568,11 @@ async function fetchEzFamilyReferenceImages(role) {
       const items = Array.isArray(data.items) ? data.items.filter((item) => item?.src) : [];
       if (items.length > 0) {
         const roleKey = roleText.toLowerCase();
+        if (roleKey === "robot") {
+          const standardItem = items.find((item) => String(item?.name || "").includes("Robot标准形态"));
+          const standardImage = standardItem ? await fetchImageAsDataUrl(standardItem.src) : null;
+          if (standardImage) return [standardImage];
+        }
         const previousName = lastEzFamilyReferenceByRole.get(roleKey);
         const candidateItems = items.length > 1
           ? items.filter((item) => String(item?.name || item?.src || "") !== previousName)
@@ -865,6 +1004,10 @@ export default function HomePage() {
   const [floatingRuntimeMode, setFloatingRuntimeMode] = useState("quick");
   const [isModeMenuOpen, setIsModeMenuOpen] = useState(false);
   const floatingStorageReadyRef = useRef(false);
+  const batchWaStoppedRef = useRef(false);
+  const batchWaAbortControllersRef = useRef(new Set());
+  const feishuWaTaskPollingRef = useRef(false);
+  const handleFloatingSubmitRef = useRef(null);
   const effectShowcaseRef = useRef(null);
   const businessShowcaseRef = useRef(null);
   const bottomSummaryRef = useRef(null);
@@ -1038,7 +1181,7 @@ export default function HomePage() {
         setFloatingPrompt(String(session.prompt || ""));
         setFloatingRefImages(sanitizeFloatingImageList(session.refImages, 6));
         setFloatingAttachments(sanitizeFloatingAttachments(session.attachments, 8));
-        setFloatingMessages(sanitizeFloatingMessages(session.messages, 20));
+        setFloatingMessages(sanitizeFloatingMessages(restoreInterruptedBatchMessages(session.messages), 20));
         setFloatingRuntimeMode(session.runtimeMode === "agent" ? "agent" : "quick");
       }
     } catch {
@@ -1209,12 +1352,190 @@ export default function HomePage() {
     setFloatingMessages((prev) => prev.filter((message) => message.id !== messageId));
   };
 
+  const handleFloatingStopBatchWa = () => {
+    batchWaStoppedRef.current = true;
+    batchWaAbortControllersRef.current.forEach((controller) => controller.abort());
+    batchWaAbortControllersRef.current.clear();
+    setFloatingIsGenerating(false);
+    setFloatingGenerationStage("understanding");
+    setFloatingMessages((prev) => prev.map((message) => {
+      if (!Array.isArray(message.batchWaItems)) return message;
+      const hasActiveItems = message.batchWaItems.some((item) => item.status === "queued" || item.status === "generating" || item.status === "retrying");
+      if (!hasActiveItems) return message;
+      return {
+        ...message,
+        text: "批量 WA 海报已停止。",
+        batchWaStopped: true,
+        batchWaItems: message.batchWaItems.map((item) => (
+          item.status === "success" ? item : { ...item, status: "stopped", error: "已停止" }
+        )),
+      };
+    }));
+  };
+
   const handleFloatingSubmit = async (override = null) => {
     const activePrompt = override?.prompt ?? floatingPrompt;
     const activeRefImages = Array.isArray(override?.refImages) ? override.refImages : floatingRefImages;
     const activeAttachments = Array.isArray(override?.attachments) ? override.attachments : floatingAttachments;
+    const allowConcurrent = Boolean(override?.allowConcurrent);
+    const collectResult = Boolean(override?.collectResult);
+    const suppressUserMessage = Boolean(override?.suppressUserMessage);
+    const hideGenerationCard = Boolean(override?.hideGenerationCard);
     const prompt = String(activePrompt || "").trim();
-    if (!prompt && activeRefImages.length === 0) return;
+    const combinedPromptText = [
+      prompt,
+      ...activeAttachments.map((item) => String(item?.content || item?.excerpt || "").trim()).filter(Boolean),
+    ].filter(Boolean).join("\n\n");
+    if (!override?.skipBatch && !collectResult && detectFeishuWaCommand(combinedPromptText)) {
+      if (!combinedPromptText) return undefined;
+      if (!allowConcurrent && floatingIsGenerating) return { aborted: true };
+      const userMessage = createFloatingMessage("user", prompt || combinedPromptText, {
+        attachments: activeAttachments,
+      });
+      setFloatingMessages((prev) => [...prev, userMessage]);
+      setFloatingPrompt("");
+      setFloatingRefImages([]);
+      setFloatingAttachments([]);
+      setFloatingRuntimeMode("agent");
+      setFloatingGenerationStage("understanding");
+      setFloatingIsGenerating(true);
+      setFloatingOutputError("");
+      try {
+        const result = await runFeishuWaCommand(combinedPromptText);
+        setFloatingMessages((prev) => [...prev, createFloatingMessage("assistant", result.reply, {
+          images: result.images,
+          modelLabel: "飞书表格助手",
+        })]);
+      } catch (error) {
+        setFloatingMessages((prev) => [...prev, createFloatingMessage("assistant", error?.message || "飞书表格指令处理失败", { modelLabel: "飞书表格助手" })]);
+      } finally {
+        setFloatingIsGenerating(false);
+        setFloatingGenerationStage("understanding");
+      }
+      return undefined;
+    }
+    let batchWaPrompts = [];
+    let feishuBatchRequest = null;
+    if (!override?.skipBatch) {
+      feishuBatchRequest = parseFeishuWaBatchRequest(combinedPromptText);
+      batchWaPrompts = feishuBatchRequest
+        ? await fetchFeishuWaBatchPrompts(feishuBatchRequest)
+        : parseBatchWaTemplatePrompts(combinedPromptText);
+    }
+    if (batchWaPrompts.length > 1 || (feishuBatchRequest && batchWaPrompts.length > 0)) {
+      const total = batchWaPrompts.length;
+      const userMessage = createFloatingMessage("user", prompt || `批量生成 WA 海报（${total} 张）`, {
+        attachments: activeAttachments,
+      });
+      const batchMessage = createFloatingMessage("assistant", `批量 WA 海报生成中：已完成 0/${total}。`, {
+        modelLabel: "批量 WA",
+        batchWaTotal: total,
+        batchWaStopped: false,
+        batchWaItems: batchWaPrompts.map((item) => ({
+          id: `wa-${item.index}`,
+          label: item.label || `第 ${item.index + 1} 张`,
+          status: "queued",
+          attempts: 0,
+          urls: [],
+          error: "",
+        })),
+      });
+      batchWaStoppedRef.current = false;
+      setFloatingMessages((prev) => [...prev, userMessage, batchMessage]);
+      setFloatingPrompt("");
+      setFloatingRefImages([]);
+      setFloatingAttachments([]);
+      setFloatingRuntimeMode("agent");
+      setFloatingGenerationStage("generating");
+      setFloatingIsGenerating(true);
+      setFloatingOutputError("");
+
+      const updateBatchMessage = (updater) => {
+        setFloatingMessages((prev) => prev.map((message) => {
+          if (message.id !== batchMessage.id) return message;
+          const nextItems = updater(Array.isArray(message.batchWaItems) ? message.batchWaItems : []);
+          const completed = nextItems.filter((item) => item.status === "success").length;
+          const failed = nextItems.filter((item) => item.status === "failed").length;
+          const stopped = nextItems.filter((item) => item.status === "stopped").length;
+          const done = completed + failed + stopped;
+          const text = batchWaStoppedRef.current
+            ? `批量 WA 海报已停止：已完成 ${completed}/${total}。`
+            : done >= total
+              ? `批量 WA 海报生成完成：已完成 ${completed}/${total}。`
+              : `批量 WA 海报生成中：已完成 ${completed}/${total}。`;
+          return { ...message, text, batchWaItems: nextItems, batchWaStopped: batchWaStoppedRef.current };
+        }));
+      };
+
+      await runWithConcurrency(batchWaPrompts, BATCH_WA_CONCURRENCY, async (item) => {
+        let attempt = 0;
+        while (!batchWaStoppedRef.current) {
+          attempt += 1;
+          updateBatchMessage((items) => items.map((current) => (
+            current.id === `wa-${item.index}`
+              ? { ...current, status: attempt > 1 ? "retrying" : "generating", attempts: attempt, error: "" }
+              : current
+          )));
+          const result = await handleFloatingSubmit({
+            prompt: item.prompt,
+            refImages: activeRefImages,
+            attachments: [],
+            skipBatch: true,
+            allowConcurrent: true,
+            suppressUserMessage: true,
+            collectResult: true,
+            hideGenerationCard: true,
+            generationLabel: item.label,
+          });
+          if (result?.aborted || batchWaStoppedRef.current) return;
+          if (Array.isArray(result?.urls) && result.urls.length > 0) {
+            updateBatchMessage((items) => items.map((current) => (
+              current.id === `wa-${item.index}`
+                ? { ...current, status: "success", urls: result.urls, attempts: attempt, error: "", feishuStatus: item.recordId ? "uploading" : "" }
+                : current
+            )));
+            if (item.recordId) {
+              try {
+                await uploadFeishuWaImage({
+                  recordId: item.recordId,
+                  imageUrl: result.urls[0],
+                  name: `wa-${item.index + 1}-${Date.now()}.png`,
+                });
+                updateBatchMessage((items) => items.map((current) => (
+                  current.id === `wa-${item.index}`
+                    ? { ...current, feishuStatus: "success", feishuError: "" }
+                    : current
+                )));
+              } catch (error) {
+                updateBatchMessage((items) => items.map((current) => (
+                  current.id === `wa-${item.index}`
+                    ? { ...current, feishuStatus: "failed", feishuError: error?.message || "飞书回填失败" }
+                    : current
+                )));
+              }
+            }
+            return;
+          }
+          updateBatchMessage((items) => items.map((current) => (
+            current.id === `wa-${item.index}`
+              ? { ...current, status: "retrying", attempts: attempt, error: result?.error || "生成失败，正在重试" }
+              : current
+          )));
+          await wait(Math.min(1500 + attempt * 500, 8000));
+        }
+      });
+
+      updateBatchMessage((items) => items.map((item) => (
+        item.status === "queued" || item.status === "generating" || item.status === "retrying"
+          ? { ...item, status: "stopped", error: "已停止" }
+          : item
+      )));
+      setFloatingIsGenerating(false);
+      setFloatingGenerationStage("understanding");
+      return;
+    }
+    if (!allowConcurrent && floatingIsGenerating) return { aborted: true };
+    if (!prompt && activeRefImages.length === 0) return collectResult ? { urls: [] } : undefined;
     const qualityFixPrompt = buildWaQualityFixPrompt(override?.qualityCheck);
 
     // ── WA 模板 / EZfamily / EZlogo 关键词自动触发参考图 ─────────────
@@ -1245,12 +1566,16 @@ export default function HomePage() {
       attachments: Array.isArray(message.attachments) ? message.attachments.slice(0, 4) : [],
     }));
 
-    setFloatingMessages((prev) => [...prev, nextUserMessage]);
-    setFloatingPrompt("");
-    setFloatingRefImages([]);
-    setFloatingAttachments([]);
-    setFloatingGenerationStage("understanding");
-    setFloatingIsGenerating(true);
+    if (!suppressUserMessage) {
+      setFloatingMessages((prev) => [...prev, nextUserMessage]);
+      setFloatingPrompt("");
+      setFloatingRefImages([]);
+      setFloatingAttachments([]);
+    }
+    if (!hideGenerationCard) {
+      setFloatingGenerationStage("understanding");
+      setFloatingIsGenerating(true);
+    }
     setFloatingOutputError("");
 
     if (waTemplateRequest) {
@@ -1258,9 +1583,13 @@ export default function HomePage() {
         const templateImage = await fetchImageAsDataUrl(`${WA_TEMPLATE_ASSET_URL}?random=1`);
         if (templateImage) autoRefImages.push(templateImage);
         const role = ezFamilyRole || chooseWaTemplateIpRole(waTemplateRequest);
-        autoRefImages.push(...await fetchEzFamilyReferenceImages(role));
+        const roleReferenceImages = await fetchEzFamilyReferenceImages(role);
+        autoRefImages.push(...roleReferenceImages);
         const lockupImage = await fetchImageAsDataUrl(WA_LOCKUP_ASSET_URL);
         if (lockupImage) autoRefImages.push(lockupImage);
+        if (String(role || "").toLowerCase() === "robot") {
+          autoRefImages.push(...roleReferenceImages);
+        }
         if (Math.random() < 0.28) {
           const smileLogoImage = await fetchImageAsDataUrl(WA_SMILE_LOGO_ASSET_URL);
           if (smileLogoImage) autoRefImages.push(smileLogoImage);
@@ -1321,9 +1650,12 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
     );
     setFloatingRuntimeMode(predictedMode);
     let activeClientRequestId = "";
+    let generationAbortController = null;
 
     try {
-      await showFloatingGenerationStage("understanding");
+      if (!hideGenerationCard) {
+        await showFloatingGenerationStage("understanding");
+      }
       const plan = bypassPlannerForDirectGenerate
         ? {
             action: "generate",
@@ -1355,16 +1687,20 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
       setFloatingRuntimeMode(resolvedMode);
 
       if (plan.action === "reply") {
-        setFloatingMessages((prev) => [
-          ...prev,
-          createFloatingMessage("assistant", assistantText || "我先给你一些建议，你也可以继续补充需求。", {
-            modelLabel: plan.assistantModel || "gpt-5.4",
-          }),
-        ]);
-        return;
+        if (!suppressUserMessage) {
+          setFloatingMessages((prev) => [
+            ...prev,
+            createFloatingMessage("assistant", assistantText || "我先给你一些建议，你也可以继续补充需求。", {
+              modelLabel: plan.assistantModel || "gpt-5.4",
+            }),
+          ]);
+        }
+        return collectResult ? { urls: [], reply: true } : undefined;
       }
 
-      await showFloatingGenerationStage("preparing");
+      if (!hideGenerationCard) {
+        await showFloatingGenerationStage("preparing");
+      }
       const hasImages = submittedImages.length > 0;
       const isAgentMode = resolvedMode === "agent";
       const generationPrompt = apiPromptText; // 场景二已增强，含人物替换指令
@@ -1413,8 +1749,13 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
             clientRequestId: activeClientRequestId,
           };
 
-      setFloatingGenerationStage("generating");
-      const generationAbortController = new AbortController();
+      if (!hideGenerationCard) {
+        setFloatingGenerationStage("generating");
+      }
+      generationAbortController = new AbortController();
+      if (collectResult) {
+        batchWaAbortControllersRef.current.add(generationAbortController);
+      }
       const requestPromise = (async () => {
         const res = await fetchWithTimeout(endpoint, {
           method: "POST",
@@ -1442,7 +1783,9 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
         throw new Error("未返回结果图片");
       }
 
-      await showFloatingGenerationStage("saving", GENERATION_SAVING_STAGE_MS);
+      if (!hideGenerationCard) {
+        await showFloatingGenerationStage("saving", GENERATION_SAVING_STAGE_MS);
+      }
       const assistantMessage = createFloatingMessage(
         "assistant",
         assistantText || (resolvedMode === "agent" ? "我已经按你的要求整理并生成了一版结果。" : "我已经帮你快速生成了一版结果。"),
@@ -1453,9 +1796,11 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
           modelLabel: `${plan.assistantModel || "gpt-5.4"} · ${generationModel}`,
         }
       );
-      setFloatingMessages((prev) => [...prev, assistantMessage]);
+      if (!suppressUserMessage) {
+        setFloatingMessages((prev) => [...prev, assistantMessage]);
+      }
 
-      if (waTemplateRequest) {
+      if (waTemplateRequest && !suppressUserMessage) {
         void withTimeout(runWaQualityCheck(urls[0]), WA_QUALITY_CLIENT_TIMEOUT_MS, null)
           .then((qualityCheck) => {
             if (!qualityCheck) return;
@@ -1467,32 +1812,89 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
             )));
           });
       }
+      return collectResult ? { urls, modelLabel: `${plan.assistantModel || "gpt-5.4"} · ${generationModel}` } : undefined;
     } catch (err) {
+      if (collectResult && err?.name === "AbortError") {
+        return { aborted: true, urls: [] };
+      }
       if (shouldAttemptGenerationRecovery(err)) {
         const recovered = await recoverGenerationResult(activeClientRequestId);
         const recoveredUrls = Array.isArray(recovered?.data?.urls) ? recovered.data.urls.filter(Boolean) : [];
         if (recoveredUrls.length > 0) {
-          setFloatingMessages((prev) => [
-            ...prev,
-            createFloatingMessage("assistant", "刚刚连接中断，但我已经恢复到生成结果。", {
-              images: recoveredUrls,
-              modelLabel: "已恢复的生成结果",
-            }),
-          ]);
+          if (!suppressUserMessage) {
+            setFloatingMessages((prev) => [
+              ...prev,
+              createFloatingMessage("assistant", "刚刚连接中断，但我已经恢复到生成结果。", {
+                images: recoveredUrls,
+                modelLabel: "已恢复的生成结果",
+              }),
+            ]);
+          }
           setFloatingOutputError("");
-          return;
+          return collectResult ? { urls: recoveredUrls, recovered: true } : undefined;
         }
       }
-      setFloatingMessages((prev) => [
-        ...prev,
-        createFloatingMessage("assistant", formatFloatingGenerationError(err)),
-      ]);
-      setFloatingOutputError("");
+      if (!suppressUserMessage) {
+        setFloatingMessages((prev) => [
+          ...prev,
+          createFloatingMessage("assistant", formatFloatingGenerationError(err)),
+        ]);
+        setFloatingOutputError("");
+      }
+      return collectResult ? { urls: [], error: err?.message || "生成失败" } : undefined;
     } finally {
-      setFloatingIsGenerating(false);
-      setFloatingGenerationStage("understanding");
+      if (collectResult && generationAbortController) {
+        batchWaAbortControllersRef.current.delete(generationAbortController);
+      }
+      if (!hideGenerationCard) {
+        setFloatingIsGenerating(false);
+        setFloatingGenerationStage("understanding");
+      }
     }
   };
+  handleFloatingSubmitRef.current = handleFloatingSubmit;
+
+  useEffect(() => {
+    let stopped = false;
+
+    const markTask = async (taskId, action, error = "") => {
+      if (!taskId) return;
+      await fetch("/api/feishu-wa-tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action, taskId, error }),
+      }).catch(() => {});
+    };
+
+    const pollFeishuTask = async () => {
+      if (stopped || floatingIsGenerating || feishuWaTaskPollingRef.current) return;
+      feishuWaTaskPollingRef.current = true;
+      try {
+        const res = await fetch("/api/feishu-wa-tasks?action=claim&clientId=floating", { cache: "no-store" });
+        const data = await res.json().catch(() => ({}));
+        const task = data?.data?.task;
+        if (!res.ok || !task?.id || !task?.prompt || stopped) return;
+        setFloatingMessages((prev) => [...prev, createFloatingMessage("assistant", `已接收飞书指令，开始同步到一键创作：${task.prompt}`, {
+          modelLabel: "飞书同步",
+        })]);
+        try {
+          await handleFloatingSubmitRef.current?.({ prompt: task.prompt });
+          await markTask(task.id, "complete");
+        } catch (error) {
+          await markTask(task.id, "fail", error?.message || "一键创作任务执行失败");
+        }
+      } finally {
+        feishuWaTaskPollingRef.current = false;
+      }
+    };
+
+    void pollFeishuTask();
+    const timer = window.setInterval(() => void pollFeishuTask(), 5000);
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+    };
+  }, [floatingIsGenerating]);
 
   const handleFloatingRegenerateMessage = (messageId) => {
     if (floatingIsGenerating) return;
@@ -2030,7 +2432,7 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
         onPreviewImageRemove={handleFloatingImageRemove}
         onAttachmentRemove={handleFloatingAttachmentRemove}
         onSubmit={handleFloatingSubmit}
-        canSubmit={Boolean(String(floatingPrompt || "").trim())}
+        canSubmit={Boolean(String(floatingPrompt || "").trim() || floatingAttachments.length)}
         isSubmitting={floatingIsGenerating}
         generationStage={getGenerationStageCopy(floatingGenerationStage)}
         entryMode={floatingEntryMode}
@@ -2043,6 +2445,7 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
         onDeleteHistory={handleDeleteFloatingHistory}
         onDeleteMessage={handleFloatingDeleteMessage}
         onRegenerateMessage={handleFloatingRegenerateMessage}
+        onStopBatchWa={handleFloatingStopBatchWa}
         onExpandFullscreen={handleExpandFullscreen}
         outputError={floatingOutputError}
         outputIdleText={

@@ -125,6 +125,17 @@ function getPanelPositionFromBall(position, panelSize, viewport) {
 }
 
 function ImageLightbox({ src, onClose }) {
+  const [retry, setRetry] = useState(0);
+  const [loaded, setLoaded] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const [slow, setSlow] = useState(false);
+  const imageSrc = appendImageRetryParam(src, retry);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setSlow(true), 2500);
+    return () => window.clearTimeout(timer);
+  }, [src]);
+
   useEffect(() => {
     const handler = (event) => {
       if (event.key === "Escape") {
@@ -147,14 +158,59 @@ function ImageLightbox({ src, onClose }) {
       >
         <X size={20} />
       </button>
-      <img
-        src={src}
-        alt="预览"
-        className="max-h-[90vh] max-w-[90vw] rounded-xl object-contain shadow-2xl"
-        onClick={(event) => event.stopPropagation()}
-      />
+      <div className="relative flex max-h-[90vh] max-w-[90vw] items-center justify-center" onClick={(event) => event.stopPropagation()}>
+        {!loaded ? (
+          <div className="absolute inset-0 flex min-h-[260px] min-w-[320px] items-center justify-center">
+            <div className="rounded-2xl bg-black/45 px-5 py-4 text-center text-white shadow-2xl backdrop-blur-sm">
+              {failed ? (
+                <>
+                  <p className="text-sm font-medium">本地预览加载失败</p>
+                  <p className="mt-1 text-xs text-white/60">图片已生成，可先在飞书查看。</p>
+                </>
+              ) : (
+                <>
+                  <Loader2 size={24} className="mx-auto animate-spin text-accent" />
+                  <p className="mt-3 text-sm font-medium">正在加载预览</p>
+                  <p className="mt-1 text-xs text-white/60">{slow ? "本地图片较大，加载可能需要几秒。" : "请稍候..."}</p>
+                </>
+              )}
+            </div>
+          </div>
+        ) : null}
+        <img
+          src={imageSrc}
+          alt="预览"
+          className={`max-h-[90vh] max-w-[90vw] rounded-xl object-contain shadow-2xl transition-opacity ${loaded ? "opacity-100" : "opacity-0"}`}
+          onLoad={() => {
+            setLoaded(true);
+            setFailed(false);
+          }}
+          onError={() => {
+            setLoaded(false);
+            if (retry < 4) {
+              window.setTimeout(() => setRetry((value) => value + 1), 450);
+            } else {
+              setFailed(true);
+            }
+          }}
+        />
+      </div>
     </div>
   );
+}
+
+function resolveImageSrc(src = "") {
+  const value = String(src || "").trim();
+  if (!value) return "";
+  if (value.startsWith("data:") || value.startsWith("blob:") || /^https?:\/\//i.test(value)) return value;
+  return value.startsWith("/") ? value : `/${value}`;
+}
+
+function appendImageRetryParam(src = "", retry = 0) {
+  const value = resolveImageSrc(src);
+  if (!value || value.startsWith("data:") || value.startsWith("blob:")) return value;
+  const separator = value.includes("?") ? "&" : "?";
+  return `${value}${separator}retry=${retry}`;
 }
 
 function formatHistoryTime(value) {
@@ -327,6 +383,191 @@ function MarkdownRenderer({ text, isLightTheme }) {
   );
 }
 
+function BatchWaImage({ src, alt, onPreview, onDownload }) {
+  const [retry, setRetry] = useState(0);
+  const [loaded, setLoaded] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const imageSrc = appendImageRetryParam(src, retry);
+
+  return (
+    <div className="relative aspect-square w-full overflow-hidden rounded-xl bg-black/[0.04]">
+      <button type="button" className="absolute inset-0" onClick={onPreview} title="放大查看">
+        {!loaded ? (
+          <div className="absolute inset-0 z-10 flex items-center justify-center bg-black/[0.06]">
+            <div className="flex max-w-[170px] flex-col items-center gap-2 px-4 text-center">
+              {failed ? (
+                <>
+                  <Maximize2 size={18} className="text-accent" />
+                  <p className="text-[11px] leading-5 text-text-tertiary">预览加载失败，图片已回填飞书</p>
+                </>
+              ) : (
+                <>
+                  <Loader2 size={18} className="animate-spin text-accent" />
+                  <p className="text-[11px] leading-5 text-text-tertiary">图片已生成，正在加载预览</p>
+                </>
+              )}
+            </div>
+          </div>
+        ) : null}
+        <img
+          src={imageSrc}
+          alt={alt}
+          className={`h-full w-full object-cover transition-opacity hover:opacity-95 ${loaded ? "opacity-100" : "opacity-0"}`}
+          loading="lazy"
+          decoding="async"
+          onLoad={() => {
+            setLoaded(true);
+            setFailed(false);
+          }}
+          onError={() => {
+            setLoaded(false);
+            if (retry < 5) {
+              window.setTimeout(() => setRetry((value) => value + 1), 500);
+            } else {
+              setFailed(true);
+            }
+          }}
+        />
+      </button>
+      <div className="absolute right-2 top-2 z-[1] flex items-center gap-1.5">
+        <button
+          type="button"
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            onPreview?.();
+          }}
+          className="rounded-lg bg-black/60 p-1.5 text-white backdrop-blur-sm transition-all hover:bg-black/80"
+          title="放大查看"
+        >
+          <Maximize2 size={14} />
+        </button>
+        <button
+          type="button"
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            onDownload?.();
+          }}
+          className="rounded-lg bg-black/60 p-1.5 text-white backdrop-blur-sm transition-all hover:bg-black/80"
+          title="下载图片"
+        >
+          <Download size={14} />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function BatchWaResultGrid({ message, isLightTheme, isSubmitting, onStopBatchWa, onPreview, onDownload }) {
+  const items = Array.isArray(message.batchWaItems) ? message.batchWaItems : [];
+  if (!items.length) return null;
+  const successCount = items.filter((item) => item.status === "success").length;
+  const isActive = isSubmitting && !message.batchWaStopped && items.some((item) => item.status === "queued" || item.status === "generating" || item.status === "retrying");
+
+  return (
+    <div className="mt-2 w-full">
+      <div className="mb-3 flex items-center justify-between gap-3 px-1">
+        <div className={`text-[12px] ${isLightTheme ? "text-black/50" : "text-text-tertiary"}`}>
+          批量进度：{successCount}/{items.length}
+        </div>
+        {isActive ? (
+          <button
+            type="button"
+            onClick={onStopBatchWa}
+            className="inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-[11px] text-accent transition-all hover:bg-accent/10"
+          >
+            <Square size={11} />
+            停止全部
+          </button>
+        ) : null}
+      </div>
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+        {items.map((item, index) => {
+          const src = item.urls?.[0] || "";
+          const statusText = item.status === "success"
+            ? "已完成"
+            : item.status === "queued"
+              ? "排队中"
+            : item.status === "retrying"
+              ? "重试中"
+              : item.status === "failed"
+                ? "失败"
+                : item.status === "stopped"
+                  ? "已停止"
+                  : "生成中";
+          return (
+            <div key={item.id || `${message.id}-${index}`} className={`rounded-xl p-2 ${
+              isLightTheme ? "border border-black/8 bg-white" : "border border-white/8 bg-black/10"
+            }`}>
+              <div className={`mb-1 flex items-center justify-between gap-2 text-[11px] ${isLightTheme ? "text-black/55" : "text-text-tertiary"}`}>
+                <span>{item.label || `第 ${index + 1} 张`}</span>
+                <span>{statusText}</span>
+              </div>
+              {src ? (
+                <>
+                  <BatchWaImage
+                    src={src}
+                    alt={`${item.label || `第 ${index + 1} 张`} 生成结果`}
+                    onPreview={() => onPreview(resolveImageSrc(src))}
+                    onDownload={() => onDownload(src, index)}
+                  />
+                  {item.feishuStatus ? (
+                    <div className={`mt-1 text-[10px] leading-4 ${
+                      item.feishuStatus === "failed"
+                        ? "text-amber-400"
+                        : isLightTheme ? "text-black/42" : "text-text-tertiary"
+                    }`}>
+                      {item.feishuStatus === "uploading"
+                        ? "正在回填飞书..."
+                        : item.feishuStatus === "success"
+                          ? "已回填飞书"
+                          : `飞书回填失败：${item.feishuError || "请稍后重试"}`}
+                    </div>
+                  ) : null}
+                </>
+              ) : (
+                <div className={`relative aspect-square overflow-hidden rounded-xl ${
+                  isLightTheme ? "bg-[#f1f1f1]" : "bg-white/[0.055]"
+                }`}>
+                  {item.status === "failed" || item.status === "stopped" ? (
+                    <div className={`absolute inset-0 flex items-center justify-center px-4 text-center text-[11px] leading-5 ${
+                      isLightTheme ? "text-black/42" : "text-text-tertiary"
+                    }`}>
+                      {item.status === "failed" ? (item.error || "生成失败") : statusText}
+                    </div>
+                  ) : (
+                    <>
+                      <div className={`absolute inset-0 animate-pulse ${
+                        isLightTheme
+                          ? "bg-gradient-to-br from-black/[0.02] via-white/60 to-black/[0.04]"
+                          : "bg-gradient-to-br from-white/[0.03] via-white/[0.10] to-white/[0.03]"
+                      }`} />
+                      <div className="absolute inset-0 flex items-center justify-center">
+                        <div className="flex max-w-[180px] flex-col items-center gap-2 px-4 text-center">
+                          <Loader2 size={20} className="animate-spin text-accent" />
+                          <div>
+                            <p className={`text-[12px] font-medium ${isLightTheme ? "text-black/70" : "text-text-primary"}`}>
+                              {item.status === "queued" ? "等待生成队列" : item.status === "retrying" ? "正在重试生成" : "正在生成图片"}
+                            </p>
+                            <p className={`mt-1 text-[11px] leading-5 ${isLightTheme ? "text-black/42" : "text-text-tertiary"}`}>
+                              {item.status === "queued" ? "前面的图片完成后自动开始" : "生成完成后会自动显示"}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 export default function FloatingEntryWidget({
   storageKey,
   prompt,
@@ -353,6 +594,7 @@ export default function FloatingEntryWidget({
   onDeleteHistory,
   onDeleteMessage,
   onRegenerateMessage,
+  onStopBatchWa,
   onClose,
   onExpandFullscreen,
 }) {
@@ -433,6 +675,11 @@ export default function FloatingEntryWidget({
     label: "正在生成图片",
     detail: "生成完成后会自动显示",
   };
+  const hasActiveBatchWa = messages.some((message) => (
+    Array.isArray(message.batchWaItems)
+    && message.batchWaItems.some((item) => item.status === "queued" || item.status === "generating" || item.status === "retrying")
+    && !message.batchWaStopped
+  ));
 
   useEffect(() => {
     if (typeof window === "undefined") return undefined;
@@ -1026,10 +1273,11 @@ export default function FloatingEntryWidget({
   };
 
   const handleDownloadImage = async (src, index) => {
-    if (!src) return;
+    const imageSrc = resolveImageSrc(src);
+    if (!imageSrc) return;
 
     try {
-      const response = await fetch(src);
+      const response = await fetch(imageSrc);
       const blob = await response.blob();
       const blobUrl = URL.createObjectURL(blob);
       const anchor = document.createElement("a");
@@ -1041,7 +1289,7 @@ export default function FloatingEntryWidget({
       window.setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
     } catch {
       const anchor = document.createElement("a");
-      anchor.href = src;
+      anchor.href = imageSrc;
       anchor.download = `easy-ai-${Date.now()}-${index + 1}.png`;
       anchor.target = "_blank";
       anchor.rel = "noopener noreferrer";
@@ -1465,6 +1713,17 @@ export default function FloatingEntryWidget({
                           </div>
                         ) : null}
 
+                        {Array.isArray(message.batchWaItems) && message.batchWaItems.length > 0 ? (
+                          <BatchWaResultGrid
+                            message={message}
+                            isLightTheme={isLightTheme}
+                            isSubmitting={isSubmitting}
+                            onStopBatchWa={onStopBatchWa}
+                            onPreview={setPreviewSrc}
+                            onDownload={handleDownloadImage}
+                          />
+                        ) : null}
+
                         {message.images?.length > 0 && (
                           <div className="mt-2">
                             <div className={`grid grid-cols-1 gap-3 sm:grid-cols-2 ${message.role === "user" ? "justify-items-end" : ""}`}>
@@ -1491,7 +1750,7 @@ export default function FloatingEntryWidget({
                                       className="object-cover transition-opacity hover:opacity-95"
                                     />
                                   </button>
-                                  <div className="absolute right-2 top-2 z-10 flex items-center gap-1.5">
+                                  <div className="absolute right-2 top-2 z-[1] flex items-center gap-1.5">
                                     <button
                                       type="button"
                                       onClick={(event) => {
@@ -1628,7 +1887,7 @@ export default function FloatingEntryWidget({
                     </div>
                   ))}
 
-                  {isSubmitting && (
+                  {isSubmitting && !hasActiveBatchWa && (
                     <div className="flex justify-start">
                       <div className="w-full max-w-[260px]">
                         <div className={`relative aspect-square overflow-hidden rounded-2xl ${
@@ -1684,7 +1943,7 @@ export default function FloatingEntryWidget({
           </div>
 
 
-          <div className="px-4 pb-4">
+          <div className={`relative z-[5] px-4 pb-4 ${isLightTheme ? "bg-white/95" : "bg-bg-secondary/95"}`}>
             <input
               ref={fileInputRef}
               type="file"

@@ -20,6 +20,7 @@ const IMAGE_TYPES = {
 
 const PREFERRED_ROLE_IMAGES = {
   "boy真人版": "正视图",
+  robot: "Robot标准形态",
 };
 
 function getContentType(filename) {
