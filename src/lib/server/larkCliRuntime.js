@@ -39,6 +39,17 @@ function runProcess(args, { input = "" } = {}) {
   });
 }
 
+function getLarkCliErrorMessage(error, fallback = "飞书 CLI 执行失败") {
+  const output = Buffer.from(error?.stdout || error?.stderr || "").toString("utf8").trim();
+  let parsed = null;
+  try {
+    parsed = output ? JSON.parse(output) : null;
+  } catch {
+    parsed = null;
+  }
+  return parsed?.error?.message || parsed?.msg || output || error?.message || fallback;
+}
+
 async function ensureLarkCliConfigured() {
   const appId = String(process.env.FEISHU_APP_ID || "").trim();
   const appSecret = String(process.env.FEISHU_APP_SECRET || "").trim();
@@ -52,9 +63,15 @@ async function ensureLarkCliConfigured() {
       "--app-secret-stdin",
       "--brand",
       "feishu",
+      "--force-init",
     ], { input: `${appSecret}\n` });
   }
-  await configurePromise;
+  try {
+    await configurePromise;
+  } catch (error) {
+    configurePromise = null;
+    throw new Error(getLarkCliErrorMessage(error, "飞书 CLI 初始化失败"));
+  }
 }
 
 export async function runLarkCliJson(args) {
@@ -64,14 +81,7 @@ export async function runLarkCliJson(args) {
     const text = Buffer.from(stdout || "").toString("utf8").trim();
     return text ? JSON.parse(text) : {};
   } catch (error) {
-    const output = Buffer.from(error?.stdout || error?.stderr || "").toString("utf8").trim();
-    let parsed = null;
-    try {
-      parsed = output ? JSON.parse(output) : null;
-    } catch {
-      parsed = null;
-    }
-    throw new Error(parsed?.error?.message || parsed?.msg || output || error?.message || "飞书 CLI 执行失败");
+    throw new Error(getLarkCliErrorMessage(error));
   }
 }
 
