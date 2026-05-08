@@ -4,11 +4,11 @@ import { mkdir, readFile, unlink, writeFile } from "fs/promises";
 import path from "path";
 import { promisify } from "util";
 import { NextResponse } from "next/server";
+import { ensureLarkCliReady, LARK_CLI, LARK_IDENTITY } from "@/lib/server/larkCliRuntime";
 
 export const runtime = "nodejs";
 
 const execFileAsync = promisify(execFile);
-const LARK_CLI = process.env.LARK_CLI_PATH || path.join(process.cwd(), "node_modules", ".bin", process.platform === "win32" ? "lark-cli.cmd" : "lark-cli");
 const TABLE_ID = process.env.FEISHU_WA_TABLE_ID || "tble6jwNnOTjv75V";
 
 async function writeTempJson(payload) {
@@ -48,12 +48,13 @@ async function downloadFeishuAttachment({ fileToken, recordId, fieldId }) {
   });
 
   try {
+    await ensureLarkCliReady();
     await execFileAsync(LARK_CLI, [
       "api",
       "GET",
       `/open-apis/drive/v1/medias/${fileToken}/download`,
       "--as",
-      "user",
+      LARK_IDENTITY,
       "--params",
       `@${paramsFile.cliPath}`,
       "--output",

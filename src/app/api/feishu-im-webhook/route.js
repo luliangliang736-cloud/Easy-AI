@@ -6,37 +6,14 @@ import { promisify } from "util";
 import { NextResponse } from "next/server";
 import { POST as runWaCommandRoute } from "../feishu-wa-command/route";
 import { createFeishuWaTask } from "@/lib/server/feishuWaTaskQueue";
+import { ensureLarkCliReady, LARK_CLI, LARK_IDENTITY, runLarkCliJson } from "@/lib/server/larkCliRuntime";
 
 export const runtime = "nodejs";
 
 const execFileAsync = promisify(execFile);
-const LARK_CLI = process.env.LARK_CLI_PATH || path.join(process.cwd(), "node_modules", ".bin", process.platform === "win32" ? "lark-cli.cmd" : "lark-cli");
 const TABLE_ID = process.env.FEISHU_WA_TABLE_ID || "tble6jwNnOTjv75V";
 const EVENT_VERIFY_TOKEN = process.env.FEISHU_EVENT_VERIFY_TOKEN || "";
 const MAX_REPLY_IMAGES = 6;
-
-async function runLarkCli(args) {
-  try {
-    const { stdout } = await execFileAsync(LARK_CLI, args, {
-      cwd: process.cwd(),
-      encoding: "buffer",
-      maxBuffer: 20 * 1024 * 1024,
-      shell: process.platform === "win32",
-      windowsHide: true,
-    });
-    const text = Buffer.from(stdout || "").toString("utf8").trim();
-    return text ? JSON.parse(text) : {};
-  } catch (error) {
-    const output = Buffer.from(error?.stdout || error?.stderr || "").toString("utf8").trim();
-    let parsed = null;
-    try {
-      parsed = output ? JSON.parse(output) : null;
-    } catch {
-      parsed = null;
-    }
-    throw new Error(parsed?.error?.message || parsed?.msg || output || error?.message || "飞书 CLI 执行失败");
-  }
-}
 
 async function writeTempJson(payload, prefix = "easyai-feishu-im") {
   const dir = path.join(process.cwd(), ".easyai-tmp");
@@ -64,7 +41,7 @@ async function runLarkApi(method, apiPath, { params = null, data = null, files =
     for (const file of files) {
       args.push("--file", file);
     }
-    return await runLarkCli(args);
+    return await runLarkCliJson(args);
   } finally {
     await Promise.all(tempFiles.map((file) => unlink(file).catch(() => {})));
   }
@@ -164,12 +141,13 @@ async function downloadFeishuAttachment({ fileToken, recordId, fieldId, name }) 
   }, "easyai-feishu-im-download");
 
   try {
+    await ensureLarkCliReady();
     await execFileAsync(LARK_CLI, [
       "api",
       "GET",
       `/open-apis/drive/v1/medias/${fileToken}/download`,
       "--as",
-      "user",
+      LARK_IDENTITY,
       "--params",
       `@${paramsFile.cliPath}`,
       "--output",

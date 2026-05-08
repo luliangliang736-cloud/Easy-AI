@@ -1,18 +1,15 @@
-import { execFile } from "child_process";
 import { randomUUID } from "crypto";
 import { mkdir, writeFile, unlink } from "fs/promises";
 import path from "path";
-import { promisify } from "util";
 import { NextResponse } from "next/server";
 import {
   chooseWaTemplateIpRole,
 } from "@/lib/oneClickCreationRules";
 import { readGeneratedImage } from "@/lib/server/generatedImageStore";
+import { LARK_IDENTITY, runLarkCliJson } from "@/lib/server/larkCliRuntime";
 
 export const runtime = "nodejs";
 
-const execFileAsync = promisify(execFile);
-const LARK_CLI = process.env.LARK_CLI_PATH || path.join(process.cwd(), "node_modules", ".bin", process.platform === "win32" ? "lark-cli.cmd" : "lark-cli");
 const BASE_TOKEN = process.env.FEISHU_WA_BASE_TOKEN || "R2edbyyrZaGixJsH0v2cD1Mcnkg";
 const TABLE_ID = process.env.FEISHU_WA_TABLE_ID || "tble6jwNnOTjv75V";
 const AI_IMAGE_FIELD_NAME = "AI设计图";
@@ -27,29 +24,6 @@ function getField(record, fieldNames, name) {
   return index >= 0 ? record[index] : null;
 }
 
-async function runLarkCli(args) {
-  try {
-    const { stdout } = await execFileAsync(LARK_CLI, args, {
-      cwd: process.cwd(),
-      encoding: "buffer",
-      maxBuffer: 20 * 1024 * 1024,
-      shell: process.platform === "win32",
-      windowsHide: true,
-    });
-    const text = Buffer.from(stdout || "").toString("utf8").trim();
-    return text ? JSON.parse(text) : {};
-  } catch (error) {
-    const output = Buffer.from(error?.stdout || error?.stderr || "").toString("utf8").trim();
-    let parsed = null;
-    try {
-      parsed = output ? JSON.parse(output) : null;
-    } catch {
-      parsed = null;
-    }
-    throw new Error(parsed?.error?.message || parsed?.msg || output || error?.message || "飞书 CLI 执行失败");
-  }
-}
-
 async function writeTempJson(payload) {
   const dir = path.join(process.cwd(), ".easyai-tmp");
   await mkdir(dir, { recursive: true });
@@ -61,11 +35,11 @@ async function writeTempJson(payload) {
 
 async function resolveAiImageFieldId() {
   if (process.env.FEISHU_WA_AI_IMAGE_FIELD) return process.env.FEISHU_WA_AI_IMAGE_FIELD;
-  const data = await runLarkCli([
+  const data = await runLarkCliJson([
     "base", "+field-list",
     "--base-token", BASE_TOKEN,
     "--table-id", TABLE_ID,
-    "--as", "user",
+    "--as", LARK_IDENTITY,
     "--jq", ".",
   ]);
   const fields = Array.isArray(data?.data?.fields) ? data.data.fields : [];
@@ -147,11 +121,11 @@ async function prepareBatch({ limit = 5, start = 0, end = 0, tail = false } = {}
   const safeStart = Math.max(Number(start) || 0, 0);
   const safeEnd = Math.max(Number(end) || 0, 0);
   const readLimit = tail || safeStart > 0 || safeEnd > 0 ? 100 : safeLimit;
-  const data = await runLarkCli([
+  const data = await runLarkCliJson([
     "base", "+record-list",
     "--base-token", BASE_TOKEN,
     "--table-id", TABLE_ID,
-    "--as", "user",
+    "--as", LARK_IDENTITY,
     "--limit", String(readLimit),
     "--jq", ".",
   ]);
@@ -198,12 +172,12 @@ async function prepareBatch({ limit = 5, start = 0, end = 0, tail = false } = {}
     if (!currentRole || !currentOutfit || !currentStyle) {
       const jsonFile = await writeTempJson({ 人物: role, 服装: outfit, 风格: style });
       try {
-        await runLarkCli([
+        await runLarkCliJson([
           "base", "+record-upsert",
           "--base-token", BASE_TOKEN,
           "--table-id", TABLE_ID,
           "--record-id", recordId,
-          "--as", "user",
+          "--as", LARK_IDENTITY,
           "--json", `@${jsonFile.cliPath}`,
         ]);
       } finally {
@@ -259,7 +233,7 @@ async function uploadGeneratedImage({ recordId, imageUrl, name }) {
   const tempFile = await imageSourceToTempFile(imageUrl);
   try {
     const aiImageFieldId = await resolveAiImageFieldId();
-    return await runLarkCli([
+    return await runLarkCliJson([
       "base", "+record-upload-attachment",
       "--base-token", BASE_TOKEN,
       "--table-id", TABLE_ID,
@@ -267,7 +241,7 @@ async function uploadGeneratedImage({ recordId, imageUrl, name }) {
       "--field-id", aiImageFieldId,
       "--file", tempFile.cliPath,
       "--name", name || `EasyAI-WA-${Date.now()}.png`,
-      "--as", "user",
+      "--as", LARK_IDENTITY,
       "--jq", ".",
     ]);
   } finally {
