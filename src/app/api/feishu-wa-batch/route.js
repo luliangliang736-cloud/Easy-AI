@@ -12,7 +12,6 @@ export const runtime = "nodejs";
 
 const BASE_TOKEN = process.env.FEISHU_WA_BASE_TOKEN || "R2edbyyrZaGixJsH0v2cD1Mcnkg";
 const TABLE_ID = process.env.FEISHU_WA_TABLE_ID || "tble6jwNnOTjv75V";
-const SECOND_BATCH_TABLE_PREFIX = process.env.FEISHU_WA_SECOND_BATCH_PREFIX || "WA海报批量测试_第二批";
 const AI_IMAGE_FIELD_NAME = "AI设计图";
 
 function normalizeText(value) {
@@ -34,36 +33,7 @@ async function writeTempJson(payload) {
   return { filePath, cliPath: `.easyai-tmp/${filename}` };
 }
 
-async function listTables() {
-  const data = await runLarkCliJson([
-    "base", "+table-list",
-    "--base-token", BASE_TOKEN,
-    "--as", LARK_IDENTITY,
-    "--jq", ".",
-  ]);
-  return Array.isArray(data?.data?.tables)
-    ? data.data.tables
-    : Array.isArray(data?.data?.items)
-      ? data.data.items
-      : Array.isArray(data?.data)
-        ? data.data
-        : [];
-}
-
-async function resolveTableTarget({ tableId = "", tableName = "", tableAlias = "" } = {}) {
-  const explicit = String(tableId || tableName || "").trim();
-  if (explicit) return { tableId: explicit, tableName: String(tableName || "").trim() };
-  if (String(tableAlias || "").toLowerCase() === "second") {
-    const tables = await listTables();
-    const matched = tables
-      .filter((table) => String(table?.name || "").startsWith(SECOND_BATCH_TABLE_PREFIX))
-      .sort((a, b) => String(b?.name || "").localeCompare(String(a?.name || "")));
-    const table = matched[0];
-    if (!table?.id && !table?.table_id) {
-      throw new Error("未找到第二批 WA 表格，请先创建第二批表格");
-    }
-    return { tableId: table.id || table.table_id, tableName: table.name || "" };
-  }
+function resolveTableTarget() {
   return { tableId: TABLE_ID, tableName: "" };
 }
 
@@ -150,12 +120,12 @@ function buildPrompt({ scene, headline, subline, role, outfit, style }, index) {
 风格：${style}`;
 }
 
-async function prepareBatch({ limit = 5, start = 0, end = 0, tail = false, tableId = "", tableName = "", tableAlias = "" } = {}) {
+async function prepareBatch({ limit = 5, start = 0, end = 0, tail = false } = {}) {
   const safeLimit = Math.min(Math.max(Number(limit) || 5, 1), 50);
   const safeStart = Math.max(Number(start) || 0, 0);
   const safeEnd = Math.max(Number(end) || 0, 0);
   const readLimit = tail || safeStart > 0 || safeEnd > 0 ? 100 : safeLimit;
-  const target = await resolveTableTarget({ tableId, tableName, tableAlias });
+  const target = resolveTableTarget();
   const data = await runLarkCliJson([
     "base", "+record-list",
     "--base-token", BASE_TOKEN,
@@ -265,9 +235,9 @@ async function imageSourceToTempFile(source) {
   return writeTempBinary(buffer, ext);
 }
 
-async function uploadGeneratedImage({ recordId, imageUrl, name, tableId = "", tableName = "", tableAlias = "" }) {
+async function uploadGeneratedImage({ recordId, imageUrl, name }) {
   if (!recordId || !imageUrl) throw new Error("recordId 和 imageUrl 必填");
-  const target = await resolveTableTarget({ tableId, tableName, tableAlias });
+  const target = resolveTableTarget();
   const tempFile = await imageSourceToTempFile(imageUrl);
   try {
     const aiImageFieldId = await resolveAiImageFieldId(target.tableId);

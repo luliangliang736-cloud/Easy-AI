@@ -8,7 +8,6 @@ export const runtime = "nodejs";
 
 const BASE_TOKEN = process.env.FEISHU_WA_BASE_TOKEN || "R2edbyyrZaGixJsH0v2cD1Mcnkg";
 const TABLE_ID = process.env.FEISHU_WA_TABLE_ID || "tble6jwNnOTjv75V";
-const SECOND_BATCH_TABLE_PREFIX = process.env.FEISHU_WA_SECOND_BATCH_PREFIX || "WA海报批量测试_第二批";
 const AI_IMAGE_FIELD_NAME = "AI设计图";
 const EDITABLE_FIELDS = new Set([
   "人物",
@@ -238,23 +237,6 @@ function parseLimit(text = "", fallback = 10) {
   return value > 0 ? Math.min(value, 100) : fallback;
 }
 
-function makeSecondBatchTableName() {
-  const now = new Date();
-  const pad = (value) => String(value).padStart(2, "0");
-  return `${SECOND_BATCH_TABLE_PREFIX}_${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}`;
-}
-
-function parseSecondBatchRequest(text = "") {
-  const source = String(text || "");
-  if (!/(第二批|第2批|二批)/.test(source)) return null;
-  if (!/(创建|新建|建立|生成|复制).*(表格|表|批次|第二批|第2批|二批)/.test(source)) return null;
-  return {
-    limit: parseLimit(source, 39),
-    reduceGreen: /(减少|降低|少一点|少一些|不要太多).*(绿色|绿)/.test(source) || /绿色.*(减少|降低|少一点|少一些|不要太多)/.test(source),
-    rebalanceRole: /(人物|男生|Boy|女生|Girl|Robot|机器人|平衡|均衡)/i.test(source),
-  };
-}
-
 function parseRewriteVariationRequest(text = "") {
   const source = String(text || "");
   const compact = source.replace(/\s+/g, "");
@@ -402,61 +384,6 @@ function buildSecondBatchRows(records, limit, preferences = {}) {
   });
 }
 
-async function createTable(name) {
-  const data = await runLarkCliJson([
-    "base", "+table-create",
-    "--base-token", BASE_TOKEN,
-    "--name", name,
-    "--as", LARK_IDENTITY,
-    "--jq", ".",
-  ]);
-  const table = data?.data?.table || data?.data || data?.table || {};
-  const tableId = table?.id || table?.table_id || data?.data?.table_id || data?.table_id;
-  if (!tableId) throw new Error("第二批表格创建失败：未返回 tableId");
-  return tableId;
-}
-
-async function createSecondBatchFields(tableId) {
-  const fields = [
-    { name: "任务序号", type: "text" },
-    { name: "优先级", type: "text" },
-    { name: "场景类型", type: "text" },
-    { name: "主文案（中文）", type: "text" },
-    { name: "副文案（中文）", type: "text" },
-    { name: "主文案（印尼语 ≤30）", type: "text" },
-    { name: "副文案（印尼语 ≤50）", type: "text" },
-    { name: "人物", type: "text" },
-    { name: "服装", type: "text" },
-    { name: "风格", type: "text" },
-    { name: "需求备注", type: "text" },
-    { name: AI_IMAGE_FIELD_NAME, type: "attachment" },
-  ];
-  for (const field of fields) {
-    await runWithTempJson([
-      "base", "+field-create",
-      "--base-token", BASE_TOKEN,
-      "--table-id", tableId,
-      "--as", LARK_IDENTITY,
-    ], field, ["--jq", "."]).catch(() => null);
-  }
-}
-
-async function createSecondBatchTable({ limit = 39 } = {}) {
-  const records = await listRecords(Math.min(Math.max(limit, 1), 50));
-  if (records.length === 0) throw new Error("原表没有可复制的 WA 需求");
-  const tableName = makeSecondBatchTableName();
-  const tableId = await createTable(tableName);
-  await createSecondBatchFields(tableId);
-  const rows = buildSecondBatchRows(records, Math.min(limit, records.length));
-  await runWithTempJson([
-    "base", "+record-batch-create",
-    "--base-token", BASE_TOKEN,
-    "--table-id", tableId,
-    "--as", LARK_IDENTITY,
-  ], { fields: Object.keys(rows[0]), rows: rows.map((row) => Object.keys(rows[0]).map((field) => row[field] || "")) }, ["--jq", "."]);
-  return { tableName, tableId, rows };
-}
-
 function parseCreatePatch(text = "") {
   const source = String(text || "");
   if (!/(新增|添加|创建).*(WA|wa|海报|需求|记录)/i.test(source)) return null;
@@ -589,25 +516,6 @@ async function rewriteVariationFields(request) {
 async function handleCommand(text = "") {
   const source = String(text || "").trim();
   if (!source) throw new Error("指令为空");
-
-  const secondBatchRequest = parseSecondBatchRequest(source);
-  if (secondBatchRequest) {
-    const result = await createSecondBatchTable(secondBatchRequest);
-    const roleCounts = result.rows.reduce((acc, row) => {
-      acc[row.人物] = (acc[row.人物] || 0) + 1;
-      return acc;
-    }, {});
-    return {
-      reply: [
-        `已创建第二批 WA 表格：${result.tableName}`,
-        `表格 ID：${result.tableId}`,
-        `已复制 ${result.rows.length} 条需求，不复制 AI设计图。`,
-        `人物分布：${Object.entries(roleCounts).map(([key, value]) => `${key} ${value}条`).join("，")}。`,
-        "风格已重新改写：减少大面积绿色重复，按 VIP/信用/新用户/发薪日/教育等主题做差异化。",
-        "生成时请使用：批量生成第二批飞书WA海报前39张",
-      ].join("\n"),
-    };
-  }
 
   const rewriteRequest = parseRewriteVariationRequest(source);
   if (rewriteRequest) {

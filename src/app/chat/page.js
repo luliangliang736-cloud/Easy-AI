@@ -133,27 +133,26 @@ function parseFeishuWaBatchRequest(text = "") {
   const source = String(text || "").replace(/\s+/g, "");
   if (!/(飞书|表格|多维表|base|文档)/i.test(source) || !/(WA|wa|海报)/i.test(source)) return null;
   if (!/(生成|制作|生图|批量生成|批量制作)/.test(source)) return null;
-  const tableAlias = /(第二批|第2批|二批)/.test(source) ? "second" : "";
   const rangeMatch = source.match(/第([0-9一二两三四五六七八九十]+)(?:张|条|个)?(?:到|至|-|—)(?:第)?([0-9一二两三四五六七八九十]+)(?:张|条|个)?/);
   if (rangeMatch) {
     const start = chineseNumberToInt(rangeMatch[1]);
     const end = chineseNumberToInt(rangeMatch[2]);
-    if (start > 0 && end >= start) return { start, end, limit: Math.min(end - start + 1, 50), tableAlias };
+    if (start > 0 && end >= start) return { start, end, limit: Math.min(end - start + 1, 50) };
   }
   const singleMatch = source.match(/第([0-9一二两三四五六七八九十]+)(?:张|条|个)/);
   if (singleMatch) {
     const start = chineseNumberToInt(singleMatch[1]);
-    if (start > 0) return { start, end: start, limit: 1, tableAlias };
+    if (start > 0) return { start, end: start, limit: 1 };
   }
   const tailMatch = source.match(/(?:后|最后)([0-9一二两三四五六七八九十]+)(?:张|条|个)/);
   if (tailMatch) {
     const limit = chineseNumberToInt(tailMatch[1]);
-    if (limit > 0) return { limit: Math.min(limit, 50), tail: true, tableAlias };
+    if (limit > 0) return { limit: Math.min(limit, 50), tail: true };
   }
   const headMatch = source.match(/前([0-9一二两三四五六七八九十]+)(?:张|条|个)/);
   if (headMatch) {
     const limit = chineseNumberToInt(headMatch[1]);
-    if (limit > 0) return { limit: Math.min(limit, 50), tableAlias };
+    if (limit > 0) return { limit: Math.min(limit, 50) };
   }
   return null;
 }
@@ -186,7 +185,7 @@ function detectFeishuWaCommand(text = "") {
   const source = String(text || "").replace(/\s+/g, "");
   if (!source) return false;
   if (/生成前[0-9一二两三四五六七八九十]+张.*?(WA|wa|海报)/i.test(source)) return false;
-  const hasTableTarget = /(飞书|表格|文档|AI设计图|ai设计图|Boy|Girl|Robot|robot|机器人|真人版|人物|角色|服装|服饰|风格|第二批|第2批|前[0-9一二两三四五六七八九十]+张|第[0-9一二两三四五六七八九十]+张)/i.test(source);
+  const hasTableTarget = /(飞书|表格|文档|AI设计图|ai设计图|Boy|Girl|Robot|robot|机器人|真人版|人物|角色|服装|服饰|风格|前[0-9一二两三四五六七八九十]+张|第[0-9一二两三四五六七八九十]+张)/i.test(source);
   const hasAction = /(修改|改成|改为|设为|设置为|清空|删除|移除|减少|降低|增加|提高|只要|保留|控制在|少一些|少一点|不要太多|统计|查看|多少|创建|新建|建立|复制|添加|加入|重新|重写|改写|重填|重新填充|刷新|变化|换一版|换一批|平衡|均衡)/.test(source);
   return hasTableTarget && hasAction;
 }
