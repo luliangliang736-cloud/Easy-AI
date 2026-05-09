@@ -71,14 +71,15 @@ function isWaTableCommand(text = "") {
   const source = String(text || "").replace(/\s+/g, "");
   if (!source) return false;
   if (/生成前[0-9一二两三四五六七八九十]+张.*?(WA|wa|海报)/i.test(source)) return true;
-  const hasTarget = /(WA|wa|海报|飞书|表格|文档|AI设计图|ai设计图|Robot|robot|机器人|Boy|Girl|第[0-9一二两三四五六七八九十]+张)/i.test(source);
-  const hasAction = /(查看|显示|读取|列出|筛选|统计|检查|修改|改成|改为|设为|设置为|新增|添加|创建|复制|删除|移除|清空|减少|少一些|少一点|不要太多|多少)/.test(source);
+  const hasTarget = /(WA|wa|海报|飞书|表格|文档|AI设计图|ai设计图|Robot|robot|机器人|Boy|Girl|真人版|人物|角色|服装|服饰|风格|前[0-9一二两三四五六七八九十]+张|第[0-9一二两三四五六七八九十]+张)/i.test(source);
+  const hasAction = /(查看|显示|读取|列出|筛选|统计|检查|修改|改成|改为|设为|设置为|新增|添加|加入|创建|复制|删除|移除|清空|减少|降低|增加|提高|只要|保留|控制在|少一些|少一点|不要太多|多少|重新|重写|改写|重填|重新填充|刷新|变化|换一版|换一批|平衡|均衡)/.test(source);
   return hasTarget && hasAction;
 }
 
 function isBatchWaGenerationCommand(text = "") {
   const source = String(text || "").replace(/\s+/g, "");
   if (!/(飞书|表格|多维表|base|文档)/i.test(source) || !/(WA|wa|海报)/i.test(source)) return false;
+  if (/(人物|角色|服装|服饰|风格)/.test(source) && /(重新|重写|改写|重填|重新填充|刷新|变化|换一版|换一批|平衡|均衡)/.test(source)) return false;
   if (!/(生成|制作|生图|批量生成|批量制作)/.test(source)) return false;
   return /(?:前|后|最后)[0-9一二两三四五六七八九十]+(?:张|条|个)/.test(source)
     || /第[0-9一二两三四五六七八九十]+(?:张|条|个)?(?:到|至|-|—)(?:第)?[0-9一二两三四五六七八九十]+(?:张|条|个)?/.test(source)

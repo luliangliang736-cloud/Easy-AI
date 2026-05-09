@@ -255,15 +255,62 @@ function parseSecondBatchRequest(text = "") {
   };
 }
 
+function parseRewriteVariationRequest(text = "") {
+  const source = String(text || "");
+  const compact = source.replace(/\s+/g, "");
+  const mentionsVariationFields = /(人物|角色|服装|服饰|风格|Boy|Girl|Robot|robot|机器人|真人版)/i.test(source);
+  const asksRewrite = /(重新|重写|改写|重填|重新填充|刷新|变化|换一版|换一批|平衡|均衡|减少|降低|增加|提高|添加|加入|只要|保留|控制在)/.test(source);
+  if (!mentionsVariationFields || !asksRewrite) return null;
+  if (/(创建|新建|建立).*(表格|表)/.test(source)) return null;
+
+  const robotMatch = compact.match(/(?:robot|机器人)(?:只要|保留|减少到|降到|控制在)?([0-9一二两三四五六七八九十]+)(?:个|条|张)?/i);
+  const robotTarget = robotMatch ? parseChineseNumber(robotMatch[1]) : null;
+  const preferences = {
+    reduceGreen: /(减少|降低|少一点|少一些|不要太多).*(绿色|绿)/.test(source) || /绿色.*(减少|降低|少一点|少一些|不要太多)/.test(source),
+    increaseBoy: /(boy|男生|男性|男)/i.test(source) && /(增加|多一点|多一些|提高|偏多)/.test(source),
+    increaseGirl: /(girl|女生|女性|女)/i.test(source) && /(增加|多一点|多一些|提高|偏多)/.test(source),
+    includeBoyReal: /(boy真人版|真人版boy|男生真人版|真人男生|真人版)/i.test(source),
+    robotTarget: robotTarget ?? undefined,
+  };
+
+  const rangeMatch = compact.match(/第([0-9一二两三四五六七八九十]+)(?:张)?(?:到|至|-|~)第?([0-9一二两三四五六七八九十]+)张?/);
+  if (rangeMatch) {
+    return {
+      start: parseChineseNumber(rangeMatch[1]),
+      end: parseChineseNumber(rangeMatch[2]),
+      preferences,
+    };
+  }
+
+  const singleMatch = compact.match(/第([0-9一二两三四五六七八九十]+)张/);
+  if (singleMatch) {
+    const seq = parseChineseNumber(singleMatch[1]);
+    return { start: seq, end: seq, preferences };
+  }
+
+  if (/所有|全部|全表/.test(source)) return { all: true, preferences };
+
+  return {
+    limit: parseLimit(source, 39),
+    preferences,
+  };
+}
+
 function compactText(record) {
   return `${formatSelectValue(record.scene)} ${record.zhHeadline} ${record.zhSubline} ${record.headline} ${record.subline}`.toLowerCase();
 }
 
-function chooseSecondBatchRole(record, counts, targets) {
+function chooseSecondBatchRole(record, index, counts, targets) {
   const source = compactText(record);
   if (/(robot|机器人|自动|极速|5\s*menit|kilat|cepat|online|pindar)/i.test(source) && counts.Robot < targets.Robot) {
     counts.Robot += 1;
     return "Robot";
+  }
+  const boyRealNeeded = targets.Boy真人版 - counts.Boy真人版;
+  const slotsLeft = Math.max(targets.total - index, 1);
+  if (boyRealNeeded > 0 && (index % 4 === 1 || slotsLeft <= boyRealNeeded)) {
+    counts.Boy真人版 += 1;
+    return "Boy真人版";
   }
   if (/(skor|credit|信用|gaji|salary|发薪|limit|额度)/i.test(source) && counts.Boy < targets.Boy) {
     counts.Boy += 1;
@@ -277,6 +324,10 @@ function chooseSecondBatchRole(record, counts, targets) {
     counts.Boy += 1;
     return "Boy";
   }
+  if (counts.Boy真人版 < targets.Boy真人版) {
+    counts.Boy真人版 += 1;
+    return "Boy真人版";
+  }
   counts.Girl += 1;
   return "Girl";
 }
@@ -286,12 +337,13 @@ function chooseSecondBatchOutfit(record, role) {
   if (role === "Robot") {
     return "仅使用库里的Robot标准形态：标准绿色主体机身、黑色屏幕脸、银白机械臂/脚部；最多只改变姿势/朝向/手势，不改变服饰、颜色、机身或屏幕脸";
   }
+  const isBoyRole = String(role || "").includes("Boy");
   if (/(vip|gold|member|会员|权益)/i.test(source)) return "高级商务服装";
-  if (/(skor|credit|信用)/i.test(source)) return role === "Boy" ? "印尼制服" : "亲和职业装";
+  if (/(skor|credit|信用)/i.test(source)) return isBoyRole ? "印尼制服" : "亲和职业装";
   if (/(pinjaman pertama|新用户|ojk|transparan)/i.test(source)) return "客服制服";
-  if (/(gaji|发薪|limit|额度)/i.test(source)) return role === "Boy" ? "绿色客服制服" : "客服制服";
+  if (/(gaji|发薪|limit|额度)/i.test(source)) return isBoyRole ? "绿色客服制服" : "客服制服";
   if (/(sekolah|学费|教育|afpi)/i.test(source)) return "亲和职业装";
-  return role === "Boy" ? "亲和职业装" : "客服制服";
+  return isBoyRole ? "亲和职业装" : "客服制服";
 }
 
 function chooseSecondBatchStyle(record, index) {
@@ -311,16 +363,24 @@ function chooseSecondBatchStyle(record, index) {
   return variants[index % variants.length];
 }
 
-function buildSecondBatchRows(records, limit) {
+function buildSecondBatchRows(records, limit, preferences = {}) {
   const selected = records.slice(0, limit);
-  const robotTarget = Math.min(3, Math.max(1, Math.round(selected.length * 0.08)));
-  const girlTarget = Math.ceil((selected.length - robotTarget) * 0.58);
-  const boyTarget = Math.max(selected.length - robotTarget - girlTarget, 0);
-  const counts = { Boy: 0, Girl: 0, Robot: 0 };
-  const targets = { Boy: boyTarget, Girl: girlTarget, Robot: robotTarget };
+  const robotTarget = Number.isFinite(preferences.robotTarget) && preferences.robotTarget > 0
+    ? Math.min(preferences.robotTarget, selected.length)
+    : Math.min(3, Math.max(1, Math.round(selected.length * 0.08)));
+  const humanTotal = Math.max(selected.length - robotTarget, 0);
+  const boyRealTarget = preferences.includeBoyReal || selected.length >= 8
+    ? Math.min(preferences.includeBoyReal ? Math.max(1, Math.round(selected.length * 0.12)) : Math.max(1, Math.round(selected.length * 0.08)), humanTotal)
+    : 0;
+  const regularHumanTotal = Math.max(humanTotal - boyRealTarget, 0);
+  const girlRatio = preferences.increaseBoy ? 0.42 : preferences.increaseGirl ? 0.68 : 0.58;
+  const girlTarget = Math.ceil(regularHumanTotal * girlRatio);
+  const boyTarget = Math.max(regularHumanTotal - girlTarget, 0);
+  const counts = { Boy: 0, Boy真人版: 0, Girl: 0, Robot: 0 };
+  const targets = { Boy: boyTarget, Boy真人版: boyRealTarget, Girl: girlTarget, Robot: robotTarget, total: selected.length };
 
   return selected.map((record, index) => {
-    const role = chooseSecondBatchRole(record, counts, targets);
+    const role = chooseSecondBatchRole(record, index, counts, targets);
     const outfit = chooseSecondBatchOutfit(record, role);
     const style = chooseSecondBatchStyle(record, index);
     return {
@@ -336,7 +396,7 @@ function buildSecondBatchRows(records, limit) {
       风格: style,
       需求备注: [
         record.note,
-        `第二批自动重平衡：减少绿色重复，人物比例 Boy ${targets.Boy}/Girl ${targets.Girl}/Robot ${targets.Robot}`,
+        `自动重平衡：减少绿色重复，人物比例 Boy ${targets.Boy}/Boy真人版 ${targets.Boy真人版}/Girl ${targets.Girl}/Robot ${targets.Robot}`,
       ].filter(Boolean).join("；"),
     };
   });
@@ -485,6 +545,47 @@ async function reduceRobots(target = 4) {
   };
 }
 
+function selectRecordsByRewriteRequest(records, request) {
+  if (request?.all) return records;
+  if (request?.start > 0 && request?.end > 0) {
+    const start = Math.min(request.start, request.end);
+    const end = Math.max(request.start, request.end);
+    return records.filter((record, index) => {
+      const seq = Number(record.seq) || index + 1;
+      return seq >= start && seq <= end;
+    });
+  }
+  const limit = Math.min(Math.max(Number(request?.limit) || 39, 1), 100);
+  return records.slice(0, limit);
+}
+
+async function rewriteVariationFields(request) {
+  const records = await listRecords(100);
+  const selected = selectRecordsByRewriteRequest(records, request);
+  if (selected.length === 0) throw new Error("没有找到需要重写的 WA 记录");
+
+  const rows = buildSecondBatchRows(selected, selected.length, request?.preferences || {});
+  const changed = [];
+  for (let index = 0; index < selected.length; index += 1) {
+    const record = selected[index];
+    const row = rows[index];
+    const patch = {
+      人物: row.人物,
+      服装: row.服装,
+      风格: row.风格,
+    };
+    await updateRecord(record.id, patch);
+    changed.push({ seq: record.seq || String(index + 1), ...patch });
+  }
+
+  const roleCounts = changed.reduce((acc, item) => {
+    acc[item.人物] = (acc[item.人物] || 0) + 1;
+    return acc;
+  }, {});
+
+  return { changed, roleCounts };
+}
+
 async function handleCommand(text = "") {
   const source = String(text || "").trim();
   if (!source) throw new Error("指令为空");
@@ -505,6 +606,23 @@ async function handleCommand(text = "") {
         "风格已重新改写：减少大面积绿色重复，按 VIP/信用/新用户/发薪日/教育等主题做差异化。",
         "生成时请使用：批量生成第二批飞书WA海报前39张",
       ].join("\n"),
+    };
+  }
+
+  const rewriteRequest = parseRewriteVariationRequest(source);
+  if (rewriteRequest) {
+    const result = await rewriteVariationFields(rewriteRequest);
+    const preview = result.changed
+      .slice(0, 8)
+      .map((item) => `第${item.seq}张 -> ${item.人物} / ${item.服装} / ${item.风格}`)
+      .join("\n");
+    return {
+      reply: [
+        `已在当前 WA 主表重写 ${result.changed.length} 条的 人物 / 服装 / 风格。`,
+        "未改主文案、副文案、AI设计图，也没有创建新表。",
+        `人物分布：${Object.entries(result.roleCounts).map(([key, value]) => `${key} ${value}条`).join("，")}。`,
+        preview ? `预览：\n${preview}${result.changed.length > 8 ? "\n..." : ""}` : "",
+      ].filter(Boolean).join("\n"),
     };
   }
 
@@ -529,9 +647,13 @@ async function handleCommand(text = "") {
     return buildReplyWithImages(formatRecordSummary(target), [target]);
   }
 
-  if (/(筛选|过滤|查看|列出).*(Boy|Girl|Robot|robot|机器人)/i.test(source)) {
-    const roleMatch = source.match(/Boy|Girl|Robot|robot|机器人/i);
-    const role = /机器人|robot/i.test(roleMatch?.[0] || "") ? "Robot" : roleMatch?.[0];
+  if (/(筛选|过滤|查看|列出).*(Boy真人版|真人版|Boy|Girl|Robot|robot|机器人)/i.test(source)) {
+    const roleMatch = source.match(/Boy真人版|真人版Boy|真人版|Boy|Girl|Robot|robot|机器人/i);
+    const role = /机器人|robot/i.test(roleMatch?.[0] || "")
+      ? "Robot"
+      : /真人版/i.test(roleMatch?.[0] || "")
+        ? "Boy真人版"
+        : roleMatch?.[0];
     const records = await listRecords();
     const matched = records.filter((item) => item.role === role);
     return buildReplyWithImages(
@@ -653,7 +775,7 @@ async function handleCommand(text = "") {
   }
 
   return {
-    reply: "我识别到你想操作飞书表格，但这个指令还不够明确。当前支持：查看前N张、查看第N张、统计人物、检查空字段、检查AI设计图、清空AI设计图、减少Robot、新增需求、复制第N张、确认删除第N张、修改第N张字段。",
+    reply: "我识别到你想操作飞书表格，但这个指令还不够明确。当前支持：查看前N张、查看第N张、统计人物、检查空字段、检查AI设计图、清空AI设计图、减少Robot、重写人物服装风格、新增需求、复制第N张、确认删除第N张、修改第N张字段。",
   };
 }
 

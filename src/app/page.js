@@ -169,8 +169,8 @@ function detectFeishuWaCommand(text = "") {
   const source = String(text || "").replace(/\s+/g, "");
   if (!source) return false;
   if (/生成前[0-9一二两三四五六七八九十]+张.*?(WA|wa|海报)/i.test(source)) return false;
-  const hasTableTarget = /(飞书|表格|文档|AI设计图|ai设计图|Robot|robot|机器人|第二批|第2批|第[0-9一二两三四五六七八九十]+张)/i.test(source);
-  const hasAction = /(修改|改成|改为|设为|设置为|清空|删除|移除|减少|少一些|少一点|不要太多|统计|查看|多少|创建|新建|建立|复制|重写|平衡|均衡)/.test(source);
+  const hasTableTarget = /(飞书|表格|文档|AI设计图|ai设计图|Boy|Girl|Robot|robot|机器人|真人版|人物|角色|服装|服饰|风格|第二批|第2批|前[0-9一二两三四五六七八九十]+张|第[0-9一二两三四五六七八九十]+张)/i.test(source);
+  const hasAction = /(修改|改成|改为|设为|设置为|清空|删除|移除|减少|降低|增加|提高|只要|保留|控制在|少一些|少一点|不要太多|统计|查看|多少|创建|新建|建立|复制|添加|加入|重新|重写|改写|重填|重新填充|刷新|变化|换一版|换一批|平衡|均衡)/.test(source);
   return hasTableTarget && hasAction;
 }
 
