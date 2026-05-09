@@ -68,7 +68,7 @@ async function resolveTableTarget({ tableId = "", tableName = "", tableAlias = "
 }
 
 async function resolveAiImageFieldId(tableId = TABLE_ID) {
-  if (process.env.FEISHU_WA_AI_IMAGE_FIELD) return process.env.FEISHU_WA_AI_IMAGE_FIELD;
+  if (tableId === TABLE_ID && process.env.FEISHU_WA_AI_IMAGE_FIELD) return process.env.FEISHU_WA_AI_IMAGE_FIELD;
   const data = await runLarkCliJson([
     "base", "+field-list",
     "--base-token", BASE_TOKEN,
@@ -210,7 +210,7 @@ async function prepareBatch({ limit = 5, start = 0, end = 0, tail = false, table
         await runLarkCliJson([
           "base", "+record-upsert",
           "--base-token", BASE_TOKEN,
-          "--table-id", TABLE_ID,
+          "--table-id", target.tableId,
           "--record-id", recordId,
           "--as", LARK_IDENTITY,
           "--json", `@${jsonFile.cliPath}`,
