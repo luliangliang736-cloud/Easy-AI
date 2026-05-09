@@ -1,5 +1,6 @@
 import { randomUUID } from "crypto";
 import { mkdir, unlink, writeFile } from "fs/promises";
+import path from "path";
 import { NextResponse } from "next/server";
 import { LARK_IDENTITY, runLarkCliJson } from "@/lib/server/larkCliRuntime";
 
