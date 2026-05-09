@@ -4,7 +4,7 @@ import path from "path";
 
 const TASK_DIR = path.join(process.cwd(), ".easyai-tmp");
 const TASK_FILE = path.join(TASK_DIR, "feishu-wa-tasks.json");
-const CLAIM_TIMEOUT_MS = 12 * 60 * 60 * 1000;
+const QUEUED_TASK_TTL_MS = 6 * 60 * 60 * 1000;
 
 async function withTaskLock(operation) {
   const previousLock = globalThis.__easyaiFeishuWaTaskLock || Promise.resolve();
@@ -73,10 +73,16 @@ export async function claimFeishuWaTask({ clientId = "easyai" } = {}) {
   return withTaskLock(async () => {
     const tasks = await readTasks();
     const now = Date.now();
-    const task = tasks.find((item) => (
-      item.status === "queued"
-      || (item.status === "claimed" && now - Number(item.claimedAt || 0) > CLAIM_TIMEOUT_MS)
-    ));
+
+    for (const item of tasks) {
+      if (item.status === "queued" && now - Number(item.createdAt || 0) > QUEUED_TASK_TTL_MS) {
+        item.status = "expired";
+        item.error = "任务超过 6 小时未领取，已自动过期，避免隔天打开页面重复执行";
+        item.updatedAt = now;
+      }
+    }
+
+    const task = tasks.find((item) => item.status === "queued");
     if (!task) return null;
 
     task.status = "claimed";
