@@ -719,7 +719,7 @@ function MarkdownRenderer({ text, isLightTheme }) {
   );
 }
 
-function ImageLightbox({ src, onClose }) {
+function ImageLightbox({ src, onClose, showLoading = false }) {
   const [retry, setRetry] = useState(0);
   const [loaded, setLoaded] = useState(false);
   const [failed, setFailed] = useState(false);
@@ -727,15 +727,33 @@ function ImageLightbox({ src, onClose }) {
   const imageSrc = appendImageRetryParam(src, retry);
 
   useEffect(() => {
+    if (!showLoading) return undefined;
     const timer = window.setTimeout(() => setSlow(true), 2500);
     return () => window.clearTimeout(timer);
-  }, [src]);
+  }, [showLoading, src]);
 
   useEffect(() => {
     const handler = (e) => { if (e.key === "Escape") onClose(); };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, [onClose]);
+  if (!showLoading) {
+    return (
+      <div
+        className="fixed inset-0 z-[200] flex items-center justify-center bg-black/85 backdrop-blur-sm"
+        onPointerDown={(event) => event.stopPropagation()}
+        onClick={onClose}
+      >
+        <button type="button" onClick={onClose} className="absolute right-5 top-5 z-10 rounded-xl bg-white/10 p-2 text-white hover:bg-white/20"><X size={20} /></button>
+        <img
+          src={src}
+          alt="预览"
+          className="max-h-[90vh] max-w-[90vw] rounded-xl object-contain shadow-2xl"
+          onClick={(e) => e.stopPropagation()}
+        />
+      </div>
+    );
+  }
   return (
     <div
       className="fixed inset-0 z-[200] flex items-center justify-center bg-black/85 backdrop-blur-sm"
@@ -945,6 +963,8 @@ export default function ChatPage() {
   const [copiedMessageId, setCopiedMessageId] = useState(null);
   const [expandedQualityId, setExpandedQualityId] = useState(null);
   const [previewSrc, setPreviewSrc] = useState(null);
+  const activePreviewSrc = typeof previewSrc === "object" ? previewSrc?.src : previewSrc;
+  const previewShowsLoading = typeof previewSrc === "object" && previewSrc?.showLoading;
   const [mounted, setMounted] = useState(false);
   const [isImageHistoryOpen, setIsImageHistoryOpen] = useState(false);
   const [imageHistory, setImageHistory] = useState([]);
@@ -2177,7 +2197,7 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
                         isLightTheme={isLightTheme}
                         isGenerating={isGenerating}
                         onStop={handleStopBatchWa}
-                        onPreview={setPreviewSrc}
+                        onPreview={(src) => setPreviewSrc({ src, showLoading: true })}
                         onDownload={handleDownloadImage}
                       />
                     ) : null}
@@ -2353,7 +2373,13 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
         </div>
       </div>
 
-      {previewSrc && <ImageLightbox src={previewSrc} onClose={() => setPreviewSrc(null)} />}
+      {activePreviewSrc && (
+        <ImageLightbox
+          src={activePreviewSrc}
+          showLoading={previewShowsLoading}
+          onClose={() => setPreviewSrc(null)}
+        />
+      )}
     </div>
   );
 }

@@ -124,7 +124,7 @@ function getPanelPositionFromBall(position, panelSize, viewport) {
   );
 }
 
-function ImageLightbox({ src, onClose }) {
+function ImageLightbox({ src, onClose, showLoading = false }) {
   const [retry, setRetry] = useState(0);
   const [loaded, setLoaded] = useState(false);
   const [failed, setFailed] = useState(false);
@@ -132,9 +132,10 @@ function ImageLightbox({ src, onClose }) {
   const imageSrc = appendImageRetryParam(src, retry);
 
   useEffect(() => {
+    if (!showLoading) return undefined;
     const timer = window.setTimeout(() => setSlow(true), 2500);
     return () => window.clearTimeout(timer);
-  }, [src]);
+  }, [showLoading, src]);
 
   useEffect(() => {
     const handler = (event) => {
@@ -145,6 +146,29 @@ function ImageLightbox({ src, onClose }) {
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, [onClose]);
+
+  if (!showLoading) {
+    return (
+      <div
+        className="pointer-events-auto fixed inset-0 z-[120] flex items-center justify-center bg-black/80 backdrop-blur-sm animate-fade-in"
+        onClick={onClose}
+      >
+        <button
+          type="button"
+          onClick={onClose}
+          className="absolute right-4 top-4 z-10 rounded-xl bg-bg-secondary/80 p-2 text-text-primary transition-all hover:bg-bg-hover"
+        >
+          <X size={20} />
+        </button>
+        <img
+          src={src}
+          alt="预览"
+          className="max-h-[90vh] max-w-[90vw] rounded-xl object-contain shadow-2xl"
+          onClick={(event) => event.stopPropagation()}
+        />
+      </div>
+    );
+  }
 
   return (
     <div
@@ -632,6 +656,8 @@ export default function FloatingEntryWidget({
   const attachmentsRef = useRef([]);
   const restorePanelFrameRef = useRef(null);
   const [previewSrc, setPreviewSrc] = useState(null);
+  const activePreviewSrc = typeof previewSrc === "object" ? previewSrc?.src : previewSrc;
+  const previewShowsLoading = typeof previewSrc === "object" && previewSrc?.showLoading;
   const [copiedMessageId, setCopiedMessageId] = useState(null);
   const [expandedQualityId, setExpandedQualityId] = useState(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -1722,7 +1748,7 @@ export default function FloatingEntryWidget({
                             isLightTheme={isLightTheme}
                             isSubmitting={isSubmitting}
                             onStopBatchWa={onStopBatchWa}
-                            onPreview={setPreviewSrc}
+                            onPreview={(src) => setPreviewSrc({ src, showLoading: true })}
                             onDownload={handleDownloadImage}
                           />
                         ) : null}
@@ -2212,7 +2238,13 @@ export default function FloatingEntryWidget({
         </div>
       )}
 
-      {previewSrc && <ImageLightbox src={previewSrc} onClose={() => setPreviewSrc(null)} />}
+      {activePreviewSrc && (
+        <ImageLightbox
+          src={activePreviewSrc}
+          showLoading={previewShowsLoading}
+          onClose={() => setPreviewSrc(null)}
+        />
+      )}
 
       <style jsx>{`
         .floating-logo-wrap {
