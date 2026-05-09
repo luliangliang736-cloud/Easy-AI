@@ -116,26 +116,27 @@ function parseFeishuWaBatchRequest(text = "") {
   const source = String(text || "").replace(/\s+/g, "");
   if (!/(飞书|表格|多维表|base|文档)/i.test(source) || !/(WA|wa|海报)/i.test(source)) return null;
   if (!/(生成|制作|生图|批量生成|批量制作)/.test(source)) return null;
+  const tableAlias = /(第二批|第2批|二批)/.test(source) ? "second" : "";
   const rangeMatch = source.match(/第([0-9一二两三四五六七八九十]+)(?:张|条|个)?(?:到|至|-|—)(?:第)?([0-9一二两三四五六七八九十]+)(?:张|条|个)?/);
   if (rangeMatch) {
     const start = chineseNumberToInt(rangeMatch[1]);
     const end = chineseNumberToInt(rangeMatch[2]);
-    if (start > 0 && end >= start) return { start, end, limit: Math.min(end - start + 1, 50) };
+    if (start > 0 && end >= start) return { start, end, limit: Math.min(end - start + 1, 50), tableAlias };
   }
   const singleMatch = source.match(/第([0-9一二两三四五六七八九十]+)(?:张|条|个)/);
   if (singleMatch) {
     const start = chineseNumberToInt(singleMatch[1]);
-    if (start > 0) return { start, end: start, limit: 1 };
+    if (start > 0) return { start, end: start, limit: 1, tableAlias };
   }
   const tailMatch = source.match(/(?:后|最后)([0-9一二两三四五六七八九十]+)(?:张|条|个)/);
   if (tailMatch) {
     const limit = chineseNumberToInt(tailMatch[1]);
-    if (limit > 0) return { limit: Math.min(limit, 50), tail: true };
+    if (limit > 0) return { limit: Math.min(limit, 50), tail: true, tableAlias };
   }
   const headMatch = source.match(/前([0-9一二两三四五六七八九十]+)(?:张|条|个)/);
   if (headMatch) {
     const limit = chineseNumberToInt(headMatch[1]);
-    if (limit > 0) return { limit: Math.min(limit, 50) };
+    if (limit > 0) return { limit: Math.min(limit, 50), tableAlias };
   }
   return null;
 }
@@ -152,12 +153,12 @@ async function fetchFeishuWaBatchPrompts(request) {
   return Array.isArray(data?.data?.items) ? data.data.items : [];
 }
 
-async function uploadFeishuWaImage({ recordId, imageUrl, name }) {
+async function uploadFeishuWaImage({ recordId, imageUrl, name, tableId, tableName }) {
   if (!recordId || !imageUrl) return;
   const res = await fetch("/api/feishu-wa-batch", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ action: "upload", recordId, imageUrl, name }),
+    body: JSON.stringify({ action: "upload", recordId, imageUrl, name, tableId, tableName }),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data?.error || "飞书回填失败");
@@ -168,8 +169,8 @@ function detectFeishuWaCommand(text = "") {
   const source = String(text || "").replace(/\s+/g, "");
   if (!source) return false;
   if (/生成前[0-9一二两三四五六七八九十]+张.*?(WA|wa|海报)/i.test(source)) return false;
-  const hasTableTarget = /(飞书|表格|文档|AI设计图|ai设计图|Robot|robot|机器人|第[0-9一二两三四五六七八九十]+张)/i.test(source);
-  const hasAction = /(修改|改成|改为|设为|设置为|清空|删除|移除|减少|少一些|少一点|不要太多|统计|查看|多少)/.test(source);
+  const hasTableTarget = /(飞书|表格|文档|AI设计图|ai设计图|Robot|robot|机器人|第二批|第2批|第[0-9一二两三四五六七八九十]+张)/i.test(source);
+  const hasAction = /(修改|改成|改为|设为|设置为|清空|删除|移除|减少|少一些|少一点|不要太多|统计|查看|多少|创建|新建|建立|复制|重写|平衡|均衡)/.test(source);
   return hasTableTarget && hasAction;
 }
 
@@ -1516,6 +1517,8 @@ export default function HomePage() {
               try {
                 await uploadFeishuWaImage({
                   recordId: item.recordId,
+                  tableId: item.tableId,
+                  tableName: item.tableName,
                   imageUrl: result.urls[0],
                   name: `wa-${item.index + 1}-${Date.now()}.png`,
                 });

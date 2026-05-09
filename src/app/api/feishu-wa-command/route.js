@@ -7,6 +7,7 @@ export const runtime = "nodejs";
 
 const BASE_TOKEN = process.env.FEISHU_WA_BASE_TOKEN || "R2edbyyrZaGixJsH0v2cD1Mcnkg";
 const TABLE_ID = process.env.FEISHU_WA_TABLE_ID || "tble6jwNnOTjv75V";
+const SECOND_BATCH_TABLE_PREFIX = process.env.FEISHU_WA_SECOND_BATCH_PREFIX || "WA海报批量测试_第二批";
 const AI_IMAGE_FIELD_NAME = "AI设计图";
 const EDITABLE_FIELDS = new Set([
   "人物",
@@ -236,6 +237,165 @@ function parseLimit(text = "", fallback = 10) {
   return value > 0 ? Math.min(value, 100) : fallback;
 }
 
+function makeSecondBatchTableName() {
+  const now = new Date();
+  const pad = (value) => String(value).padStart(2, "0");
+  return `${SECOND_BATCH_TABLE_PREFIX}_${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}`;
+}
+
+function parseSecondBatchRequest(text = "") {
+  const source = String(text || "");
+  if (!/(第二批|第2批|二批)/.test(source)) return null;
+  if (!/(创建|新建|建立|生成|复制).*(表格|表|批次|第二批|第2批|二批)/.test(source)) return null;
+  return {
+    limit: parseLimit(source, 39),
+    reduceGreen: /(减少|降低|少一点|少一些|不要太多).*(绿色|绿)/.test(source) || /绿色.*(减少|降低|少一点|少一些|不要太多)/.test(source),
+    rebalanceRole: /(人物|男生|Boy|女生|Girl|Robot|机器人|平衡|均衡)/i.test(source),
+  };
+}
+
+function compactText(record) {
+  return `${formatSelectValue(record.scene)} ${record.zhHeadline} ${record.zhSubline} ${record.headline} ${record.subline}`.toLowerCase();
+}
+
+function chooseSecondBatchRole(record, counts, targets) {
+  const source = compactText(record);
+  if (/(robot|机器人|自动|极速|5\s*menit|kilat|cepat|online|pindar)/i.test(source) && counts.Robot < targets.Robot) {
+    counts.Robot += 1;
+    return "Robot";
+  }
+  if (/(skor|credit|信用|gaji|salary|发薪|limit|额度)/i.test(source) && counts.Boy < targets.Boy) {
+    counts.Boy += 1;
+    return "Boy";
+  }
+  if (counts.Girl < targets.Girl) {
+    counts.Girl += 1;
+    return "Girl";
+  }
+  if (counts.Boy < targets.Boy) {
+    counts.Boy += 1;
+    return "Boy";
+  }
+  counts.Girl += 1;
+  return "Girl";
+}
+
+function chooseSecondBatchOutfit(record, role) {
+  const source = compactText(record);
+  if (role === "Robot") {
+    return "仅使用库里的Robot标准形态：标准绿色主体机身、黑色屏幕脸、银白机械臂/脚部；最多只改变姿势/朝向/手势，不改变服饰、颜色、机身或屏幕脸";
+  }
+  if (/(vip|gold|member|会员|权益)/i.test(source)) return "高级商务服装";
+  if (/(skor|credit|信用)/i.test(source)) return role === "Boy" ? "印尼制服" : "亲和职业装";
+  if (/(pinjaman pertama|新用户|ojk|transparan)/i.test(source)) return "客服制服";
+  if (/(gaji|发薪|limit|额度)/i.test(source)) return role === "Boy" ? "绿色客服制服" : "客服制服";
+  if (/(sekolah|学费|教育|afpi)/i.test(source)) return "亲和职业装";
+  return role === "Boy" ? "亲和职业装" : "客服制服";
+}
+
+function chooseSecondBatchStyle(record, index) {
+  const source = compactText(record);
+  if (/(vip|gold|member|会员|权益)/i.test(source)) return "VIP会员权益海报，高级金色与象牙白主视觉，礼遇感、会员徽章、干净明亮，品牌绿仅做小面积点缀";
+  if (/(skor|credit|信用)/i.test(source)) return "信用修复教育海报，蓝白金融科技界面、分数仪表盘、向上箭头，可信专业，减少大面积绿色背景";
+  if (/(pinjaman pertama|新用户|ojk|transparan)/i.test(source)) return "新用户引导海报，清爽浅色流程卡片、透明步骤、OJK信任背书，少量品牌绿按钮点缀";
+  if (/(gaji|发薪|limit|额度)/i.test(source)) return "发薪日前救急海报，暖黄色行动氛围、手机额度卡片、快速到账动线，品牌绿只用于CTA或小图标";
+  if (/(sekolah|学费|教育|afpi)/i.test(source)) return "教育缴费场景海报，温暖米色与书本学费元素，家庭安心感、合规可信，避免整张绿色";
+  const variants = [
+    "蓝白金融科技广告，清晰信息卡片、可信赖、明亮留白，少量品牌绿点缀",
+    "金色权益感营销海报，高级渐变、会员礼遇、干净排版，避免重复绿色背景",
+    "暖色生活场景海报，真实需求感、亲和人物、行动按钮突出，品牌色克制使用",
+    "浅色合规信任海报，OJK/AFPI背书、清晰文字层级、简洁图标，绿色仅作辅助",
+    "深蓝科技金融海报，数据卡片、速度感线条、专业可信，形成与绿色版差异",
+  ];
+  return variants[index % variants.length];
+}
+
+function buildSecondBatchRows(records, limit) {
+  const selected = records.slice(0, limit);
+  const robotTarget = Math.min(3, Math.max(1, Math.round(selected.length * 0.08)));
+  const girlTarget = Math.ceil((selected.length - robotTarget) * 0.58);
+  const boyTarget = Math.max(selected.length - robotTarget - girlTarget, 0);
+  const counts = { Boy: 0, Girl: 0, Robot: 0 };
+  const targets = { Boy: boyTarget, Girl: girlTarget, Robot: robotTarget };
+
+  return selected.map((record, index) => {
+    const role = chooseSecondBatchRole(record, counts, targets);
+    const outfit = chooseSecondBatchOutfit(record, role);
+    const style = chooseSecondBatchStyle(record, index);
+    return {
+      "任务序号": String(index + 1),
+      "优先级": formatSelectValue(record.priority),
+      "场景类型": formatSelectValue(record.scene),
+      "主文案（中文）": record.zhHeadline,
+      "副文案（中文）": record.zhSubline,
+      "主文案（印尼语 ≤30）": record.headline,
+      "副文案（印尼语 ≤50）": record.subline,
+      人物: role,
+      服装: outfit,
+      风格: style,
+      需求备注: [
+        record.note,
+        `第二批自动重平衡：减少绿色重复，人物比例 Boy ${targets.Boy}/Girl ${targets.Girl}/Robot ${targets.Robot}`,
+      ].filter(Boolean).join("；"),
+    };
+  });
+}
+
+async function createTable(name) {
+  const data = await runLarkCliJson([
+    "base", "+table-create",
+    "--base-token", BASE_TOKEN,
+    "--name", name,
+    "--as", LARK_IDENTITY,
+    "--jq", ".",
+  ]);
+  const table = data?.data?.table || data?.data || data?.table || {};
+  const tableId = table?.id || table?.table_id || data?.data?.table_id || data?.table_id;
+  if (!tableId) throw new Error("第二批表格创建失败：未返回 tableId");
+  return tableId;
+}
+
+async function createSecondBatchFields(tableId) {
+  const fields = [
+    { name: "任务序号", type: "text" },
+    { name: "优先级", type: "text" },
+    { name: "场景类型", type: "text" },
+    { name: "主文案（中文）", type: "text" },
+    { name: "副文案（中文）", type: "text" },
+    { name: "主文案（印尼语 ≤30）", type: "text" },
+    { name: "副文案（印尼语 ≤50）", type: "text" },
+    { name: "人物", type: "text" },
+    { name: "服装", type: "text" },
+    { name: "风格", type: "text" },
+    { name: "需求备注", type: "text" },
+    { name: AI_IMAGE_FIELD_NAME, type: "attachment" },
+  ];
+  for (const field of fields) {
+    await runWithTempJson([
+      "base", "+field-create",
+      "--base-token", BASE_TOKEN,
+      "--table-id", tableId,
+      "--as", LARK_IDENTITY,
+    ], field, ["--jq", "."]).catch(() => null);
+  }
+}
+
+async function createSecondBatchTable({ limit = 39 } = {}) {
+  const records = await listRecords(Math.min(Math.max(limit, 1), 50));
+  if (records.length === 0) throw new Error("原表没有可复制的 WA 需求");
+  const tableName = makeSecondBatchTableName();
+  const tableId = await createTable(tableName);
+  await createSecondBatchFields(tableId);
+  const rows = buildSecondBatchRows(records, Math.min(limit, records.length));
+  await runWithTempJson([
+    "base", "+record-batch-create",
+    "--base-token", BASE_TOKEN,
+    "--table-id", tableId,
+    "--as", LARK_IDENTITY,
+  ], { fields: Object.keys(rows[0]), rows: rows.map((row) => Object.keys(rows[0]).map((field) => row[field] || "")) }, ["--jq", "."]);
+  return { tableName, tableId, rows };
+}
+
 function parseCreatePatch(text = "") {
   const source = String(text || "");
   if (!/(新增|添加|创建).*(WA|wa|海报|需求|记录)/i.test(source)) return null;
@@ -327,6 +487,25 @@ async function reduceRobots(target = 4) {
 async function handleCommand(text = "") {
   const source = String(text || "").trim();
   if (!source) throw new Error("指令为空");
+
+  const secondBatchRequest = parseSecondBatchRequest(source);
+  if (secondBatchRequest) {
+    const result = await createSecondBatchTable(secondBatchRequest);
+    const roleCounts = result.rows.reduce((acc, row) => {
+      acc[row.人物] = (acc[row.人物] || 0) + 1;
+      return acc;
+    }, {});
+    return {
+      reply: [
+        `已创建第二批 WA 表格：${result.tableName}`,
+        `表格 ID：${result.tableId}`,
+        `已复制 ${result.rows.length} 条需求，不复制 AI设计图。`,
+        `人物分布：${Object.entries(roleCounts).map(([key, value]) => `${key} ${value}条`).join("，")}。`,
+        "风格已重新改写：减少大面积绿色重复，按 VIP/信用/新用户/发薪日/教育等主题做差异化。",
+        "生成时请使用：批量生成第二批飞书WA海报前39张",
+      ].join("\n"),
+    };
+  }
 
   if (/(查看|列出|展示).*(前|所有|WA|wa|海报|需求|记录)/i.test(source)) {
     const records = await listRecords(parseLimit(source, 10));

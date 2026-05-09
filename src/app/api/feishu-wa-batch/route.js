@@ -12,6 +12,7 @@ export const runtime = "nodejs";
 
 const BASE_TOKEN = process.env.FEISHU_WA_BASE_TOKEN || "R2edbyyrZaGixJsH0v2cD1Mcnkg";
 const TABLE_ID = process.env.FEISHU_WA_TABLE_ID || "tble6jwNnOTjv75V";
+const SECOND_BATCH_TABLE_PREFIX = process.env.FEISHU_WA_SECOND_BATCH_PREFIX || "WA海报批量测试_第二批";
 const AI_IMAGE_FIELD_NAME = "AI设计图";
 
 function normalizeText(value) {
@@ -33,12 +34,45 @@ async function writeTempJson(payload) {
   return { filePath, cliPath: `.easyai-tmp/${filename}` };
 }
 
-async function resolveAiImageFieldId() {
+async function listTables() {
+  const data = await runLarkCliJson([
+    "base", "+table-list",
+    "--base-token", BASE_TOKEN,
+    "--as", LARK_IDENTITY,
+    "--jq", ".",
+  ]);
+  return Array.isArray(data?.data?.tables)
+    ? data.data.tables
+    : Array.isArray(data?.data?.items)
+      ? data.data.items
+      : Array.isArray(data?.data)
+        ? data.data
+        : [];
+}
+
+async function resolveTableTarget({ tableId = "", tableName = "", tableAlias = "" } = {}) {
+  const explicit = String(tableId || tableName || "").trim();
+  if (explicit) return { tableId: explicit, tableName: String(tableName || "").trim() };
+  if (String(tableAlias || "").toLowerCase() === "second") {
+    const tables = await listTables();
+    const matched = tables
+      .filter((table) => String(table?.name || "").startsWith(SECOND_BATCH_TABLE_PREFIX))
+      .sort((a, b) => String(b?.name || "").localeCompare(String(a?.name || "")));
+    const table = matched[0];
+    if (!table?.id && !table?.table_id) {
+      throw new Error("未找到第二批 WA 表格，请先创建第二批表格");
+    }
+    return { tableId: table.id || table.table_id, tableName: table.name || "" };
+  }
+  return { tableId: TABLE_ID, tableName: "" };
+}
+
+async function resolveAiImageFieldId(tableId = TABLE_ID) {
   if (process.env.FEISHU_WA_AI_IMAGE_FIELD) return process.env.FEISHU_WA_AI_IMAGE_FIELD;
   const data = await runLarkCliJson([
     "base", "+field-list",
     "--base-token", BASE_TOKEN,
-    "--table-id", TABLE_ID,
+    "--table-id", tableId,
     "--as", LARK_IDENTITY,
     "--jq", ".",
   ]);
@@ -116,15 +150,16 @@ function buildPrompt({ scene, headline, subline, role, outfit, style }, index) {
 风格：${style}`;
 }
 
-async function prepareBatch({ limit = 5, start = 0, end = 0, tail = false } = {}) {
+async function prepareBatch({ limit = 5, start = 0, end = 0, tail = false, tableId = "", tableName = "", tableAlias = "" } = {}) {
   const safeLimit = Math.min(Math.max(Number(limit) || 5, 1), 50);
   const safeStart = Math.max(Number(start) || 0, 0);
   const safeEnd = Math.max(Number(end) || 0, 0);
   const readLimit = tail || safeStart > 0 || safeEnd > 0 ? 100 : safeLimit;
+  const target = await resolveTableTarget({ tableId, tableName, tableAlias });
   const data = await runLarkCliJson([
     "base", "+record-list",
     "--base-token", BASE_TOKEN,
-    "--table-id", TABLE_ID,
+    "--table-id", target.tableId,
     "--as", LARK_IDENTITY,
     "--limit", String(readLimit),
     "--jq", ".",
@@ -189,6 +224,8 @@ async function prepareBatch({ limit = 5, start = 0, end = 0, tail = false } = {}
       index,
       label: `第${index + 1}张`,
       recordId,
+      tableId: target.tableId,
+      tableName: target.tableName,
       headline,
       subline,
       role,
@@ -228,15 +265,16 @@ async function imageSourceToTempFile(source) {
   return writeTempBinary(buffer, ext);
 }
 
-async function uploadGeneratedImage({ recordId, imageUrl, name }) {
+async function uploadGeneratedImage({ recordId, imageUrl, name, tableId = "", tableName = "", tableAlias = "" }) {
   if (!recordId || !imageUrl) throw new Error("recordId 和 imageUrl 必填");
+  const target = await resolveTableTarget({ tableId, tableName, tableAlias });
   const tempFile = await imageSourceToTempFile(imageUrl);
   try {
-    const aiImageFieldId = await resolveAiImageFieldId();
+    const aiImageFieldId = await resolveAiImageFieldId(target.tableId);
     return await runLarkCliJson([
       "base", "+record-upload-attachment",
       "--base-token", BASE_TOKEN,
-      "--table-id", TABLE_ID,
+      "--table-id", target.tableId,
       "--record-id", recordId,
       "--field-id", aiImageFieldId,
       "--file", tempFile.cliPath,
