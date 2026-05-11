@@ -844,12 +844,24 @@ export default function Canvas({
   const quickEditActions = [
     { id: "cutout", label: "抠图", icon: Scissors },
     { id: "upscale", label: "高清放大", icon: Maximize2 },
-    { id: "editText", label: "编辑文字", icon: Type, disabled: true },
   ];
-  const upscaleOptions = [
-    { id: "1K", edge: 1024 },
-    { id: "2K", edge: 2048 },
-    { id: "4K", edge: 4096 },
+  const upscaleOptionGroups = [
+    {
+      id: "image2",
+      label: "Image2 高清放大",
+      options: [
+        { id: "2K", edge: 2048, provider: "image2", label: "Image2 2K" },
+        { id: "4K", edge: 4096, provider: "image2", label: "Image2 4K" },
+      ],
+    },
+    {
+      id: "nano-pro",
+      label: "Nano Pro 高清放大",
+      options: [
+        { id: "2K", edge: 2048, provider: "nano-pro", label: "Nano Pro 2K" },
+        { id: "4K", edge: 4096, provider: "nano-pro", label: "Nano Pro 4K" },
+      ],
+    },
   ];
 
   const copyCanvasImages = useCallback(async () => {
@@ -1869,7 +1881,7 @@ export default function Canvas({
                   >
                     <div className={`w-8 h-8 rounded-full border-2 border-accent/30 border-t-accent ${isRunning ? "animate-spin" : ""}`} />
                     <div className="text-center">
-                      <p className="text-xs text-text-primary font-medium">
+                      <p className="text-xs text-white font-medium">
                         {isRunning ? "生成中" : "等待中"}
                       </p>
                       {!img.hidePromptText && (
@@ -1902,6 +1914,7 @@ export default function Canvas({
             meta?.width && meta?.height
               ? `${meta.width} × ${meta.height} px`
               : `${Math.round(pos.w)} × ${displayHeight}`;
+          const shouldHidePromptText = Boolean(img.hidePromptText);
 
           return (
             <div
@@ -1911,8 +1924,10 @@ export default function Canvas({
               style={{ left: pos.x, top: pos.y, width: pos.w }}
             >
               {isChromeSingle && (
-                <div className="absolute left-0 right-0 bottom-full mb-2 z-10 flex flex-col gap-2">
-                  <div className="flex items-center gap-2 px-2 py-1.5 rounded-xl border border-border-primary bg-bg-primary/92 backdrop-blur-xl shadow-lg pointer-events-auto overflow-visible">
+                <div className="absolute left-1/2 bottom-full mb-2 z-10 flex -translate-x-1/2 flex-col items-center gap-2">
+                  <div className={`flex w-fit self-start items-center gap-2 px-2 py-1.5 rounded-xl border border-border-primary bg-bg-primary/92 backdrop-blur-xl pointer-events-auto overflow-visible ${
+                    isLightTheme ? "shadow-[0_10px_24px_rgba(15,23,42,0.08)]" : "shadow-lg"
+                  }`}>
                     {(isVideo ? [] : quickEditActions).map((action) => {
                       if (action.id === "upscale") {
                         return (
@@ -1934,25 +1949,32 @@ export default function Canvas({
                             {upscaleMenuFor === img.id && (
                               <div
                                 data-upscale-menu
-                                className="absolute left-0 top-[calc(100%+8px)] z-20 min-w-[168px] rounded-2xl border border-border-primary bg-bg-primary/96 shadow-2xl backdrop-blur-xl p-2"
+                                className="absolute left-0 top-[calc(100%+8px)] z-20 min-w-[220px] rounded-2xl border border-border-primary bg-bg-primary/96 shadow-2xl backdrop-blur-xl p-2"
                               >
-                                {upscaleOptions.map((option) => (
-                                  <button
-                                    key={option.id}
-                                    type="button"
-                                    onPointerDown={(e) => e.stopPropagation()}
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      setUpscaleMenuFor(null);
-                                      onQuickUpscaleImage?.(option.id, img);
-                                    }}
-                                    className="w-full flex items-center justify-between gap-3 px-3 py-2 rounded-xl text-left hover:bg-bg-hover transition-colors"
-                                  >
-                                    <span className="text-sm text-text-primary">{option.id}</span>
-                                    <span className="text-xs text-text-tertiary">
-                                      {getUpscalePreviewSize(meta, option.edge)}
-                                    </span>
-                                  </button>
+                                {upscaleOptionGroups.map((group, groupIndex) => (
+                                  <div key={group.id} className={groupIndex > 0 ? "mt-2" : ""}>
+                                    <div className="px-2 pb-1 text-[10px] font-medium text-text-tertiary">
+                                      {group.label}
+                                    </div>
+                                    {group.options.map((option) => (
+                                      <button
+                                        key={`${option.provider}-${option.id}`}
+                                        type="button"
+                                        onPointerDown={(e) => e.stopPropagation()}
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          setUpscaleMenuFor(null);
+                                          onQuickUpscaleImage?.(option, img);
+                                        }}
+                                        className="w-full flex items-center justify-between gap-3 px-3 py-2 rounded-xl text-left hover:bg-bg-hover transition-colors"
+                                      >
+                                        <span className="text-sm text-text-primary">{option.label}</span>
+                                        <span className="text-xs text-text-tertiary">
+                                          {getUpscalePreviewSize(meta, option.edge)}
+                                        </span>
+                                      </button>
+                                    ))}
+                                  </div>
                                 ))}
                               </div>
                             )}
@@ -1983,11 +2005,45 @@ export default function Canvas({
                         </button>
                       );
                     })}
+                    <div className="h-5 w-px bg-border-primary" />
+                    <button
+                      type="button"
+                      onPointerDown={(e) => e.stopPropagation()}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleContextAction("export", img);
+                      }}
+                      className="inline-flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-[11px] text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors whitespace-nowrap"
+                      title="下载"
+                    >
+                      <Download size={12} />
+                      <span>下载</span>
+                    </button>
+                    <button
+                      type="button"
+                      disabled={isLocked}
+                      onPointerDown={(e) => e.stopPropagation()}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        if (!isLocked) onDeleteImage?.(img.id);
+                      }}
+                      className={`inline-flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-[11px] transition-colors whitespace-nowrap ${
+                        isLocked
+                          ? "text-text-tertiary/45 bg-bg-hover/40 cursor-not-allowed"
+                          : "text-red-400 hover:bg-red-500/12 hover:text-red-500"
+                      }`}
+                      title={isLocked ? "已锁定" : "删除"}
+                    >
+                      <Trash2 size={12} />
+                      <span>删除</span>
+                    </button>
                   </div>
-                  <div className="flex items-center justify-between gap-2 text-[10px] text-text-primary pointer-events-none">
+                  <div className="flex w-full items-center justify-between gap-2 text-[10px] text-text-primary pointer-events-none">
                     <div className="flex items-center gap-1.5 px-1.5 py-0.5 min-w-0">
                       <ImageIcon size={10} />
-                      <span className="truncate">{img.prompt || (isVideo ? "Video" : "Image")}</span>
+                      <span className="truncate">
+                        {shouldHidePromptText ? (isVideo ? "Video" : "Image") : (img.prompt || (isVideo ? "Video" : "Image"))}
+                      </span>
                     </div>
                     <div className="px-1.5 py-0.5 shrink-0" title="原图像素尺寸">
                       {sizeLabel}
@@ -2109,28 +2165,6 @@ export default function Canvas({
                     </>
                   )}
 
-                  <div
-                    className={`absolute top-2 right-2 flex gap-1 transition-opacity ${
-                      isHighlighted ? "opacity-100" : "opacity-0 group-hover:opacity-100"
-                    }`}
-                  >
-                    <button onPointerDown={(e) => e.stopPropagation()}
-                      onClick={(e) => { e.stopPropagation(); window.open(img.image_url, "_blank"); }}
-                      className="p-1.5 rounded-lg bg-black/60 text-white hover:bg-black/80 backdrop-blur-sm transition-all" title="查看原图">
-                      <Maximize2 size={14} />
-                    </button>
-                    <button onPointerDown={(e) => e.stopPropagation()}
-                      onClick={(e) => { e.stopPropagation(); handleContextAction("export", img); }}
-                      className="p-1.5 rounded-lg bg-black/60 text-white hover:bg-black/80 backdrop-blur-sm transition-all" title="下载">
-                      <Download size={14} />
-                    </button>
-                    <button onPointerDown={(e) => e.stopPropagation()}
-                      onClick={(e) => { e.stopPropagation(); if (!isLocked) onDeleteImage?.(img.id); }}
-                      className={`p-1.5 rounded-lg bg-black/60 backdrop-blur-sm transition-all ${isLocked ? "text-zinc-600 cursor-not-allowed" : "text-red-400 hover:bg-red-500/80 hover:text-white"}`} title={isLocked ? "已锁定" : "删除"}>
-                      <Trash2 size={14} />
-                    </button>
-                  </div>
-
                   {isLocked && (
                     <div className="absolute top-2 left-2 p-1.5 rounded-lg bg-black/60 text-amber-400 backdrop-blur-sm">
                       <Lock size={12} />
@@ -2195,9 +2229,11 @@ export default function Canvas({
                 )}
               </div>
 
-              <p className="text-[10px] text-text-tertiary truncate px-0.5 pointer-events-none mt-0 pt-1 leading-tight bg-bg-primary/85 border-t border-accent/25 rounded-b-lg">
-                {img.prompt}
-              </p>
+              {!shouldHidePromptText && (
+                <p className="text-[10px] text-text-tertiary truncate px-0.5 pointer-events-none mt-0 pt-1 leading-tight bg-bg-primary/85 border-t border-accent/25 rounded-b-lg">
+                  {img.prompt}
+                </p>
+              )}
             </div>
           );
         })}

@@ -836,6 +836,7 @@ const MODEL_LABELS = {
 };
 
 const GPT_IMAGE_2_MODEL = "gpt-image-2";
+const NANO_PRO_UPSCALE_MODEL = "gemini-3-pro-image-preview";
 const KLING_VIDEO_MODELS = new Set(["kling-v2-6", "kling-v3", "kling-v3-omni"]);
 
 function isKlingVideoModel(model) {
@@ -843,26 +844,28 @@ function isKlingVideoModel(model) {
   return KLING_VIDEO_MODELS.has(value) || value.startsWith("kling-video") || value.startsWith("kling-v");
 }
 
-const UPSCALE_MODELS = {
-  flash: {
-    "1K": "gemini-2.5-flash-image-hd",
-    "2K": "gemini-3.1-flash-image-preview-2k",
-    "4K": "gemini-3.1-flash-image-preview-4k",
-  },
-  flash2: {
-    "1K": "gemini-3.1-flash-image-preview",
-    "2K": "gemini-3.1-flash-image-preview-2k",
-    "4K": "gemini-3.1-flash-image-preview-4k",
-  },
-  pro: {
-    "1K": "gemini-3-pro-image-preview",
-    "2K": "gemini-3-pro-image-preview-2k",
-    "4K": "gemini-3-pro-image-preview-4k",
-  },
-};
+function normalizeUpscaleRequest(request) {
+  if (typeof request === "string") {
+    return { provider: "image2", targetSize: request };
+  }
+  return {
+    provider: request?.provider === "nano-pro" ? "nano-pro" : "image2",
+    targetSize: String(request?.id || request?.targetSize || "2K").toUpperCase(),
+  };
+}
 
-function resolveUpscaleModel(currentModel, targetSize) {
-  return GPT_IMAGE_2_MODEL;
+function resolveUpscaleModel(provider, targetSize) {
+  return provider === "nano-pro" ? NANO_PRO_UPSCALE_MODEL : GPT_IMAGE_2_MODEL;
+}
+
+function getRefImageIdentity(image) {
+  if (typeof image === "string") return image;
+  return image?.src || image?.url || image?.dataUrl || image?.image_url || JSON.stringify(image || null);
+}
+
+function areSameRefImageList(left = [], right = []) {
+  if (left.length !== right.length) return false;
+  return left.every((image, index) => getRefImageIdentity(image) === getRefImageIdentity(right[index]));
 }
 
 function normalizeTextEditBlocks(blocks = []) {
@@ -995,7 +998,7 @@ function HomeInner() {
   const [semanticSelection, setSemanticSelection] = useState(null);
   const [selectedImage, setSelectedImage] = useState(null);
   const [selectedImageRect, setSelectedImageRect] = useState(null);
-  const [isGenerating, setIsGenerating] = useState(false);
+  const [activeGenerationCount, setActiveGenerationCount] = useState(0);
   const [isTextEditing, setIsTextEditing] = useState(false);
   const [panelWidth, setPanelWidth] = useState(340);
   const [isInspirationMode, setIsInspirationMode] = useState(false);
@@ -1012,8 +1015,10 @@ function HomeInner() {
   const persistReadyRef = useRef(false);
   const activeConversation = conversations.find((conversation) => conversation.id === activeConversationId) || conversations[0];
   const messages = activeConversation?.messages || [];
-  const isBusy = isGenerating || isTextEditing;
-  const canSubmit = Boolean(String(prompt || "").trim() || getActiveTextReplacements(textEditBlocks).length > 0);
+  const isGenerating = activeGenerationCount > 0;
+  const isBusy = isTextEditing;
+  const isNavigationBusy = isGenerating || isTextEditing;
+  const canSubmit = !isTextEditing && Boolean(String(prompt || "").trim() || getActiveTextReplacements(textEditBlocks).length > 0);
   const viewportWidth = typeof window !== "undefined" ? window.innerWidth : 0;
   const viewportHeight = typeof window !== "undefined" ? window.innerHeight : 0;
   const floatingTextPanelWidth = 280;
@@ -1170,7 +1175,7 @@ function HomeInner() {
         activeGenerationRef.current?.controller?.abort();
         activeGenerationRef.current = null;
         generationAbortRef.current = null;
-        setIsGenerating(false);
+        setActiveGenerationCount((value) => Math.max(0, value - 1));
       }
     };
 
@@ -1429,7 +1434,7 @@ function HomeInner() {
       && !retryPayload?.disableSemanticEdit
       )
     ) {
-      if (isBusy) return;
+      if (isTextEditing) return;
       const ts = Date.now();
       const conversationId = activeConversationId;
       const userMsgId = `user-object-edit-${ts}`;
@@ -1468,7 +1473,7 @@ function HomeInner() {
         composerMode: activeComposerMode,
       };
       updateConversationMessages(conversationId, (prev) => [...prev, userMsg, aiMsg]);
-      setIsGenerating(true);
+      setActiveGenerationCount((value) => value + 1);
       if (!preserveComposer) {
         setPrompt("");
       }
@@ -1521,7 +1526,7 @@ function HomeInner() {
         });
         toast(errStr(err) || "局部编辑失败", "info", 2200);
       } finally {
-        setIsGenerating(false);
+        setActiveGenerationCount((value) => Math.max(0, value - 1));
       }
       return;
     }
@@ -1558,7 +1563,7 @@ function HomeInner() {
     const isKlingVideoRequest = isKlingVideoModel(requestParams.model);
     const shouldUseEditApi = !isKlingVideoRequest && (Boolean(editMode) || hasImages);
     const modelLabel = MODEL_LABELS[requestParams.model] || requestParams.model;
-    if (!isKlingVideoRequest && isBusy) return;
+    if (!isKlingVideoRequest && isTextEditing) return;
 
     const messageRefImages = hasImages
       ? await Promise.all(effectiveRefImages.map((img) => makeMessagePreviewImage(img)))
@@ -1616,25 +1621,23 @@ function HomeInner() {
     if (!hideConversationMessages) {
       updateConversationMessages(conversationId, (prev) => [...prev, userMsg, aiMsg]);
     }
-    setIsGenerating(true);
+    setActiveGenerationCount((value) => value + 1);
     if (!preserveComposer) {
       setPrompt("");
     }
+    let generationState = null;
     try {
       const requestController = new AbortController();
       generationAbortRef.current = requestController;
-      activeGenerationRef.current = {
+      generationState = {
         conversationId,
         aiMsgId,
         controller: requestController,
         cancelled: false,
       };
+      activeGenerationRef.current = generationState;
       const shouldCancelTaskForStaleGeneration = () =>
-        (
-          activeGenerationRef.current?.conversationId !== conversationId ||
-          activeGenerationRef.current?.aiMsgId !== aiMsgId ||
-          activeGenerationRef.current?.cancelled
-        );
+        generationState.cancelled;
       const preparedImages = await Promise.all(
         effectiveRefImages.map((img) => {
           if (typeof img !== "string") {
@@ -1727,6 +1730,7 @@ function HomeInner() {
                 image_url: url,
                 media_type: mediaType,
                 prompt: displayText,
+                hidePromptText: hidePlaceholderPrompt,
               },
             ]);
             return { status: "completed" };
@@ -1760,6 +1764,8 @@ function HomeInner() {
               output_format: requestParams.output_format,
               output_compression: requestParams.output_compression,
               moderation: requestParams.moderation,
+              _nanoResolution: requestParams._nanoResolution,
+              _autoRatio: requestParams._autoRatio,
               ref_images: preparedImages,
               clientRequestId,
             };
@@ -1790,6 +1796,8 @@ function HomeInner() {
                 output_format: requestParams.output_format,
                 output_compression: requestParams.output_compression,
                 moderation: requestParams.moderation,
+                _nanoResolution: requestParams._nanoResolution,
+                _autoRatio: requestParams._autoRatio,
                 clientRequestId,
               };
             }
@@ -1861,24 +1869,20 @@ function HomeInner() {
                 image_url: url,
                 media_type: mediaType,
                 prompt: displayText,
+                hidePromptText: hidePlaceholderPrompt,
               },
             ]);
             return { status: "completed" };
           } catch (err) {
-            if (
-              (
-                activeGenerationRef.current?.conversationId !== conversationId ||
-                activeGenerationRef.current?.aiMsgId !== aiMsgId
-              )
-            ) {
+            if (generationState.cancelled) {
               return { status: "cancelled" };
             }
-            if (!activeGenerationRef.current?.cancelled && shouldAttemptGenerationRecovery(err)) {
+            if (shouldAttemptGenerationRecovery(err)) {
               const recoveredResult = await tryRecoverTaskResult();
               if (recoveredResult) return recoveredResult;
             }
             if (err?.name === "AbortError") {
-              if (!activeGenerationRef.current?.cancelled) {
+              if (!generationState.cancelled) {
                 patchTask(conversationId, aiMsgId, taskId, {
                   status: "failed",
                   error: "请求超时。可稍后重试，或减少张数以降低排队压力。",
@@ -1910,9 +1914,7 @@ function HomeInner() {
       ), 0);
 
       if (
-        activeGenerationRef.current?.conversationId === conversationId &&
-        activeGenerationRef.current?.aiMsgId === aiMsgId &&
-        !activeGenerationRef.current?.cancelled
+        !generationState.cancelled
       ) {
         updateMessage(conversationId, aiMsgId, {
           status: successCount > 0 ? "completed" : "failed",
@@ -1935,7 +1937,9 @@ function HomeInner() {
       }
 
       if (!preserveComposer) {
-        setRefImages([]);
+        setRefImages((current) => (
+          areSameRefImageList(current, effectiveRefImages) ? [] : current
+        ));
       }
     } catch (err) {
       if (
@@ -1969,19 +1973,20 @@ function HomeInner() {
         prev.filter((item) => item.aiMsgId !== aiMsgId)
       );
       if (
-        activeGenerationRef.current?.conversationId === conversationId &&
-        activeGenerationRef.current?.aiMsgId === aiMsgId
+        generationState && activeGenerationRef.current === generationState
       ) {
         activeGenerationRef.current = null;
       }
-      generationAbortRef.current = null;
-      setIsGenerating(false);
+      if (generationState && generationAbortRef.current === generationState.controller) {
+        generationAbortRef.current = null;
+      }
+      setActiveGenerationCount((value) => Math.max(0, value - 1));
     }
   }, [
     composerMode,
     entryMode,
     prompt,
-    isBusy,
+    isTextEditing,
     activeConversationId,
     params,
     refImages,
@@ -2022,11 +2027,16 @@ function HomeInner() {
         return { ...m, status: "paused", error: "已手动暂停" };
       })
     );
-    setIsGenerating(false);
+    setActiveGenerationCount((value) => Math.max(0, value - 1));
     setCanvasGeneratingItems((prev) =>
       prev.filter((item) => item.aiMsgId !== aiMsgId)
     );
-    generationAbortRef.current = null;
+    if (activeGenerationRef.current === currentTask) {
+      activeGenerationRef.current = null;
+    }
+    if (generationAbortRef.current === controller) {
+      generationAbortRef.current = null;
+    }
     controller.abort();
     toast("已暂停当前生成", "info", 1500);
   }, [toast, updateConversationMessages]);
@@ -2225,6 +2235,7 @@ function HomeInner() {
         refImages: [img.image_url],
         preserveComposer: true,
         hidePlaceholderPrompt: true,
+        hideConversationMessages: true,
         editMode: "cutout",
         disableAgentDefaults: true,
         composerMode: "manual",
@@ -2315,7 +2326,8 @@ function HomeInner() {
     toast("已填入快捷编辑指令", "success", 1500);
   }, [handleGenerate, isBusy, params, toast]);
 
-  const handleQuickUpscaleImage = useCallback(async (targetSize, img) => {
+  const handleQuickUpscaleImage = useCallback(async (upscaleRequest, img) => {
+    const { provider, targetSize } = normalizeUpscaleRequest(upscaleRequest);
     if (!img?.image_url || !targetSize) return;
     if (isBusy) {
       toast("当前有任务进行中，请稍候再试", "info", 1500);
@@ -2323,19 +2335,25 @@ function HomeInner() {
     }
 
     const meta = await detectRefImageMeta(img.image_url);
-    const model = resolveUpscaleModel(params.model, targetSize);
-    const imageSize = model === GPT_IMAGE_2_MODEL
-      ? computeGptImage2UpscaleSize(meta.width, meta.height, targetSize)
-      : "auto";
+    const model = resolveUpscaleModel(provider, targetSize);
+    const computedUpscaleSize = computeGptImage2UpscaleSize(meta.width, meta.height, targetSize);
+    const imageSize = computedUpscaleSize === "auto"
+      ? (provider === "image2" ? "auto" : targetSize)
+      : computedUpscaleSize;
+    const upscaleLabel = provider === "nano-pro" ? "Nano Pro" : "Image2";
     setTextEditBlocks([]);
     setTextEditPanelVisible(false);
-      setSemanticSelection(null);
+    setSemanticSelection(null);
+    const sizeRequirement = computedUpscaleSize === "auto"
+      ? targetSize
+      : `${computedUpscaleSize} (${targetSize})`;
     await handleGenerate({
-      text: `请基于这张参考图做高清放大与细节增强，尽量输出接近 ${targetSize} 的高分辨率版本，保持主体、构图、文字内容与风格一致，不要改图，不要新增元素。`,
+      text: `请基于这张参考图做${upscaleLabel}高清放大与细节增强，输出尺寸尽量严格接近 ${sizeRequirement}，保持原图长宽比例与完整画面，不要裁切、不要缩小画布、不要加边框，保持主体、构图、文字内容与风格一致，不要改图，不要新增元素。`,
       params: {
         ...params,
         model,
         image_size: imageSize,
+        _nanoResolution: provider === "nano-pro" ? targetSize : undefined,
         _autoRatio: meta.ratio,
         _autoDimensions: meta.dimensionsLabel || undefined,
         _autoWidth: meta.width || undefined,
@@ -2531,7 +2549,7 @@ function HomeInner() {
   }, [toast]);
 
   const handleNewConversation = useCallback(() => {
-    if (isBusy) {
+    if (isNavigationBusy) {
       toast("生成过程中暂时不能切换对话", "info", 1500);
       return;
     }
@@ -2539,19 +2557,19 @@ function HomeInner() {
     setConversations((prev) => [nextConversation, ...prev]);
     setActiveConversationId(nextConversation.id);
     resetComposer();
-  }, [isBusy, resetComposer, toast]);
+  }, [isNavigationBusy, resetComposer, toast]);
 
   const handleSelectConversation = useCallback((conversationId) => {
-    if (isBusy) {
+    if (isNavigationBusy) {
       toast("生成过程中暂时不能切换对话", "info", 1500);
       return;
     }
     setActiveConversationId(conversationId);
     resetComposer();
-  }, [isBusy, resetComposer, toast]);
+  }, [isNavigationBusy, resetComposer, toast]);
 
   const handleDeleteConversation = useCallback((conversationId) => {
-    if (isBusy) {
+    if (isNavigationBusy) {
       toast("生成过程中暂时不能删除对话", "info", 1500);
       return;
     }
@@ -2573,10 +2591,10 @@ function HomeInner() {
     });
 
     toast("对话已删除", "info", 1200);
-  }, [activeConversationId, isBusy, resetComposer, toast]);
+  }, [activeConversationId, isNavigationBusy, resetComposer, toast]);
 
   const handleDeleteMessage = useCallback((messageId) => {
-    if (isBusy) {
+    if (isNavigationBusy) {
       toast("生成过程中暂时不能删除记录", "info", 1500);
       return;
     }
@@ -2586,7 +2604,7 @@ function HomeInner() {
 
     updateConversationMessages(activeConversationId, (prev) => prev.filter((message) => message.id !== messageId));
     toast("记录已删除", "info", 1200);
-  }, [activeConversationId, isBusy, toast, updateConversationMessages]);
+  }, [activeConversationId, isNavigationBusy, toast, updateConversationMessages]);
 
   return (
     <div className="h-screen flex overflow-hidden">
@@ -2745,7 +2763,7 @@ function HomeInner() {
         onPromptChange={setPrompt}
         onSubmit={handleGenerate}
         canSubmit={canSubmit}
-        isGenerating={isBusy}
+        isGenerating={false}
         params={params}
         onParamsChange={setParamsClamped}
         showParams={showParams}

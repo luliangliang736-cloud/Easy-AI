@@ -3,10 +3,12 @@ import { MAX_GEN_COUNT } from "@/lib/genLimits";
 import { resolveNanoServiceTier } from "@/lib/nanoConfig";
 import { editWithGptImage2, isGptImage2Model } from "@/lib/server/gptImage2";
 import {
+  editWithGeminiNativeImage,
   editWithOpenAICompatibleChatImage,
   editWithOpenAICompatibleImage,
 } from "@/lib/server/openaiImageCompat";
 import { saveGenerationResult } from "@/lib/server/generationResultStore";
+import { readGeneratedImage } from "@/lib/server/generatedImageStore";
 
 const API_BASE = process.env.NANO_API_BASE || "https://api.nanobananaapi.dev";
 const API_KEY = process.env.NANO_API_KEY;
@@ -47,6 +49,18 @@ function resolveOpenAICompatNanoModel(model) {
   return requestedModel || "gemini-3.1-flash-image-preview";
 }
 
+function normalizeNativeNanoResolution(value) {
+  const resolution = String(value || "").trim().toUpperCase();
+  return ["2K", "4K"].includes(resolution) ? resolution : "";
+}
+
+function shouldUseGeminiNativeImage(model, nanoResolution) {
+  return (
+    resolveOpenAICompatNanoModel(model) === "gemini-3-pro-image-preview" &&
+    Boolean(normalizeNativeNanoResolution(nanoResolution))
+  );
+}
+
 export const runtime = "nodejs";
 export const maxDuration = 600;
 
@@ -65,6 +79,15 @@ async function normalizeCutoutSource(image) {
   const source = Array.isArray(image) ? image[0] : image;
   if (!source || typeof source !== "string") {
     throw new Error("Image is required for cutout");
+  }
+
+  const localGeneratedMatch = source.match(/^\/api\/generated-images\/([^/?#]+)/i);
+  if (localGeneratedMatch) {
+    const localImage = await readGeneratedImage(decodeURIComponent(localGeneratedMatch[1]));
+    if (!localImage) {
+      throw new Error("本地生成图已过期或不存在，请重新生成后再抠图。");
+    }
+    return new Blob([localImage.buffer], { type: localImage.mimeType });
   }
 
   if (/^data:image\//i.test(source)) {
@@ -114,6 +137,8 @@ export async function POST(request) {
       output_format,
       output_compression,
       moderation,
+      _nanoResolution,
+      _autoRatio,
       clientRequestId: requestIdFromClient,
     } = body;
     clientRequestId = String(requestIdFromClient || "").trim();
@@ -185,6 +210,34 @@ export async function POST(request) {
         { error: "API key not configured. Set NANO_API_KEY in .env.local" },
         { status: 500 }
       );
+    }
+
+    if (shouldUseGeminiNativeImage(model, _nanoResolution)) {
+      const imageSize = normalizeNativeNanoResolution(_nanoResolution);
+      const urls = await editWithGeminiNativeImage({
+        apiBase: API_BASE,
+        apiKey: API_KEY,
+        model: "gemini-3-pro-image-preview",
+        prompt,
+        image,
+        imageSize,
+        aspectRatio: _autoRatio || image_size || "1:1",
+      });
+      const tasks = urls
+        .filter(Boolean)
+        .map((url, index) => ({ id: `gemini-native-edit-${index}`, index, url, status: "completed" }));
+      logEditEvent(meta, "success", {
+        provider: "gemini-native",
+        imageSize,
+        aspectRatio: _autoRatio || null,
+        urlCount: urls.filter(Boolean).length,
+      });
+      const responseBody = {
+        success: true,
+        data: { urls, tasks },
+      };
+      await saveGenerationResult(clientRequestId, responseBody);
+      return NextResponse.json(responseBody);
     }
 
     if (API_STYLE === "openai") {

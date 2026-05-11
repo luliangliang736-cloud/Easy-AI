@@ -4,7 +4,14 @@ const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
 
 function normalizeBaseUrl(apiBase = "") {
   const raw = String(apiBase || "https://api.openai.com").replace(/\/$/, "");
-  return /\/v\d+$/i.test(raw) ? raw : `${raw}/v1`;
+  return /\/v\d+(?:beta)?$/i.test(raw) ? raw : `${raw}/v1`;
+}
+
+function normalizeGeminiBaseUrl(apiBase = "") {
+  const raw = String(apiBase || "https://generativelanguage.googleapis.com").replace(/\/$/, "");
+  if (/\/v1beta$/i.test(raw)) return raw;
+  if (/\/v1$/i.test(raw)) return raw.replace(/\/v1$/i, "/v1beta");
+  return `${raw}/v1beta`;
 }
 
 function buildAuthHeaders(apiKey = "", apiKeyHeader = "authorization") {
@@ -19,6 +26,7 @@ function buildAuthHeaders(apiKey = "", apiKeyHeader = "authorization") {
 function mapImageSize(imageSize = "1:1") {
   const ratio = String(imageSize || "1:1").trim().toLowerCase();
   if (ratio === "auto") return "auto";
+  if (["1k", "2k", "4k"].includes(ratio)) return ratio.toUpperCase();
   if (/^\d{2,4}\s*[xX]\s*\d{2,4}$/.test(ratio)) {
     return ratio.replace(/\s+/g, "").replace("x", "x");
   }
@@ -72,6 +80,38 @@ function normalizeImageInput(image) {
   return list.filter((item) => typeof item === "string" && item);
 }
 
+function normalizeGeminiImageSize(imageSize = "1K") {
+  const value = String(imageSize || "1K").trim().toUpperCase();
+  return ["0.5K", "512", "1K", "2K", "4K"].includes(value) ? value : "1K";
+}
+
+function normalizeGeminiAspectRatio(aspectRatio = "1:1") {
+  const candidates = [
+    ["1:1", 1],
+    ["16:9", 16 / 9],
+    ["9:16", 9 / 16],
+    ["4:3", 4 / 3],
+    ["3:4", 3 / 4],
+    ["3:2", 3 / 2],
+    ["2:3", 2 / 3],
+    ["4:5", 4 / 5],
+    ["5:4", 5 / 4],
+    ["21:9", 21 / 9],
+  ];
+  const value = String(aspectRatio || "").trim();
+  const direct = candidates.find(([ratio]) => ratio === value);
+  if (direct) return direct[0];
+
+  const exactSize = value.match(/^(\d{2,5})\s*[xX]\s*(\d{2,5})$/);
+  const ratioMatch = value.match(/^(\d+(?:\.\d+)?)\s*[:/]\s*(\d+(?:\.\d+)?)$/);
+  const width = Number(exactSize?.[1] || ratioMatch?.[1] || 1);
+  const height = Number(exactSize?.[2] || ratioMatch?.[2] || 1);
+  const ratioValue = width > 0 && height > 0 ? width / height : 1;
+  return candidates.reduce((best, candidate) => (
+    Math.abs(candidate[1] - ratioValue) < Math.abs(best[1] - ratioValue) ? candidate : best
+  ), candidates[0])[0];
+}
+
 function base64ToBlob(dataUrl) {
   if (dataUrl.startsWith("data:")) {
     const commaIdx = dataUrl.indexOf(",");
@@ -121,6 +161,17 @@ async function imageSourceToBlob(source) {
   return base64ToBlob(source);
 }
 
+async function imageSourceToGeminiInlineData(source) {
+  const { blob, mimeType } = await imageSourceToBlob(source);
+  const buffer = Buffer.from(await blob.arrayBuffer());
+  return {
+    inline_data: {
+      mime_type: mimeType,
+      data: buffer.toString("base64"),
+    },
+  };
+}
+
 function extractUrls(data = {}, fallbackMimeType = "image/png") {
   const items = Array.isArray(data?.data) ? data.data : [];
   return items
@@ -152,6 +203,22 @@ function extractChatImageUrls(data = {}) {
     urls.push(text.trim());
   }
   return [...new Set(urls.filter(Boolean))];
+}
+
+function extractGeminiImageUrls(data = {}) {
+  const parts = (Array.isArray(data?.candidates) ? data.candidates : [])
+    .flatMap((candidate) => candidate?.content?.parts || []);
+  return parts
+    .map((part) => {
+      const inlineData = part?.inlineData || part?.inline_data;
+      const base64 = inlineData?.data;
+      if (typeof base64 === "string" && base64) {
+        const mimeType = inlineData?.mimeType || inlineData?.mime_type || "image/png";
+        return `data:${mimeType};base64,${base64}`;
+      }
+      return part?.fileData?.fileUri || part?.file_data?.file_uri || "";
+    })
+    .filter(Boolean);
 }
 
 async function postJson({ apiBase, apiKey, apiKeyHeader, path, payload, timeoutMs = DEFAULT_TIMEOUT_MS }) {
@@ -334,4 +401,48 @@ export async function editWithOpenAICompatibleChatImage({
   });
 
   return await normalizeGeneratedImageUrls(extractChatImageUrls(data));
+}
+
+export async function editWithGeminiNativeImage({
+  apiBase,
+  apiKey,
+  model,
+  prompt,
+  image,
+  imageSize = "1K",
+  aspectRatio = "1:1",
+}) {
+  const images = normalizeImageInput(image);
+  if (images.length === 0) {
+    throw new Error("编辑需要至少 1 张参考图。");
+  }
+
+  const inlineImages = await Promise.all(images.map((url) => imageSourceToGeminiInlineData(url)));
+  const path = `/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
+  const data = await postJson({
+    apiBase: normalizeGeminiBaseUrl(apiBase),
+    apiKey: "",
+    apiKeyHeader: "",
+    path,
+    payload: {
+      contents: [
+        {
+          role: "user",
+          parts: [
+            { text: String(prompt || "").trim() },
+            ...inlineImages,
+          ],
+        },
+      ],
+      generationConfig: {
+        responseModalities: ["TEXT", "IMAGE"],
+        imageConfig: {
+          aspectRatio: normalizeGeminiAspectRatio(aspectRatio),
+          imageSize: normalizeGeminiImageSize(imageSize),
+        },
+      },
+    },
+  });
+
+  return await normalizeGeneratedImageUrls(extractGeminiImageUrls(data));
 }
