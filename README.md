@@ -33,6 +33,11 @@ OBJECT_EDIT_PROVIDER=openai
 OBJECT_EDIT_MODEL=gpt-image-1
 NANO_OBJECT_EDIT_MODEL=gemini-3.1-flash-image-preview
 
+# 团队内测访问限制
+AUTH_USERNAME=easyai
+AUTH_PASSWORD=replace-with-team-password
+AUTH_SESSION_SECRET=replace-with-long-random-secret
+
 # SAM（默认优先本地 checkpoint，其次可回退远程接口）
 SAM_MODE=auto
 SAM_CHECKPOINT=E:\数字人计划\复刻lovart\models\SAM\sam_vit_h_4b8939.pth
