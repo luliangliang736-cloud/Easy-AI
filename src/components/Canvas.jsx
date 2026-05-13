@@ -1909,8 +1909,6 @@ export default function Canvas({
             meta?.width && meta?.height
               ? `${meta.width} × ${meta.height} px`
               : `${Math.round(pos.w)} × ${displayHeight}`;
-          const shouldHidePromptText = Boolean(img.hidePromptText);
-
           return (
             <div
               key={img.id}
@@ -2034,10 +2032,10 @@ export default function Canvas({
                     </button>
                   </div>
                   <div className="flex w-full items-center justify-between gap-2 text-[10px] text-text-primary pointer-events-none">
-                    <div className="flex items-center gap-1.5 px-1.5 py-0.5 min-w-0">
+                    <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden px-1.5 py-0.5">
                       <ImageIcon size={10} />
                       <span className="truncate">
-                        {shouldHidePromptText ? (isVideo ? "Video" : "Image") : (img.prompt || (isVideo ? "Video" : "Image"))}
+                        {isVideo ? "Video" : "Image"}
                       </span>
                     </div>
                     <div className="px-1.5 py-0.5 shrink-0" title="原图像素尺寸">
@@ -2224,11 +2222,6 @@ export default function Canvas({
                 )}
               </div>
 
-              {!shouldHidePromptText && (
-                <p className="text-[10px] text-text-tertiary truncate px-0.5 pointer-events-none mt-0 pt-1 leading-tight bg-bg-primary/85 border-t border-accent/25 rounded-b-lg">
-                  {img.prompt}
-                </p>
-              )}
             </div>
           );
         })}
