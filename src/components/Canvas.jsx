@@ -1884,11 +1884,6 @@ export default function Canvas({
                       <p className="text-xs text-white font-medium">
                         {isRunning ? "生成中" : "等待中"}
                       </p>
-                      {!img.hidePromptText && (
-                        <p className="text-[10px] text-text-tertiary mt-1">
-                          {img.prompt || "正在准备生成"}
-                        </p>
-                      )}
                     </div>
                   </div>
                 </div>
