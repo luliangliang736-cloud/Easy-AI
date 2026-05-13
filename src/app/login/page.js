@@ -33,8 +33,7 @@ export default function LoginPage() {
       if (!res.ok) {
         throw new Error(data?.error || "登录失败");
       }
-      router.replace(redirectTo);
-      router.refresh();
+      window.location.assign(redirectTo);
     } catch (err) {
       setError(err?.message || "登录失败");
     } finally {
