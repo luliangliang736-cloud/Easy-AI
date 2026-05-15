@@ -2409,7 +2409,7 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
                 onChange={(event) => setLoginEmail(event.target.value)}
                 placeholder="请输入公司邮箱"
                 required
-                className={`w-full bg-transparent text-sm outline-none ${
+                className={`login-input w-full bg-transparent text-sm outline-none ${
                   theme === "light" ? "placeholder:text-black/30" : "placeholder:text-white/30"
                 }`}
               />
@@ -2426,7 +2426,7 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
                 onChange={(event) => setLoginPassword(event.target.value)}
                 placeholder="请输入统一内测密码"
                 required
-                className={`w-full bg-transparent text-sm outline-none ${
+                className={`login-input w-full bg-transparent text-sm outline-none ${
                   theme === "light" ? "placeholder:text-black/30" : "placeholder:text-white/30"
                 }`}
               />

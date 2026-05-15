@@ -60,6 +60,26 @@ body {
   color: var(--text-primary);
 }
 
+.login-input,
+.login-input:focus {
+  background-color: transparent;
+  color: inherit;
+  caret-color: currentColor;
+}
+
+.login-input::selection {
+  background: rgba(63, 202, 88, 0.28);
+  color: currentColor;
+}
+
+.login-input:-webkit-autofill,
+.login-input:-webkit-autofill:hover,
+.login-input:-webkit-autofill:focus {
+  -webkit-text-fill-color: currentColor;
+  box-shadow: 0 0 0 1000px transparent inset;
+  transition: background-color 999999s ease-out;
+}
+
 * {
   scrollbar-width: thin;
   scrollbar-color: #333 transparent;

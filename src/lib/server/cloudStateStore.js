@@ -94,12 +94,19 @@ function preferMessage(existing, incoming) {
     : { ...incoming, ...existing };
   const urls = [...(existing.urls || []), ...(incoming.urls || [])].filter(Boolean);
   const uniqueUrls = [...new Set(urls)];
-  const tasks = mergeArrayById(existing.tasks || [], incoming.tasks || [], (oldTask, newTask) => {
+  const mergedTasks = mergeArrayById(existing.tasks || [], incoming.tasks || [], (oldTask, newTask) => {
     if (!oldTask) return newTask;
     if (!newTask) return oldTask;
     return getMessageStatusRank(newTask.status) >= getMessageStatusRank(oldTask.status)
       ? { ...oldTask, ...newTask }
       : { ...newTask, ...oldTask };
+  });
+  const seenTaskUrls = new Set();
+  const tasks = mergedTasks.filter((task) => {
+    if (!task?.url) return true;
+    if (seenTaskUrls.has(task.url)) return false;
+    seenTaskUrls.add(task.url);
+    return true;
   });
   return {
     ...base,

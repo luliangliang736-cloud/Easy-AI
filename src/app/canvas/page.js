@@ -717,20 +717,45 @@ function isPersistableMediaUrl(url) {
 
 function sanitizeUrlList(urls) {
   if (!Array.isArray(urls)) return [];
-  return urls.filter(isPersistableMediaUrl);
+  return [...new Set(urls.filter(isPersistableMediaUrl))];
+}
+
+function dedupeTasksByUrl(tasks) {
+  if (!Array.isArray(tasks)) return tasks;
+  const seenUrls = new Set();
+  return tasks.filter((task) => {
+    if (!task?.url) return true;
+    if (seenUrls.has(task.url)) return false;
+    seenUrls.add(task.url);
+    return true;
+  });
+}
+
+function normalizeResultMessage(message) {
+  if (!message || typeof message !== "object") return message;
+  const tasks = dedupeTasksByUrl(message.tasks);
+  const urls = Array.isArray(tasks)
+    ? sanitizeUrlList(tasks.map((task) => task?.url))
+    : sanitizeUrlList(message.urls);
+  return {
+    ...message,
+    tasks,
+    urls,
+  };
 }
 
 function sanitizeMessagesForStorage(messages) {
   return messages.slice(0, 200).map((msg) => {
+    const normalized = normalizeResultMessage(msg);
     return {
-      ...msg,
-      refImages: sanitizeStoredImageList(msg.refImages),
-      requestRefImages: sanitizeStoredImageList(msg.requestRefImages),
+      ...normalized,
+      refImages: sanitizeStoredImageList(normalized.refImages),
+      requestRefImages: sanitizeStoredImageList(normalized.requestRefImages),
       // 只保留 HTTPS URL，base64 生成图不存入 localStorage（太大会溢出）
-      urls: sanitizeUrlList(msg.urls),
-      tasks: Array.isArray(msg.tasks)
-        ? msg.tasks.map((t) => ({ ...t, url: isPersistableMediaUrl(t.url) ? t.url : null }))
-        : msg.tasks,
+      urls: sanitizeUrlList(normalized.urls),
+      tasks: Array.isArray(normalized.tasks)
+        ? normalized.tasks.map((t) => ({ ...t, url: isPersistableMediaUrl(t.url) ? t.url : null }))
+        : normalized.tasks,
     };
   });
 }
@@ -738,7 +763,7 @@ function sanitizeMessagesForStorage(messages) {
 function restoreInterruptedMessages(messages) {
   if (!Array.isArray(messages)) return [];
   return messages.map((msg) => {
-    if (msg?.status !== "generating") return msg;
+    if (msg?.status !== "generating") return normalizeResultMessage(msg);
     const tasks = Array.isArray(msg.tasks)
       ? msg.tasks.map((task) => (
         task?.status === "completed"
@@ -746,14 +771,13 @@ function restoreInterruptedMessages(messages) {
           : { ...task, status: "failed", error: "生成连接已中断，请重试。" }
       ))
       : msg.tasks;
-    const urls = Array.isArray(tasks) ? tasks.filter((task) => task?.url).map((task) => task.url) : msg.urls;
-    return {
+    return normalizeResultMessage({
       ...msg,
       status: Array.isArray(tasks) && tasks.some((task) => task?.status === "completed") ? "completed" : "failed",
       tasks,
-      urls,
+      urls: Array.isArray(tasks) ? tasks.filter((task) => task?.url).map((task) => task.url) : msg.urls,
       error: "生成连接已中断，请重试。",
-    };
+    });
   });
 }
 
@@ -1588,8 +1612,7 @@ function HomeInner() {
         const tasks = m.tasks.map((t) =>
           t.id === taskId ? { ...t, ...patch } : t
         );
-        const urls = tasks.filter((t) => t.url).map((t) => t.url);
-        return { ...m, tasks, urls };
+        return normalizeResultMessage({ ...m, tasks });
       })
     );
   }, [updateConversationMessages]);
@@ -1667,6 +1690,7 @@ function HomeInner() {
     setShowParams(false);
     setSemanticSelection(null);
     setSelectedImage(null);
+    canvasSelectionUrlsRef.current = [];
   }, []);
 
   const handleComposerModeChange = useCallback((nextMode) => {
@@ -2739,20 +2763,54 @@ function HomeInner() {
 
   const handleUpdateImage = useCallback(() => {}, []);
 
+  /** 由画布选中同步到右侧参考图的 URL 列表（单选 / 框选多图） */
+  const canvasSelectionUrlsRef = useRef([]);
+
   const handleSelectImage = useCallback((img) => {
     if (!img?.image_url) {
+      const toRemove = [...canvasSelectionUrlsRef.current];
+      canvasSelectionUrlsRef.current = [];
       setSelectedImage(null);
       setSemanticSelection(null);
       setTextEditPanelVisible(false);
+      setRefImages((prev) =>
+        prev.filter((u) => !toRemove.includes(u))
+      );
       return;
     }
+    const prevCanvasUrls = [...canvasSelectionUrlsRef.current];
+    canvasSelectionUrlsRef.current = [img.image_url];
+    setRefImages((prev) => {
+      const withoutCanvas = prev.filter((u) => !prevCanvasUrls.includes(u));
+      const seen = new Set(withoutCanvas);
+      if (!seen.has(img.image_url)) {
+        return [...withoutCanvas, img.image_url];
+      }
+      return withoutCanvas;
+    });
     setSelectedImage(img);
     setSemanticSelection(null);
   }, []);
 
-  const handleSyncCanvasRefImages = useCallback(() => {
+  /** 框选多张画布图片时，批量同步到右侧参考图（与模型最大参考图数量对齐） */
+  const MAX_REF_IMAGES = 14;
+  const handleSyncCanvasRefImages = useCallback((urls) => {
+    const list = (urls || []).filter(Boolean);
+    if (list.length < 2) return;
+    const prevCanvasUrls = [...canvasSelectionUrlsRef.current];
+    canvasSelectionUrlsRef.current = [...list];
     setTextEditPanelVisible(false);
-  }, []);
+    setRefImages((prev) => {
+      const withoutCanvas = prev.filter((u) => !prevCanvasUrls.includes(u));
+      const merged = [...withoutCanvas];
+      for (const u of list) {
+        if (merged.length >= MAX_REF_IMAGES) break;
+        if (u && !merged.includes(u)) merged.push(u);
+      }
+      return merged;
+    });
+    toast("已同步到右侧参考图", "success", 1500);
+  }, [toast]);
 
   const handleZoomChange = useCallback((updater) => {
     setZoom((prev) => (typeof updater === "function" ? updater(prev) : updater));
