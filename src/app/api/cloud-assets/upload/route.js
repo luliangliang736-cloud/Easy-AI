@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getRequestUser } from "@/lib/server/authUser";
-import { uploadCloudAsset } from "@/lib/server/cloudAssetStore";
+import { copyImageUrlToCloudAsset, uploadCloudAsset } from "@/lib/server/cloudAssetStore";
 
 export const runtime = "nodejs";
 
@@ -12,12 +12,22 @@ export async function POST(request) {
     }
 
     const body = await request.json();
-    const result = await uploadCloudAsset({
-      userEmail: user.email,
-      dataUrl: body?.dataUrl,
-      filename: body?.filename,
-      scope: body?.scope || "canvas",
-    });
+    const result = body?.sourceUrl
+      ? {
+          ok: true,
+          url: await copyImageUrlToCloudAsset({
+            userEmail: user.email,
+            url: body.sourceUrl,
+            filename: body?.filename,
+            scope: body?.scope || "canvas",
+          }),
+        }
+      : await uploadCloudAsset({
+          userEmail: user.email,
+          dataUrl: body?.dataUrl,
+          filename: body?.filename,
+          scope: body?.scope || "canvas",
+        });
     return NextResponse.json({ ok: true, ...result });
   } catch (error) {
     console.error("[CloudAssets] Upload failed:", error);

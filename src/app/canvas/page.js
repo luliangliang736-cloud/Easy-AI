@@ -622,9 +622,40 @@ function sanitizeStoredImageList(images) {
   }).filter(Boolean);
 }
 
-async function uploadDataUrlToCloudAsset(dataUrl, filename = "image", scope = "canvas") {
-  if (typeof dataUrl !== "string" || !/^data:image\//i.test(dataUrl)) return dataUrl;
-  const uploadDataUrl = await compressImage(dataUrl, 2048, 0.9).catch(() => dataUrl);
+function isLocalGeneratedMediaUrl(url) {
+  return typeof url === "string" && /^\/api\/generated-images\//i.test(url);
+}
+
+function isCloudAssetUrl(url) {
+  return typeof url === "string" && /^\/api\/cloud-assets\//i.test(url);
+}
+
+function shouldUploadToCloudAsset(source) {
+  return typeof source === "string" && (
+    /^data:(image|video)\//i.test(source) ||
+    isLocalGeneratedMediaUrl(source)
+  );
+}
+
+async function uploadMediaSourceToCloudAsset(source, filename = "image", scope = "canvas") {
+  if (typeof source !== "string") return source;
+  if (isCloudAssetUrl(source)) return source;
+  if (isLocalGeneratedMediaUrl(source)) {
+    const res = await fetch("/api/cloud-assets/upload", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ sourceUrl: source, filename, scope }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data?.url) {
+      throw new Error(data?.error || "上传云端素材失败");
+    }
+    return data.url;
+  }
+  if (!/^data:(image|video)\//i.test(source)) return source;
+  const uploadDataUrl = /^data:image\//i.test(source)
+    ? await compressImage(source, 2048, 0.9).catch(() => source)
+    : source;
   const res = await fetch("/api/cloud-assets/upload", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1075,6 +1106,7 @@ function HomeInner() {
   const canvasRef = useRef(null);
   const generationAbortRef = useRef(null);
   const activeGenerationRef = useRef(null);
+  const cloudAssetMigrationRef = useRef(new Map());
   const inspirationResizeFrameRef = useRef(0);
   // 标记 localStorage 已加载完毕，加载前禁止持久化 effect 写入（避免覆盖已保存的数据）
   const persistReadyRef = useRef(false);
@@ -1191,6 +1223,112 @@ function HomeInner() {
       persistReadyRef.current = true;
     }
   }, []);
+
+  const cloudifyLocalGeneratedUrl = useCallback((url, filename = "image", scope = "canvas-migration") => {
+    if (!isLocalGeneratedMediaUrl(url)) return Promise.resolve(url);
+    const cache = cloudAssetMigrationRef.current;
+    if (!cache.has(url)) {
+      cache.set(
+        url,
+        uploadMediaSourceToCloudAsset(url, filename, scope).catch(() => url)
+      );
+    }
+    return cache.get(url);
+  }, []);
+
+  useEffect(() => {
+    if (!persistReadyRef.current) return undefined;
+    const localItems = canvasImages.filter((item) => isLocalGeneratedMediaUrl(item?.image_url));
+    if (!localItems.length) return undefined;
+    let cancelled = false;
+    void Promise.all(localItems.map((item) => (
+      cloudifyLocalGeneratedUrl(item.image_url, item.prompt || item.id, "canvas-migration")
+    ))).then((urls) => {
+      if (cancelled) return;
+      const replacements = new Map(localItems.map((item, index) => [item.image_url, urls[index]]));
+      if ([...replacements].every(([from, to]) => from === to)) return;
+      canvasHistory.setState((prev) => prev.map((item) => ({
+        ...item,
+        image_url: replacements.get(item.image_url) || item.image_url,
+      })));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [canvasHistory, canvasImages, cloudifyLocalGeneratedUrl]);
+
+  useEffect(() => {
+    if (!persistReadyRef.current) return undefined;
+    const localUrls = new Set();
+    canvasBoards.forEach((board) => {
+      (board?.images || []).forEach((item) => {
+        if (isLocalGeneratedMediaUrl(item?.image_url)) localUrls.add(item.image_url);
+      });
+    });
+    if (!localUrls.size) return undefined;
+    let cancelled = false;
+    const urls = [...localUrls];
+    void Promise.all(urls.map((url, index) => (
+      cloudifyLocalGeneratedUrl(url, `board-${index + 1}`, "canvas-board-migration")
+    ))).then((nextUrls) => {
+      if (cancelled) return;
+      const replacements = new Map(urls.map((url, index) => [url, nextUrls[index]]));
+      if ([...replacements].every(([from, to]) => from === to)) return;
+      setCanvasBoards((prev) => prev.map((board) => ({
+        ...board,
+        images: (board.images || []).map((item) => ({
+          ...item,
+          image_url: replacements.get(item.image_url) || item.image_url,
+        })),
+      })));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [canvasBoards, cloudifyLocalGeneratedUrl]);
+
+  useEffect(() => {
+    if (!persistReadyRef.current) return undefined;
+    const localUrls = new Set();
+    conversations.forEach((conversation) => {
+      (conversation?.messages || []).forEach((msg) => {
+        [...(msg.refImages || []), ...(msg.requestRefImages || []), ...(msg.urls || [])].forEach((url) => {
+          if (isLocalGeneratedMediaUrl(url)) localUrls.add(url);
+        });
+        (msg.tasks || []).forEach((task) => {
+          if (isLocalGeneratedMediaUrl(task?.url)) localUrls.add(task.url);
+        });
+      });
+    });
+    if (!localUrls.size) return undefined;
+    let cancelled = false;
+    const urls = [...localUrls];
+    const replaceList = (list, replacements) => (
+      Array.isArray(list) ? list.map((url) => replacements.get(url) || url) : list
+    );
+    void Promise.all(urls.map((url, index) => (
+      cloudifyLocalGeneratedUrl(url, `conversation-${index + 1}`, "conversation-migration")
+    ))).then((nextUrls) => {
+      if (cancelled) return;
+      const replacements = new Map(urls.map((url, index) => [url, nextUrls[index]]));
+      if ([...replacements].every(([from, to]) => from === to)) return;
+      setConversations((prev) => prev.map((conversation) => ({
+        ...conversation,
+        messages: (conversation.messages || []).map((msg) => ({
+          ...msg,
+          refImages: replaceList(msg.refImages, replacements),
+          requestRefImages: replaceList(msg.requestRefImages, replacements),
+          urls: replaceList(msg.urls, replacements),
+          tasks: Array.isArray(msg.tasks)
+            ? msg.tasks.map((task) => ({ ...task, url: replacements.get(task.url) || task.url }))
+            : msg.tasks,
+        })),
+      })));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [cloudifyLocalGeneratedUrl, conversations]);
 
   useEffect(() => {
     if (!persistReadyRef.current) return;
@@ -1679,6 +1817,20 @@ function HomeInner() {
         }
       : effectiveParams;
     const hasImages = effectiveRefImages.length > 0;
+    const storageRefImages = hasImages
+      ? await Promise.all(effectiveRefImages.map(async (img, index) => {
+          if (!shouldUploadToCloudAsset(img)) return img;
+          try {
+            return await uploadMediaSourceToCloudAsset(img, `reference-${index + 1}`, "canvas-reference");
+          } catch {
+            toast("参考图云端保存失败，换设备可能无法恢复这张图", "warning", 2200);
+            return img;
+          }
+        }))
+      : [];
+    if (hasImages && !areSameRefImageList(storageRefImages, effectiveRefImages)) {
+      setRefImages((current) => (areSameRefImageList(current, effectiveRefImages) ? storageRefImages : current));
+    }
     if (hasImages && resolvedParams.image_size === "auto" && (!resolvedParams._autoRatio || !resolvedParams._autoWidth || !resolvedParams._autoHeight)) {
       const meta = await detectRefImageMeta(effectiveRefImages[0]);
       resolvedParams = {
@@ -1696,7 +1848,7 @@ function HomeInner() {
     if (!isKlingVideoRequest && isTextEditing) return;
 
     const messageRefImages = hasImages
-      ? await Promise.all(effectiveRefImages.map((img) => makeMessagePreviewImage(img)))
+      ? await Promise.all(storageRefImages.map((img) => makeMessagePreviewImage(img)))
       : [];
 
     const inferred = inferLoopCountFromPrompt(composerText);
@@ -1721,7 +1873,7 @@ function HomeInner() {
       params: genParams,
       modelLabel,
       refImages: messageRefImages,
-      requestRefImages: effectiveRefImages,
+      requestRefImages: storageRefImages,
       textEditBlocks: effectiveTextEditBlocks,
       entryMode: activeEntryMode,
       composerMode: activeComposerMode,
@@ -2068,7 +2220,9 @@ function HomeInner() {
 
       if (!preserveComposer) {
         setRefImages((current) => (
-          areSameRefImageList(current, effectiveRefImages) ? [] : current
+          areSameRefImageList(current, effectiveRefImages) || areSameRefImageList(current, storageRefImages)
+            ? []
+            : current
         ));
       }
     } catch (err) {
@@ -2200,8 +2354,8 @@ function HomeInner() {
     setRefImages(list);
 
     list.forEach((item, index) => {
-      if (typeof item !== "string" || !/^data:image\//i.test(item)) return;
-      void uploadDataUrlToCloudAsset(item, `reference-${index + 1}`, "canvas-reference")
+      if (!shouldUploadToCloudAsset(item)) return;
+      void uploadMediaSourceToCloudAsset(item, `reference-${index + 1}`, "canvas-reference")
         .then((url) => {
           setRefImages((prev) => prev.map((existing) => (existing === item ? url : existing)));
         })
@@ -2579,7 +2733,7 @@ function HomeInner() {
         const id = `drop-${Date.now()}-${i}`;
         const newImg = { id, image_url: dataUrl, prompt: file.name };
         canvasHistory.push((prev) => [...prev, newImg]);
-        void uploadDataUrlToCloudAsset(dataUrl, file.name, "canvas-upload")
+        void uploadMediaSourceToCloudAsset(dataUrl, file.name, "canvas-upload")
           .then((url) => {
             canvasHistory.push((prev) => prev.map((img) => (
               img.id === id ? { ...img, image_url: url } : img
@@ -2620,7 +2774,7 @@ function HomeInner() {
       canvasHistory.push((prev) => [...prev, ...nextItems]);
       nextItems.forEach((item) => {
         if (!/^data:image\//i.test(item.image_url || "")) return;
-        void uploadDataUrlToCloudAsset(item.image_url, item.prompt, "canvas-paste")
+        void uploadMediaSourceToCloudAsset(item.image_url, item.prompt, "canvas-paste")
           .then((url) => {
             canvasHistory.push((prev) => prev.map((img) => (
               img.id === item.id ? { ...img, image_url: url } : img
