@@ -48,5 +48,19 @@ export async function ensureCloudDbSchema() {
     CREATE INDEX IF NOT EXISTS user_cloud_state_user_updated_idx
     ON user_cloud_state (user_email, server_updated_at DESC)
   `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS auth_sessions (
+      session_id TEXT PRIMARY KEY,
+      user_email TEXT NOT NULL,
+      user_agent TEXT NOT NULL DEFAULT '',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      revoked_at TIMESTAMPTZ
+    )
+  `);
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS auth_sessions_user_active_idx
+    ON auth_sessions (user_email, revoked_at, created_at DESC)
+  `);
   initialized = true;
 }

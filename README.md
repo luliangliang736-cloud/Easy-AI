@@ -37,6 +37,7 @@ NANO_OBJECT_EDIT_MODEL=gemini-3.1-flash-image-preview
 AUTH_SESSION_SECRET=replace-with-long-random-secret
 AUTH_ALLOWED_EMAIL_DOMAINS=fintopia.tech
 AUTH_SHARED_PASSWORD=lu782026
+AUTH_MAX_ACTIVE_SESSIONS_PER_USER=2
 
 # 云端创作记录（阿里云 RDS PostgreSQL）
 DATABASE_URL=postgresql://easyai_admin:password@pgm-xxxx.pg.rds.aliyuncs.com:5432/easyai

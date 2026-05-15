@@ -35,7 +35,40 @@ function redirectToLogin(request) {
   const nextPath = `${request.nextUrl.pathname}${request.nextUrl.search}`;
   loginUrl.searchParams.set("login", "1");
   if (nextPath !== "/") loginUrl.searchParams.set("next", nextPath);
-  return NextResponse.redirect(loginUrl);
+  const response = NextResponse.redirect(loginUrl);
+  response.cookies.set(AUTH_COOKIE_NAME, "", {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
+    path: "/",
+    maxAge: 0,
+  });
+  return response;
+}
+
+function unauthorizedJson() {
+  const response = NextResponse.json({ error: "请先登录 EasyAI" }, { status: 401 });
+  response.cookies.set(AUTH_COOKIE_NAME, "", {
+    httpOnly: true,
+    sameSite: "lax",
+    secure: process.env.NODE_ENV === "production",
+    path: "/",
+    maxAge: 0,
+  });
+  return response;
+}
+
+async function isSessionStillActive(request) {
+  const checkUrl = new URL("/api/auth/session-check", request.url);
+  const res = await fetch(checkUrl, {
+    headers: {
+      cookie: request.headers.get("cookie") || "",
+    },
+    cache: "no-store",
+  });
+  if (!res.ok) return false;
+  const data = await res.json().catch(() => null);
+  return data?.active === true;
 }
 
 export async function middleware(request) {
@@ -52,10 +85,16 @@ export async function middleware(request) {
     console.error("[Auth] Session verification failed:", error);
   }
 
-  if (user) return NextResponse.next();
+  if (user) {
+    const active = await isSessionStillActive(request).catch((error) => {
+      console.error("[Auth] Active session check failed:", error);
+      return false;
+    });
+    if (active) return NextResponse.next();
+  }
 
   if (pathname.startsWith("/api/")) {
-    return NextResponse.json({ error: "请先登录 EasyAI" }, { status: 401 });
+    return unauthorizedJson();
   }
 
   return redirectToLogin(request);

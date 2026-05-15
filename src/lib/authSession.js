@@ -64,11 +64,19 @@ export function isSharedPasswordValid(rawEmail = "", rawPassword = "") {
   return isCompanyEmailAllowed(rawEmail) && String(rawPassword || "") === expectedPassword;
 }
 
-export async function createSessionValue(rawEmail = "") {
+export function createSessionId() {
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  return bytesToBase64Url(bytes);
+}
+
+export async function createSessionValue(rawEmail = "", rawSessionId = "") {
   const email = normalizeAuthEmail(rawEmail);
+  const sessionId = String(rawSessionId || createSessionId());
   const payload = {
     email,
     username: email,
+    sid: sessionId,
     iat: Date.now(),
     exp: Date.now() + AUTH_SESSION_MAX_AGE_MS,
   };
@@ -96,5 +104,6 @@ export async function verifySessionValue(value = "") {
   if (!isCompanyEmailAllowed(email)) return null;
   payload.email = email;
   payload.username = email;
+  payload.sid = String(payload.sid || "");
   return payload;
 }

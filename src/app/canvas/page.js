@@ -659,13 +659,13 @@ function detectRefImageMeta(src) {
   });
 }
 
-function isHttpsUrl(url) {
-  return typeof url === "string" && /^https?:\/\//i.test(url);
+function isPersistableMediaUrl(url) {
+  return typeof url === "string" && (/^https?:\/\//i.test(url) || /^\/api\/generated-images\//i.test(url));
 }
 
 function sanitizeUrlList(urls) {
   if (!Array.isArray(urls)) return [];
-  return urls.filter(isHttpsUrl);
+  return urls.filter(isPersistableMediaUrl);
 }
 
 function sanitizeMessagesForStorage(messages) {
@@ -677,7 +677,7 @@ function sanitizeMessagesForStorage(messages) {
       // 只保留 HTTPS URL，base64 生成图不存入 localStorage（太大会溢出）
       urls: sanitizeUrlList(msg.urls),
       tasks: Array.isArray(msg.tasks)
-        ? msg.tasks.map((t) => ({ ...t, url: isHttpsUrl(t.url) ? t.url : null }))
+        ? msg.tasks.map((t) => ({ ...t, url: isPersistableMediaUrl(t.url) ? t.url : null }))
         : msg.tasks,
     };
   });
@@ -724,8 +724,8 @@ function safeParseStorageArray(value) {
 
 function sanitizeCanvasImagesForStorage(items) {
   if (!Array.isArray(items)) return [];
-  // base64 图片/视频太大，只保留 HTTPS URL（Nano/Kling API / CDN 链接）
-  return items.filter((item) => item && isHttpsUrl(item.image_url));
+  // base64 图片/视频太大，只保留可重新访问的远程或站内生成图链接。
+  return items.filter((item) => item && isPersistableMediaUrl(item.image_url));
 }
 
 function sanitizeCanvasBoardsForStorage(boards) {
