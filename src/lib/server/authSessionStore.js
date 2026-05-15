@@ -1,7 +1,5 @@
 import { ensureCloudDbSchema, getCloudDbPool, isCloudDbConfigured } from "@/lib/server/cloudDb";
 
-const MAX_ACTIVE_SESSIONS_PER_USER = Number(process.env.AUTH_MAX_ACTIVE_SESSIONS_PER_USER || 2);
-
 export async function registerAuthSession(userEmail = "", sessionId = "", userAgent = "") {
   if (!isCloudDbConfigured()) return { configured: false };
   await ensureCloudDbSchema();
@@ -9,6 +7,7 @@ export async function registerAuthSession(userEmail = "", sessionId = "", userAg
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+    await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [userEmail]);
     await client.query(
       `
         INSERT INTO auth_sessions (session_id, user_email, user_agent, created_at, last_seen_at)
@@ -23,15 +22,11 @@ export async function registerAuthSession(userEmail = "", sessionId = "", userAg
       `
         UPDATE auth_sessions
         SET revoked_at = NOW()
-        WHERE session_id IN (
-          SELECT session_id
-          FROM auth_sessions
-          WHERE user_email = $1 AND revoked_at IS NULL
-          ORDER BY created_at DESC
-          OFFSET $2
-        )
+        WHERE user_email = $1
+          AND session_id <> $2
+          AND revoked_at IS NULL
       `,
-      [userEmail, Math.max(1, MAX_ACTIVE_SESSIONS_PER_USER)],
+      [userEmail, sessionId],
     );
     await client.query("COMMIT");
     return { configured: true };
