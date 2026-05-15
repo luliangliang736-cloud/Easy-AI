@@ -25,6 +25,7 @@ import {
   X,
 } from "lucide-react";
 import { compressImage } from "@/lib/imageUtils";
+import { useAuthSessionGuard } from "@/lib/useAuthSessionGuard";
 import { useCloudLocalStorageSync } from "@/lib/useCloudLocalStorageSync";
 import { GENERATION_STAGE_ORDER, getGenerationStageCopy } from "@/lib/generationStages";
 import BrandLogo from "@/components/BrandLogo";
@@ -992,6 +993,7 @@ export default function ChatPage() {
   const isLightTheme = theme === "light";
   const generationStageCopy = getGenerationStageCopy(generationStage);
   const activeGenerationStageIndex = Math.max(0, GENERATION_STAGE_ORDER.indexOf(generationStage));
+  useAuthSessionGuard();
   useCloudLocalStorageSync(CHAT_CLOUD_STATE_KEYS, { overwriteOnFirstRestore: true });
 
   const showGenerationStage = useCallback(async (stage, duration = GENERATION_STAGE_MIN_MS, signal = null) => {

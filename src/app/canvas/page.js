@@ -10,6 +10,7 @@ import BrandLogo from "@/components/BrandLogo";
 import { compressImage } from "@/lib/imageUtils";
 import { useHistory } from "@/lib/useHistory";
 import { useTheme } from "@/lib/useTheme";
+import { useAuthSessionGuard } from "@/lib/useAuthSessionGuard";
 import { useCloudLocalStorageSync } from "@/lib/useCloudLocalStorageSync";
 import { MAX_GEN_COUNT } from "@/lib/genLimits";
 
@@ -1057,6 +1058,7 @@ function HomeInner() {
   // 标记 localStorage 已加载完毕，加载前禁止持久化 effect 写入（避免覆盖已保存的数据）
   const persistReadyRef = useRef(false);
   const activeConversation = conversations.find((conversation) => conversation.id === activeConversationId) || conversations[0];
+  useAuthSessionGuard();
   useCloudLocalStorageSync(CANVAS_CLOUD_STATE_KEYS, { overwriteOnFirstRestore: true });
   const activeCanvasBoard = canvasBoards.find((board) => board.id === activeCanvasBoardId) || canvasBoards[0];
   const messages = activeConversation?.messages || [];

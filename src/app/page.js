@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { useTheme } from "@/lib/useTheme";
 import { compressImage } from "@/lib/imageUtils";
+import { useAuthSessionGuard } from "@/lib/useAuthSessionGuard";
 import { useCloudLocalStorageSync } from "@/lib/useCloudLocalStorageSync";
 import { getGenerationStageCopy } from "@/lib/generationStages";
 import {
@@ -1037,6 +1038,16 @@ export default function HomePage() {
     ? floatingRuntimeMode
     : detectOneClickEntryMode(floatingPrompt, floatingRefImages);
   const profileAvatarSrc = profileAvatar || "/images/internal-user-avatar.png";
+  const handleAuthSessionUnauthorized = useCallback(() => {
+    setAuthUser(null);
+    setIsProfileMenuOpen(false);
+    setIsProfileAccountOpen(false);
+    setIsLoginModalOpen(true);
+  }, []);
+  useAuthSessionGuard({
+    enabled: Boolean(authUser?.email),
+    onUnauthorized: handleAuthSessionUnauthorized,
+  });
   useCloudLocalStorageSync(HOME_CLOUD_STATE_KEYS, {
     enabled: Boolean(authUser?.email),
     overwriteOnFirstRestore: true,

@@ -58,19 +58,6 @@ function unauthorizedJson() {
   return response;
 }
 
-async function isSessionStillActive(request) {
-  const checkUrl = new URL("/api/auth/session-check", request.url);
-  const res = await fetch(checkUrl, {
-    headers: {
-      cookie: request.headers.get("cookie") || "",
-    },
-    cache: "no-store",
-  });
-  if (!res.ok) return false;
-  const data = await res.json().catch(() => null);
-  return data?.active === true;
-}
-
 export async function middleware(request) {
   const { pathname } = request.nextUrl;
   if (request.method === "OPTIONS" || isPublicPath(pathname) || isPublicApi(pathname)) {
@@ -85,13 +72,7 @@ export async function middleware(request) {
     console.error("[Auth] Session verification failed:", error);
   }
 
-  if (user) {
-    const active = await isSessionStillActive(request).catch((error) => {
-      console.error("[Auth] Active session check failed:", error);
-      return false;
-    });
-    if (active) return NextResponse.next();
-  }
+  if (user) return NextResponse.next();
 
   if (pathname.startsWith("/api/")) {
     return unauthorizedJson();
