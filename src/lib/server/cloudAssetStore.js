@@ -55,3 +55,10 @@ export async function getCloudAssetStream(objectKey = "") {
   if (!isOssConfigured()) throw new Error("OSS is not configured");
   return getOssClient().getStream(objectKey);
 }
+
+export function getCloudAssetSignedUrl(objectKey = "") {
+  if (!isOssConfigured()) throw new Error("OSS is not configured");
+  return getOssClient().signatureUrl(objectKey, {
+    expires: Number(process.env.OSS_SIGNED_URL_EXPIRES_SECONDS || 3600),
+  });
+}

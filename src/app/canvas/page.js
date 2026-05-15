@@ -15,6 +15,7 @@ import { useCloudLocalStorageSync } from "@/lib/useCloudLocalStorageSync";
 import { MAX_GEN_COUNT } from "@/lib/genLimits";
 
 const FLOATING_ENTRY_DRAFT_KEY = "lovart-floating-entry-draft";
+const CANVAS_REF_IMAGES_STORAGE_KEY = "lovart-canvas-ref-images";
 const CANVAS_CLOUD_STATE_KEYS = [
   "lovart-conversations",
   "lovart-active-conversation",
@@ -23,6 +24,7 @@ const CANVAS_CLOUD_STATE_KEYS = [
   "lovart-canvas-images",
   "lovart-canvas-texts",
   "lovart-canvas-shapes",
+  CANVAS_REF_IMAGES_STORAGE_KEY,
 ];
 
 function errStr(e) {
@@ -1135,6 +1137,7 @@ function HomeInner() {
       const savedShapes = localStorage.getItem("lovart-canvas-shapes");
       const savedBoards = localStorage.getItem("lovart-canvas-boards");
       const savedActiveBoardId = localStorage.getItem("lovart-active-canvas-board");
+      const savedRefImages = localStorage.getItem(CANVAS_REF_IMAGES_STORAGE_KEY);
       const parsedConversations = safeParseStorageArray(saved);
       if (parsedConversations?.length > 0) {
         setConversations(parsedConversations.map((conversation) => ({
@@ -1156,6 +1159,9 @@ function HomeInner() {
 
       const parsedShapes = safeParseStorageArray(savedShapes);
       if (parsedShapes) canvasShapesHistory.setState(parsedShapes);
+
+      const parsedRefImages = safeParseStorageArray(savedRefImages);
+      if (parsedRefImages) setRefImages(sanitizeStoredImageList(parsedRefImages));
 
       const parsedBoards = normalizeCanvasBoards(safeParseStorageArray(savedBoards));
       if (parsedBoards.length > 0) {
@@ -1185,6 +1191,15 @@ function HomeInner() {
       persistReadyRef.current = true;
     }
   }, []);
+
+  useEffect(() => {
+    if (!persistReadyRef.current) return;
+    try {
+      localStorage.setItem(CANVAS_REF_IMAGES_STORAGE_KEY, JSON.stringify(sanitizeStoredImageList(refImages).slice(0, 14)));
+    } catch {
+      // 参考图仅保存可跨设备访问的链接，写入失败时不影响画布生成。
+    }
+  }, [refImages]);
 
   useEffect(() => {
     try {

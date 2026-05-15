@@ -14,6 +14,7 @@ export const CLOUD_STATE_KEYS = [
   "lovart-canvas-images",
   "lovart-canvas-texts",
   "lovart-canvas-shapes",
+  "lovart-canvas-ref-images",
 ];
 
 const allowedStateKeys = new Set(CLOUD_STATE_KEYS);
