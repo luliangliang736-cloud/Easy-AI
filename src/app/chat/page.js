@@ -25,6 +25,7 @@ import {
   X,
 } from "lucide-react";
 import { compressImage } from "@/lib/imageUtils";
+import { useCloudLocalStorageSync } from "@/lib/useCloudLocalStorageSync";
 import { GENERATION_STAGE_ORDER, getGenerationStageCopy } from "@/lib/generationStages";
 import BrandLogo from "@/components/BrandLogo";
 import {
@@ -46,6 +47,7 @@ import {
 
 const CHAT_SESSION_KEY = "lovart-chat-fullscreen-session";
 const IMAGE_HISTORY_KEY = "lovart-chat-image-history";
+const CHAT_CLOUD_STATE_KEYS = [CHAT_SESSION_KEY, IMAGE_HISTORY_KEY];
 const IMAGE_HISTORY_LIMIT = 100;
 const ATTACHMENT_ACCEPT = "image/*,.pdf,.doc,.docx,.txt,.md,.markdown,.rtf,.csv,.json,.xml,.xls,.xlsx,.ppt,.pptx";
 const EZFAMILY_ASSET_URL = "/api/ezfamily";
@@ -990,6 +992,7 @@ export default function ChatPage() {
   const isLightTheme = theme === "light";
   const generationStageCopy = getGenerationStageCopy(generationStage);
   const activeGenerationStageIndex = Math.max(0, GENERATION_STAGE_ORDER.indexOf(generationStage));
+  useCloudLocalStorageSync(CHAT_CLOUD_STATE_KEYS);
 
   const showGenerationStage = useCallback(async (stage, duration = GENERATION_STAGE_MIN_MS, signal = null) => {
     setGenerationStage(stage);

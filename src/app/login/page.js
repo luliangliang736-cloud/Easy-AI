@@ -2,12 +2,12 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { LockKeyhole, UserRound } from "lucide-react";
+import { LockKeyhole, Mail } from "lucide-react";
 import BrandLogo from "@/components/BrandLogo";
 
 export default function LoginPage() {
   const router = useRouter();
-  const [username, setUsername] = useState("");
+  const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
@@ -27,7 +27,7 @@ export default function LoginPage() {
       const res = await fetch("/api/auth/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username, password }),
+        body: JSON.stringify({ email, password }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -59,27 +59,27 @@ export default function LoginPage() {
             </div>
           </div>
 
-          <label className="mb-2 block text-sm font-medium text-white/80">账号</label>
+          <label className="mb-2 block text-sm font-medium text-white/80">公司邮箱</label>
           <div className="mb-5 flex items-center gap-3 rounded-2xl border border-white/10 bg-black/25 px-4 py-3 focus-within:border-[#3FCA58]/70">
-            <UserRound size={18} className="text-white/45" />
+            <Mail size={18} className="text-white/45" />
             <input
-              type="text"
-              value={username}
-              onChange={(event) => setUsername(event.target.value)}
-              placeholder="请输入账号"
+              type="email"
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+              placeholder="请输入公司邮箱"
               required
               className="w-full bg-transparent text-sm outline-none placeholder:text-white/30"
             />
           </div>
 
-          <label className="mb-2 block text-sm font-medium text-white/80">密码</label>
+          <label className="mb-2 block text-sm font-medium text-white/80">内测密码</label>
           <div className="mb-5 flex items-center gap-3 rounded-2xl border border-white/10 bg-black/25 px-4 py-3 focus-within:border-[#3FCA58]/70">
             <LockKeyhole size={18} className="text-white/45" />
             <input
               type="password"
               value={password}
               onChange={(event) => setPassword(event.target.value)}
-              placeholder="请输入密码"
+              placeholder="请输入统一内测密码"
               required
               className="w-full bg-transparent text-sm outline-none placeholder:text-white/30"
             />

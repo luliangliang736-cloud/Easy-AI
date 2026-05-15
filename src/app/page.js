@@ -7,9 +7,11 @@ import {
   Sparkles, ArrowRight, Wand2, Image as ImageIcon,
   Layers, Zap, Crown, Rocket, PenTool, Factory, Library, Megaphone, PanelTop, ShieldCheck, Coins,
   Palette, RefreshCw, Download, MousePointer2, Sun, Moon, Bot, LayoutGrid, Clock3, Palette as PaletteIcon, Users,
+  Mail, LockKeyhole, LogIn, LogOut,
 } from "lucide-react";
 import { useTheme } from "@/lib/useTheme";
 import { compressImage } from "@/lib/imageUtils";
+import { useCloudLocalStorageSync } from "@/lib/useCloudLocalStorageSync";
 import { getGenerationStageCopy } from "@/lib/generationStages";
 import {
   buildEzFamilyTriggerPrompt,
@@ -37,6 +39,11 @@ const FLOATING_AGENT_DEFAULT_SERVICE_TIER = "priority";
 const FLOATING_EDIT_MODEL = "gpt-image-2";
 const FLOATING_HISTORY_STORAGE_KEY = "lovart-floating-entry-home-history";
 const FLOATING_SESSION_STORAGE_KEY = "lovart-floating-entry-home-session";
+const HOME_CLOUD_STATE_KEYS = [
+  FLOATING_HISTORY_STORAGE_KEY,
+  FLOATING_SESSION_STORAGE_KEY,
+  "lovart-chat-fullscreen-session",
+];
 const EZFAMILY_ASSET_URL = "/api/ezfamily";
 const EZLOGO_ASSET_URL = "/ip-assets/EZlogo/EZlogo.jpg";
 const WA_TEMPLATE_ASSET_URL = "/api/wa-templates";
@@ -1003,6 +1010,18 @@ export default function HomePage() {
   const [floatingHistory, setFloatingHistory] = useState([]);
   const [floatingRuntimeMode, setFloatingRuntimeMode] = useState("quick");
   const [isModeMenuOpen, setIsModeMenuOpen] = useState(false);
+  const [authUser, setAuthUser] = useState(null);
+  const [isAuthLoading, setIsAuthLoading] = useState(true);
+  const [isLoginModalOpen, setIsLoginModalOpen] = useState(false);
+  const [loginEmail, setLoginEmail] = useState("");
+  const [loginPassword, setLoginPassword] = useState("");
+  const [loginError, setLoginError] = useState("");
+  const [loginSubmitting, setLoginSubmitting] = useState(false);
+  const [pendingAuthNext, setPendingAuthNext] = useState("/");
+  const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
+  const [isProfileAccountOpen, setIsProfileAccountOpen] = useState(false);
+  const [profileDisplayName, setProfileDisplayName] = useState("");
+  const [profileAvatar, setProfileAvatar] = useState("");
   const floatingStorageReadyRef = useRef(false);
   const batchWaStoppedRef = useRef(false);
   const batchWaAbortControllersRef = useRef(new Set());
@@ -1011,10 +1030,139 @@ export default function HomePage() {
   const effectShowcaseRef = useRef(null);
   const businessShowcaseRef = useRef(null);
   const bottomSummaryRef = useRef(null);
+  const profileMenuRef = useRef(null);
+  const profileAvatarInputRef = useRef(null);
   const { theme, toggleTheme } = useTheme("dark");
   const floatingEntryMode = floatingIsGenerating
     ? floatingRuntimeMode
     : detectOneClickEntryMode(floatingPrompt, floatingRefImages);
+  const profileAvatarSrc = profileAvatar || "/images/internal-user-avatar.png";
+  useCloudLocalStorageSync(HOME_CLOUD_STATE_KEYS, { enabled: Boolean(authUser?.email) });
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/auth/me")
+      .then(async (res) => {
+        if (!res.ok) return null;
+        return res.json();
+      })
+      .then((data) => {
+        if (cancelled) return;
+        setAuthUser(data?.user || null);
+      })
+      .catch(() => {
+        if (!cancelled) setAuthUser(null);
+      })
+      .finally(() => {
+        if (!cancelled) setIsAuthLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("login") === "1") {
+      const next = params.get("next");
+      setPendingAuthNext(next?.startsWith("/") ? next : "/");
+      setIsLoginModalOpen(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    try {
+      setProfileDisplayName(localStorage.getItem("easyai-profile-display-name") || "");
+      setProfileAvatar(localStorage.getItem("easyai-profile-avatar") || "");
+    } catch {}
+  }, []);
+
+  useEffect(() => {
+    if (!isProfileMenuOpen) return undefined;
+    const handlePointerDown = (event) => {
+      if (!profileMenuRef.current?.contains(event.target)) {
+        setIsProfileMenuOpen(false);
+      }
+    };
+    window.addEventListener("pointerdown", handlePointerDown);
+    return () => window.removeEventListener("pointerdown", handlePointerDown);
+  }, [isProfileMenuOpen]);
+
+  const handleLoginSubmit = useCallback(async (event) => {
+    event.preventDefault();
+    setLoginError("");
+    setLoginSubmitting(true);
+    try {
+      const res = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: loginEmail, password: loginPassword }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error || "登录失败");
+
+      setAuthUser(data?.user || { email: loginEmail, username: loginEmail });
+      setLoginPassword("");
+      setIsLoginModalOpen(false);
+      const next = pendingAuthNext?.startsWith("/") ? pendingAuthNext : "/";
+      window.history.replaceState(null, "", next === "/" ? "/" : window.location.pathname);
+      if (next !== "/" && next !== window.location.pathname) {
+        router.push(next);
+      }
+    } catch (error) {
+      setLoginError(error?.message || "登录失败");
+    } finally {
+      setLoginSubmitting(false);
+    }
+  }, [loginEmail, loginPassword, pendingAuthNext, router]);
+
+  const handleLogout = useCallback(async () => {
+    await fetch("/api/auth/logout", { method: "POST" }).catch(() => {});
+    setAuthUser(null);
+    setLoginPassword("");
+    setPendingAuthNext("/");
+    setIsProfileMenuOpen(false);
+    setIsProfileAccountOpen(false);
+  }, []);
+
+  const handleProfileNameChange = useCallback((value) => {
+    setProfileDisplayName(value);
+    try {
+      localStorage.setItem("easyai-profile-display-name", value);
+    } catch {}
+  }, []);
+
+  const handleProfileAvatarChange = useCallback((event) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    if (!file.type?.startsWith("image/")) return;
+
+    const reader = new FileReader();
+    reader.onload = async () => {
+      try {
+        const dataUrl = String(reader.result || "");
+        const compressed = await compressImage(dataUrl, 512, 0.82);
+        setProfileAvatar(compressed);
+        localStorage.setItem("easyai-profile-avatar", compressed);
+      } catch {
+        const dataUrl = String(reader.result || "");
+        setProfileAvatar(dataUrl);
+        try {
+          localStorage.setItem("easyai-profile-avatar", dataUrl);
+        } catch {}
+      }
+    };
+    reader.readAsDataURL(file);
+    event.target.value = "";
+  }, []);
+
+  const handleResetProfileAvatar = useCallback(() => {
+    setProfileAvatar("");
+    try {
+      localStorage.removeItem("easyai-profile-avatar");
+    } catch {}
+  }, []);
+
   const updateEffectCardSpread = useCallback(() => {
     const showcaseElement = effectShowcaseRef.current;
     if (!showcaseElement) return;
@@ -1991,8 +2139,270 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
           >
             {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
           </button>
+          {authUser ? (
+            <div className="relative" ref={profileMenuRef}>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsProfileMenuOpen((prev) => !prev);
+                  setIsProfileAccountOpen(false);
+                }}
+                className={`flex h-9 w-9 items-center justify-center overflow-hidden rounded-xl backdrop-blur-md transition-all hover:scale-105 ${
+                  theme === "light" ? "bg-black/[0.14]" : "bg-white/[0.32]"
+                }`}
+                title="个人信息"
+                aria-label="个人信息"
+              >
+                <img
+                  src={profileAvatarSrc}
+                  alt=""
+                  className="h-full w-full object-cover"
+                  aria-hidden="true"
+                />
+              </button>
+
+              {isProfileMenuOpen && (
+                <div className={`absolute right-0 top-[calc(100%+12px)] z-50 w-[300px] rounded-2xl border p-3 shadow-2xl backdrop-blur-xl ${
+                  theme === "light"
+                    ? "border-black/10 bg-white text-black shadow-black/12"
+                    : "border-white/12 bg-[#111713]/95 text-white shadow-black/45"
+                }`}>
+                  {isProfileAccountOpen ? (
+                    <>
+                      <div className="mb-4 flex items-center gap-3">
+                        <img
+                          src={profileAvatarSrc}
+                          alt=""
+                          className="h-11 w-11 rounded-xl object-cover"
+                          aria-hidden="true"
+                        />
+                        <div className="min-w-0">
+                          <div className="truncate text-sm font-semibold">
+                            {profileDisplayName.trim() || "EasyAI 内测用户"}
+                          </div>
+                          <div className={`mt-0.5 truncate text-xs ${theme === "light" ? "text-black/45" : "text-white/45"}`}>
+                            {authUser.username}
+                          </div>
+                        </div>
+                      </div>
+
+                      <label className={`mb-1.5 block text-xs font-medium ${theme === "light" ? "text-black/60" : "text-white/55"}`}>
+                        显示名称
+                      </label>
+                      <input
+                        value={profileDisplayName}
+                        onChange={(event) => handleProfileNameChange(event.target.value)}
+                        placeholder="填写你的显示名称"
+                        className={`mb-3 w-full rounded-xl border px-3 py-2 text-sm outline-none transition-colors focus:border-[#3FCA58]/70 ${
+                          theme === "light"
+                            ? "border-black/10 bg-black/[0.035] placeholder:text-black/30"
+                            : "border-white/10 bg-black/25 placeholder:text-white/30"
+                        }`}
+                      />
+
+                      <label className={`mb-1.5 block text-xs font-medium ${theme === "light" ? "text-black/60" : "text-white/55"}`}>
+                        头像
+                      </label>
+                      <div className={`mb-3 rounded-xl border p-3 ${theme === "light" ? "border-black/10 bg-black/[0.025]" : "border-white/10 bg-black/20"}`}>
+                        <div className="flex items-center gap-3">
+                          <img
+                            src={profileAvatarSrc}
+                            alt=""
+                            className="h-12 w-12 rounded-xl object-cover"
+                            aria-hidden="true"
+                          />
+                          <div className="min-w-0 flex-1">
+                            <div className={`text-xs ${theme === "light" ? "text-black/55" : "text-white/50"}`}>
+                              支持上传 JPG / PNG 图片，仅保存在当前浏览器。
+                            </div>
+                            <div className="mt-2 flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => profileAvatarInputRef.current?.click()}
+                                className={`rounded-lg px-2.5 py-1.5 text-xs font-medium transition-all ${
+                                  theme === "light"
+                                    ? "bg-black/[0.06] text-black/75 hover:bg-black/10"
+                                    : "bg-white/[0.08] text-white/75 hover:bg-white/[0.12]"
+                                }`}
+                              >
+                                上传头像
+                              </button>
+                              {profileAvatar ? (
+                                <button
+                                  type="button"
+                                  onClick={handleResetProfileAvatar}
+                                  className="rounded-lg px-2.5 py-1.5 text-xs text-red-400 transition-all hover:bg-red-500/10"
+                                >
+                                  恢复默认
+                                </button>
+                              ) : null}
+                            </div>
+                          </div>
+                        </div>
+                        <input
+                          ref={profileAvatarInputRef}
+                          type="file"
+                          accept="image/*"
+                          className="hidden"
+                          onChange={handleProfileAvatarChange}
+                        />
+                      </div>
+
+                      <div className={`mb-3 rounded-xl px-3 py-2 text-xs ${theme === "light" ? "bg-black/[0.035] text-black/55" : "bg-white/[0.06] text-white/55"}`}>
+                        登录状态保留 30 天，仅用于团队内测访问控制。
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => setIsProfileAccountOpen(false)}
+                        className={`w-full rounded-xl px-3 py-2.5 text-sm font-medium transition-all ${
+                          theme === "light"
+                            ? "bg-black/[0.06] text-black/75 hover:bg-black/10"
+                            : "bg-white/[0.08] text-white/75 hover:bg-white/[0.12]"
+                        }`}
+                      >
+                        返回
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => setIsProfileAccountOpen(true)}
+                        className={`flex w-full items-center justify-between rounded-xl px-3 py-2.5 text-sm font-medium transition-all ${
+                          theme === "light"
+                            ? "text-black/75 hover:bg-black/[0.06]"
+                            : "text-white/75 hover:bg-white/[0.08]"
+                        }`}
+                      >
+                        账户管理
+                        <ArrowRight size={15} />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleLogout}
+                        className={`mt-1 flex w-full items-center justify-between rounded-xl px-3 py-2.5 text-sm font-medium transition-all ${
+                          theme === "light"
+                            ? "text-black/75 hover:bg-red-500/10 hover:text-red-500"
+                            : "text-white/75 hover:bg-red-500/12 hover:text-red-300"
+                        }`}
+                      >
+                        退出登录
+                        <LogOut size={15} />
+                      </button>
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+          ) : (
+            <button
+              type="button"
+              disabled={isAuthLoading}
+              onClick={() => {
+                setPendingAuthNext("/");
+                setIsLoginModalOpen(true);
+              }}
+              className={`h-9 rounded-xl px-3 text-xs font-semibold backdrop-blur-md transition-all disabled:cursor-not-allowed disabled:opacity-60 ${
+                theme === "light"
+                  ? "bg-[#3FCA58] text-white hover:bg-[#35b54d]"
+                  : "bg-[#3FCA58] text-white hover:bg-[#35b54d]"
+              }`}
+            >
+              <span className="hidden sm:inline">登录</span>
+              <LogIn size={15} className="sm:hidden" />
+            </button>
+          )}
         </div>
       </nav>
+
+      {isLoginModalOpen && (
+        <div className="fixed inset-0 z-[80] flex items-center justify-center bg-black/55 px-5 backdrop-blur-sm">
+          <form
+            onSubmit={handleLoginSubmit}
+            className={`w-full max-w-[420px] rounded-[28px] border p-7 shadow-2xl ${
+              theme === "light"
+                ? "border-black/10 bg-white text-black shadow-black/15"
+                : "border-white/12 bg-[#111713]/95 text-white shadow-black/45"
+            }`}
+          >
+            <div className="mb-7 flex items-center justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <BrandLogo className="h-12" showText={false} />
+                <div>
+                  <h2 className="text-xl font-semibold tracking-tight">内测登录</h2>
+                  <p className={`mt-1 text-sm ${theme === "light" ? "text-black/50" : "text-white/50"}`}>
+                    登录后可使用创作功能
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setIsLoginModalOpen(false);
+                  setLoginError("");
+                }}
+                className={`flex h-9 w-9 items-center justify-center rounded-xl text-xl leading-none transition-all ${
+                  theme === "light"
+                    ? "text-black/45 hover:bg-black/5 hover:text-black"
+                    : "text-white/45 hover:bg-white/8 hover:text-white"
+                }`}
+                aria-label="关闭登录"
+              >
+                ×
+              </button>
+            </div>
+
+            <label className={`mb-2 block text-sm font-medium ${theme === "light" ? "text-black/75" : "text-white/80"}`}>公司邮箱</label>
+            <div className={`mb-5 flex items-center gap-3 rounded-2xl border px-4 py-3 transition-colors focus-within:border-[#3FCA58]/70 ${
+              theme === "light" ? "border-black/10 bg-black/[0.035]" : "border-white/10 bg-black/25"
+            }`}>
+              <Mail size={18} className={theme === "light" ? "text-black/35" : "text-white/45"} />
+              <input
+                type="email"
+                value={loginEmail}
+                onChange={(event) => setLoginEmail(event.target.value)}
+                placeholder="请输入公司邮箱"
+                required
+                className={`w-full bg-transparent text-sm outline-none ${
+                  theme === "light" ? "placeholder:text-black/30" : "placeholder:text-white/30"
+                }`}
+              />
+            </div>
+
+            <label className={`mb-2 block text-sm font-medium ${theme === "light" ? "text-black/75" : "text-white/80"}`}>内测密码</label>
+            <div className={`mb-5 flex items-center gap-3 rounded-2xl border px-4 py-3 transition-colors focus-within:border-[#3FCA58]/70 ${
+              theme === "light" ? "border-black/10 bg-black/[0.035]" : "border-white/10 bg-black/25"
+            }`}>
+              <LockKeyhole size={18} className={theme === "light" ? "text-black/35" : "text-white/45"} />
+              <input
+                type="password"
+                value={loginPassword}
+                onChange={(event) => setLoginPassword(event.target.value)}
+                placeholder="请输入统一内测密码"
+                required
+                className={`w-full bg-transparent text-sm outline-none ${
+                  theme === "light" ? "placeholder:text-black/30" : "placeholder:text-white/30"
+                }`}
+              />
+            </div>
+
+            {loginError ? (
+              <div className="mb-5 rounded-2xl border border-red-400/25 bg-red-500/10 px-4 py-3 text-sm text-red-500">
+                {loginError}
+              </div>
+            ) : null}
+
+            <button
+              type="submit"
+              disabled={loginSubmitting}
+              className="flex w-full items-center justify-center rounded-2xl bg-[#3FCA58] px-4 py-3 text-sm font-semibold text-black transition hover:bg-[#35b54d] disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {loginSubmitting ? "登录中..." : "登录并进入"}
+            </button>
+          </form>
+        </div>
+      )}
 
       {/* Hero */}
       <section className="relative w-full h-screen min-h-[600px] overflow-hidden">

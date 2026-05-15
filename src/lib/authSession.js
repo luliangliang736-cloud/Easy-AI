@@ -4,14 +4,21 @@ export const AUTH_SESSION_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
 const AUTH_SESSION_MAX_AGE_MS = AUTH_SESSION_MAX_AGE_SECONDS * 1000;
 
 function getAuthSecret() {
+  if (process.env.NODE_ENV !== "production") return "easyai-local-dev-session-secret";
   const secret = process.env.AUTH_SESSION_SECRET || process.env.AUTH_SECRET || process.env.NEXTAUTH_SECRET || "";
   if (secret) return secret;
-  if (process.env.NODE_ENV !== "production") return "easyai-local-dev-session-secret";
   return "";
 }
 
-function normalizeUsername(username = "") {
-  return String(username).trim();
+export function normalizeAuthEmail(email = "") {
+  return String(email).trim().toLowerCase();
+}
+
+function splitCsv(value = "") {
+  return String(value || "")
+    .split(",")
+    .map((item) => item.trim().toLowerCase())
+    .filter(Boolean);
 }
 
 function bytesToBase64Url(bytes) {
@@ -40,22 +47,28 @@ async function sign(value) {
   return bytesToBase64Url(new Uint8Array(signature));
 }
 
-export function isCredentialValid(rawUsername = "", rawPassword = "") {
-  const username = normalizeUsername(rawUsername);
-  const expectedUsername = String(process.env.AUTH_USERNAME || "");
-  const expectedPassword = String(process.env.AUTH_PASSWORD || "");
-
-  if (!expectedUsername || !expectedPassword) {
-    return process.env.NODE_ENV !== "production" && username === "easyai" && String(rawPassword || "") === "easyai";
-  }
-
-  return username === expectedUsername && String(rawPassword || "") === expectedPassword;
+export function getAllowedEmailDomains() {
+  const configured = splitCsv(process.env.AUTH_ALLOWED_EMAIL_DOMAINS || process.env.AUTH_ALLOWED_EMAIL_DOMAIN);
+  return configured.length > 0 ? configured.map((domain) => domain.replace(/^@/, "")) : ["fintopia.tech"];
 }
 
-export async function createSessionValue(rawUsername = "") {
-  const username = normalizeUsername(rawUsername);
+export function isCompanyEmailAllowed(rawEmail = "") {
+  const email = normalizeAuthEmail(rawEmail);
+  if (!email || !email.includes("@")) return false;
+  const domain = email.split("@").pop();
+  return getAllowedEmailDomains().includes(domain);
+}
+
+export function isSharedPasswordValid(rawEmail = "", rawPassword = "") {
+  const expectedPassword = String(process.env.AUTH_SHARED_PASSWORD || "lu782026");
+  return isCompanyEmailAllowed(rawEmail) && String(rawPassword || "") === expectedPassword;
+}
+
+export async function createSessionValue(rawEmail = "") {
+  const email = normalizeAuthEmail(rawEmail);
   const payload = {
-    username,
+    email,
+    username: email,
     iat: Date.now(),
     exp: Date.now() + AUTH_SESSION_MAX_AGE_MS,
   };
@@ -78,7 +91,10 @@ export async function verifySessionValue(value = "") {
     return null;
   }
 
-  if (!payload?.username || !payload?.exp || payload.exp < Date.now()) return null;
-  if (payload.username !== normalizeUsername(process.env.AUTH_USERNAME || payload.username)) return null;
+  const email = normalizeAuthEmail(payload.email || payload.username);
+  if (!email || !payload?.exp || payload.exp < Date.now()) return null;
+  if (!isCompanyEmailAllowed(email)) return null;
+  payload.email = email;
+  payload.username = email;
   return payload;
 }

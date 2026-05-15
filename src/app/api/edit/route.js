@@ -105,19 +105,16 @@ async function normalizeCutoutSource(image) {
   return new Blob([await res.arrayBuffer()], { type: contentType });
 }
 
-async function runTrueCutout(image) {
-  const input = await normalizeCutoutSource(image);
-  const { removeBackground } = await import("@imgly/background-removal-node");
-  const blob = await removeBackground(input, {
-    model: "small",
-    output: {
-      format: "image/png",
-      type: "foreground",
-    },
-    debug: false,
-  });
+async function blobToDataUrl(blob) {
   const buffer = Buffer.from(await blob.arrayBuffer());
-  return `data:image/png;base64,${buffer.toString("base64")}`;
+  return `data:${blob.type || "image/png"};base64,${buffer.toString("base64")}`;
+}
+
+async function runLocalCutout(image) {
+  const { removeBackground } = await import("@imgly/background-removal-node");
+  const blob = await normalizeCutoutSource(image);
+  const result = await removeBackground(blob, { model: "small" });
+  return blobToDataUrl(result);
 }
 
 export async function POST(request) {
@@ -165,7 +162,7 @@ export async function POST(request) {
     }
 
     if (mode === "cutout") {
-      const url = await runTrueCutout(image);
+      const url = await runLocalCutout(image);
       const responseBody = {
         success: true,
         data: {
@@ -174,7 +171,10 @@ export async function POST(request) {
         },
       };
       await saveGenerationResult(clientRequestId, responseBody);
-      logEditEvent(meta, "success", { provider: "local-cutout", urlCount: 1 });
+      logEditEvent(meta, "success", {
+        provider: "local-cutout",
+        urlCount: 1,
+      });
       return NextResponse.json(responseBody);
     }
 

@@ -4,9 +4,11 @@ import { AUTH_COOKIE_NAME, verifySessionValue } from "./lib/authSession";
 const PUBLIC_API_PREFIXES = [
   "/api/auth",
   "/api/feishu-im-webhook",
+  "/api/home-hero-assets",
 ];
 
 const PUBLIC_PATHS = [
+  "/",
   "/login",
   "/favicon.ico",
   "/robots.txt",
@@ -29,8 +31,9 @@ function isPublicApi(pathname = "") {
 }
 
 function redirectToLogin(request) {
-  const loginUrl = new URL("/login", request.url);
+  const loginUrl = new URL("/", request.url);
   const nextPath = `${request.nextUrl.pathname}${request.nextUrl.search}`;
+  loginUrl.searchParams.set("login", "1");
   if (nextPath !== "/") loginUrl.searchParams.set("next", nextPath);
   return NextResponse.redirect(loginUrl);
 }

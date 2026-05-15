@@ -10,9 +10,19 @@ import BrandLogo from "@/components/BrandLogo";
 import { compressImage } from "@/lib/imageUtils";
 import { useHistory } from "@/lib/useHistory";
 import { useTheme } from "@/lib/useTheme";
+import { useCloudLocalStorageSync } from "@/lib/useCloudLocalStorageSync";
 import { MAX_GEN_COUNT } from "@/lib/genLimits";
 
 const FLOATING_ENTRY_DRAFT_KEY = "lovart-floating-entry-draft";
+const CANVAS_CLOUD_STATE_KEYS = [
+  "lovart-conversations",
+  "lovart-active-conversation",
+  "lovart-canvas-boards",
+  "lovart-active-canvas-board",
+  "lovart-canvas-images",
+  "lovart-canvas-texts",
+  "lovart-canvas-shapes",
+];
 
 function errStr(e) {
   if (!e) return "未知错误";
@@ -524,6 +534,7 @@ const GENERATION_RECOVERY_MAX_ATTEMPTS = Math.ceil((12 * 60 * 1000) / GENERATION
 const MAX_PARALLEL_GENERATIONS = 1;
 const STORAGE_VERSION = "9";
 const DEFAULT_CONVERSATION_TITLE = "新建对话";
+const DEFAULT_CANVAS_BOARD_TITLE = "未命名画布";
 const TEXT_EDIT_ENABLED = false;
 const POINT_IMAGE_EDIT_ENABLED = false;
 const VALID_SERVICE_TIERS = new Set(["default", "priority"]);
@@ -538,6 +549,19 @@ function createConversation(overrides = {}) {
     id: overrides.id || `conv-${now}-${Math.random().toString(36).slice(2, 8)}`,
     title: overrides.title || DEFAULT_CONVERSATION_TITLE,
     messages: overrides.messages || [],
+    createdAt: overrides.createdAt || now,
+    updatedAt: overrides.updatedAt || now,
+  };
+}
+
+function createCanvasBoard(overrides = {}) {
+  const now = Date.now();
+  return {
+    id: overrides.id || `board-${now}-${Math.random().toString(36).slice(2, 8)}`,
+    title: overrides.title || DEFAULT_CANVAS_BOARD_TITLE,
+    images: Array.isArray(overrides.images) ? overrides.images : [],
+    texts: Array.isArray(overrides.texts) ? overrides.texts : [],
+    shapes: Array.isArray(overrides.shapes) ? overrides.shapes : [],
     createdAt: overrides.createdAt || now,
     updatedAt: overrides.updatedAt || now,
   };
@@ -702,6 +726,22 @@ function sanitizeCanvasImagesForStorage(items) {
   if (!Array.isArray(items)) return [];
   // base64 图片/视频太大，只保留 HTTPS URL（Nano/Kling API / CDN 链接）
   return items.filter((item) => item && isHttpsUrl(item.image_url));
+}
+
+function sanitizeCanvasBoardsForStorage(boards) {
+  if (!Array.isArray(boards)) return [];
+  return boards.slice(0, 30).map((board) => ({
+    ...board,
+    title: board?.title || DEFAULT_CANVAS_BOARD_TITLE,
+    images: sanitizeCanvasImagesForStorage(board?.images || []).slice(0, 100),
+    texts: Array.isArray(board?.texts) ? board.texts.slice(0, 100) : [],
+    shapes: Array.isArray(board?.shapes) ? board.shapes.slice(0, 200) : [],
+  }));
+}
+
+function normalizeCanvasBoards(boards) {
+  if (!Array.isArray(boards) || boards.length === 0) return [];
+  return boards.map((board) => createCanvasBoard(board));
 }
 
 async function parseApiResponse(res) {
@@ -988,6 +1028,9 @@ function HomeInner() {
   const [showParams, setShowParams] = useState(false);
   const [conversations, setConversations] = useState([initialConversationRef.current]);
   const [activeConversationId, setActiveConversationId] = useState(initialConversationRef.current.id);
+  const initialCanvasBoardRef = useRef(createCanvasBoard({ title: "默认画布" }));
+  const [canvasBoards, setCanvasBoards] = useState([initialCanvasBoardRef.current]);
+  const [activeCanvasBoardId, setActiveCanvasBoardId] = useState(initialCanvasBoardRef.current.id);
   const canvasHistory = useHistory([]);
   const canvasImages = canvasHistory.state;
   const [canvasGeneratingItems, setCanvasGeneratingItems] = useState([]);
@@ -1014,6 +1057,8 @@ function HomeInner() {
   // 标记 localStorage 已加载完毕，加载前禁止持久化 effect 写入（避免覆盖已保存的数据）
   const persistReadyRef = useRef(false);
   const activeConversation = conversations.find((conversation) => conversation.id === activeConversationId) || conversations[0];
+  useCloudLocalStorageSync(CANVAS_CLOUD_STATE_KEYS);
+  const activeCanvasBoard = canvasBoards.find((board) => board.id === activeCanvasBoardId) || canvasBoards[0];
   const messages = activeConversation?.messages || [];
   const isGenerating = activeGenerationCount > 0;
   const isBusy = isTextEditing;
@@ -1067,6 +1112,8 @@ function HomeInner() {
       const savedImages = localStorage.getItem("lovart-canvas-images");
       const savedTexts = localStorage.getItem("lovart-canvas-texts");
       const savedShapes = localStorage.getItem("lovart-canvas-shapes");
+      const savedBoards = localStorage.getItem("lovart-canvas-boards");
+      const savedActiveBoardId = localStorage.getItem("lovart-active-canvas-board");
       const parsedConversations = safeParseStorageArray(saved);
       if (parsedConversations?.length > 0) {
         setConversations(parsedConversations.map((conversation) => ({
@@ -1088,6 +1135,28 @@ function HomeInner() {
 
       const parsedShapes = safeParseStorageArray(savedShapes);
       if (parsedShapes) canvasShapesHistory.setState(parsedShapes);
+
+      const parsedBoards = normalizeCanvasBoards(safeParseStorageArray(savedBoards));
+      if (parsedBoards.length > 0) {
+        const nextActiveBoard = parsedBoards.find((board) => board.id === savedActiveBoardId) || parsedBoards[0];
+        setCanvasBoards(parsedBoards);
+        setActiveCanvasBoardId(nextActiveBoard.id);
+        canvasHistory.setState(nextActiveBoard.images || []);
+        canvasTextsHistory.setState(nextActiveBoard.texts || []);
+        canvasShapesHistory.setState(nextActiveBoard.shapes || []);
+      } else {
+        const migratedBoard = createCanvasBoard({
+          id: initialCanvasBoardRef.current.id,
+          title: "默认画布",
+          images: parsedImages || [],
+          texts: parsedTexts || [],
+          shapes: parsedShapes || [],
+          createdAt: initialCanvasBoardRef.current.createdAt,
+          updatedAt: Date.now(),
+        });
+        setCanvasBoards([migratedBoard]);
+        setActiveCanvasBoardId(migratedBoard.id);
+      }
     } catch {
       // 读取失败时保留旧数据，避免一次异常把历史记录清空。
     } finally {
@@ -1231,6 +1300,31 @@ function HomeInner() {
     if ((refImages?.length || 0) > 0) return;
     setTextEditBlocks([]);
   }, [refImages]);
+
+  useEffect(() => {
+    if (!persistReadyRef.current || !activeCanvasBoardId) return;
+    setCanvasBoards((prev) => prev.map((board) => (
+      board.id === activeCanvasBoardId
+        ? {
+            ...board,
+            images: canvasImages,
+            texts: canvasTexts,
+            shapes: canvasShapes,
+            updatedAt: Date.now(),
+          }
+        : board
+    )));
+  }, [activeCanvasBoardId, canvasImages, canvasTexts, canvasShapes]);
+
+  useEffect(() => {
+    if (!persistReadyRef.current) return;
+    try {
+      localStorage.setItem("lovart-canvas-boards", JSON.stringify(sanitizeCanvasBoardsForStorage(canvasBoards)));
+      localStorage.setItem("lovart-active-canvas-board", activeCanvasBoardId || "");
+    } catch {
+      // 多画布同样遵循原有策略：写入失败时保留上一次可用数据。
+    }
+  }, [activeCanvasBoardId, canvasBoards]);
 
   // Persist canvas images
   useEffect(() => {
@@ -2559,6 +2653,102 @@ function HomeInner() {
     resetComposer();
   }, [isNavigationBusy, resetComposer, toast]);
 
+  const handleNewCanvasBoard = useCallback(() => {
+    if (isNavigationBusy) {
+      toast("生成过程中暂时不能新建画布", "info", 1500);
+      return;
+    }
+    const nextBoard = createCanvasBoard({ title: `画布 ${canvasBoards.length + 1}` });
+    setCanvasBoards((prev) => [nextBoard, ...prev]);
+    setActiveCanvasBoardId(nextBoard.id);
+    canvasHistory.setState([]);
+    canvasTextsHistory.setState([]);
+    canvasShapesHistory.setState([]);
+    setSelectedImage(null);
+    setSemanticSelection(null);
+    toast("已新建画布", "success", 1200);
+  }, [canvasBoards.length, canvasHistory, canvasTextsHistory, canvasShapesHistory, isNavigationBusy, toast]);
+
+  const handleSelectCanvasBoard = useCallback((boardId) => {
+    if (isNavigationBusy) {
+      toast("生成过程中暂时不能切换画布", "info", 1500);
+      return;
+    }
+    const targetBoard = canvasBoards.find((board) => board.id === boardId);
+    if (!targetBoard || targetBoard.id === activeCanvasBoardId) return;
+
+    setCanvasBoards((prev) => prev.map((board) => (
+      board.id === activeCanvasBoardId
+        ? {
+            ...board,
+            images: canvasImages,
+            texts: canvasTexts,
+            shapes: canvasShapes,
+            updatedAt: Date.now(),
+          }
+        : board
+    )));
+    setActiveCanvasBoardId(targetBoard.id);
+    canvasHistory.setState(targetBoard.images || []);
+    canvasTextsHistory.setState(targetBoard.texts || []);
+    canvasShapesHistory.setState(targetBoard.shapes || []);
+    setSelectedImage(null);
+    setSemanticSelection(null);
+    toast(`已切换到 ${targetBoard.title || "画布"}`, "info", 1200);
+  }, [
+    activeCanvasBoardId,
+    canvasBoards,
+    canvasHistory,
+    canvasImages,
+    canvasShapes,
+    canvasShapesHistory,
+    canvasTexts,
+    canvasTextsHistory,
+    isNavigationBusy,
+    toast,
+  ]);
+
+  const handleRenameCanvasBoard = useCallback((boardId, title) => {
+    const nextTitle = String(title || "").trim();
+    if (!nextTitle) return;
+    setCanvasBoards((prev) => prev.map((board) => (
+      board.id === boardId ? { ...board, title: nextTitle, updatedAt: Date.now() } : board
+    )));
+  }, []);
+
+  const handleDeleteCanvasBoard = useCallback((boardId) => {
+    if (isNavigationBusy) {
+      toast("生成过程中暂时不能删除画布", "info", 1500);
+      return;
+    }
+
+    setCanvasBoards((prev) => {
+      if (prev.length <= 1) {
+        const nextBoard = createCanvasBoard({ title: "默认画布" });
+        setActiveCanvasBoardId(nextBoard.id);
+        canvasHistory.setState([]);
+        canvasTextsHistory.setState([]);
+        canvasShapesHistory.setState([]);
+        setSelectedImage(null);
+        setSemanticSelection(null);
+        return [nextBoard];
+      }
+
+      const remaining = prev.filter((board) => board.id !== boardId);
+      if (activeCanvasBoardId === boardId) {
+        const nextBoard = remaining[0];
+        setActiveCanvasBoardId(nextBoard.id);
+        canvasHistory.setState(nextBoard.images || []);
+        canvasTextsHistory.setState(nextBoard.texts || []);
+        canvasShapesHistory.setState(nextBoard.shapes || []);
+        setSelectedImage(null);
+        setSemanticSelection(null);
+      }
+      return remaining;
+    });
+    toast("画布已删除", "info", 1200);
+  }, [activeCanvasBoardId, canvasHistory, canvasTextsHistory, canvasShapesHistory, isNavigationBusy, toast]);
+
   const handleSelectConversation = useCallback((conversationId) => {
     if (isNavigationBusy) {
       toast("生成过程中暂时不能切换对话", "info", 1500);
@@ -2785,6 +2975,13 @@ function HomeInner() {
         onToggleTheme={toggleTheme}
         width={panelWidth}
         onWidthChange={setPanelWidth}
+        canvasBoards={canvasBoards}
+        activeCanvasBoardId={activeCanvasBoardId}
+        activeCanvasBoard={activeCanvasBoard}
+        onNewCanvasBoard={handleNewCanvasBoard}
+        onSelectCanvasBoard={handleSelectCanvasBoard}
+        onRenameCanvasBoard={handleRenameCanvasBoard}
+        onDeleteCanvasBoard={handleDeleteCanvasBoard}
         canvasHistoryMessages={historyMessages}
         onSelectCanvasHistory={handleSelectHistory}
         onClearCanvasHistory={handleClearHistory}

@@ -34,9 +34,21 @@ OBJECT_EDIT_MODEL=gpt-image-1
 NANO_OBJECT_EDIT_MODEL=gemini-3.1-flash-image-preview
 
 # 团队内测访问限制
-AUTH_USERNAME=easyai
-AUTH_PASSWORD=replace-with-team-password
 AUTH_SESSION_SECRET=replace-with-long-random-secret
+AUTH_ALLOWED_EMAIL_DOMAINS=fintopia.tech
+AUTH_SHARED_PASSWORD=lu782026
+
+# 云端创作记录（阿里云 RDS PostgreSQL）
+DATABASE_URL=postgresql://easyai_admin:password@pgm-xxxx.pg.rds.aliyuncs.com:5432/easyai
+DATABASE_SSL=true
+CLOUD_STATE_MAX_VALUE_CHARS=1500000
+
+# 云端素材文件（阿里云 OSS，后续图片长期存储使用）
+OSS_BUCKET=easyai-assets-lqb
+OSS_REGION=oss-cn-beijing
+OSS_ENDPOINT=oss-cn-beijing.aliyuncs.com
+OSS_ACCESS_KEY_ID=replace-with-ram-access-key-id
+OSS_ACCESS_KEY_SECRET=replace-with-ram-access-key-secret
 
 # SAM（默认优先本地 checkpoint，其次可回退远程接口）
 SAM_MODE=auto

@@ -7,5 +7,5 @@ export async function GET(request) {
   if (!user) {
     return NextResponse.json({ authenticated: false }, { status: 401 });
   }
-  return NextResponse.json({ authenticated: true, user: { username: user.username } });
+  return NextResponse.json({ authenticated: true, user: { email: user.email, username: user.username } });
 }
