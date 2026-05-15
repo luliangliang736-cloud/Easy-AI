@@ -247,7 +247,9 @@ export async function upsertUserCloudState(userEmail = "", rawItems = []) {
         const existing = existingResult.rows[0];
         if (existing?.state_value) {
           stateValue = mergeCloudStateValue(item.key, existing.state_value, item.value);
-          clientUpdatedAt = Math.max(Number(existing.client_updated_at || 0), item.clientUpdatedAt);
+          // A merge can produce a value that is newer than either browser's local snapshot.
+          // Bump the timestamp so both tabs/devices restore the merged server copy.
+          clientUpdatedAt = Math.max(Number(existing.client_updated_at || 0), item.clientUpdatedAt, Date.now());
           if (!stateValue || stateValue.length > MAX_STATE_VALUE_CHARS) {
             stateValue = item.value;
             clientUpdatedAt = item.clientUpdatedAt;

@@ -117,7 +117,8 @@ export function useCloudLocalStorageSync(keys = [], options = {}) {
             localUpdatedAt[item.key] = localValueUpdatedAt;
             localUpdatedAtChanged = true;
           }
-          const cloudIsNewer = cloudUpdatedAt > localValueUpdatedAt;
+          const cloudIsNewer = cloudUpdatedAt > localValueUpdatedAt
+            || (cloudUpdatedAt === localValueUpdatedAt && localValue !== item.value);
           if (item.value && (localValue === null || (shouldOverwriteLocal && cloudIsNewer && localValue !== item.value))) {
             window.localStorage.setItem(item.key, item.value);
             localUpdatedAt[item.key] = cloudUpdatedAt || Date.now();
