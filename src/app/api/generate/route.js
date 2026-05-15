@@ -7,8 +7,6 @@ import {
   generateWithOpenAICompatibleImage,
 } from "@/lib/server/openaiImageCompat";
 import { saveGenerationResult } from "@/lib/server/generationResultStore";
-import { copyImageUrlsToCloudAssets } from "@/lib/server/cloudAssetStore";
-import { getRequestUser } from "@/lib/server/authUser";
 
 export const maxDuration = 600;
 
@@ -62,14 +60,6 @@ function formatRouteError(err) {
   return err?.message || "Internal server error";
 }
 
-async function persistGeneratedUrls(urls = [], scope = "generated", userEmail = "system-generated") {
-  return copyImageUrlsToCloudAssets({
-    userEmail,
-    urls,
-    scope,
-  });
-}
-
 function buildCompletedTasks(urls = [], idPrefix = "image") {
   return urls
     .filter(Boolean)
@@ -103,8 +93,6 @@ export async function POST(request) {
       clientRequestId: requestIdFromClient,
     } = body;
     clientRequestId = String(requestIdFromClient || "").trim();
-    const requestUser = await getRequestUser(request).catch(() => null);
-    const storageUserEmail = requestUser?.email || "system-generated";
 
     logGenerateEvent(meta, "start", {
       model: model || "gemini-3.1-flash-image-preview",
@@ -131,15 +119,14 @@ export async function POST(request) {
         outputCompression: output_compression,
         moderation,
       });
-      const persistedUrls = await persistGeneratedUrls(urls, "generated-gpt-image-2", storageUserEmail);
-      const tasks = buildCompletedTasks(persistedUrls, "gpt-image-2");
+      const tasks = buildCompletedTasks(urls, "gpt-image-2");
       logGenerateEvent(meta, "success", {
         provider: "gpt-image-2",
-        urlCount: persistedUrls.filter(Boolean).length,
+        urlCount: urls.filter(Boolean).length,
       });
       const responseBody = {
         success: true,
-        data: { urls: persistedUrls, tasks },
+        data: { urls, tasks },
       };
       await saveGenerationResult(clientRequestId, responseBody);
       return NextResponse.json(responseBody);
@@ -164,15 +151,14 @@ export async function POST(request) {
             imageSize: image_size || "1:1",
             num: Math.min(Math.max(num || 1, 1), MAX_GEN_COUNT),
           });
-      const persistedUrls = await persistGeneratedUrls(urls, "generated-openai-compatible", storageUserEmail);
-      const tasks = buildCompletedTasks(persistedUrls, "nano-openai");
+      const tasks = buildCompletedTasks(urls, "nano-openai");
       logGenerateEvent(meta, "success", {
         provider: "openai-compatible",
-        urlCount: persistedUrls.filter(Boolean).length,
+        urlCount: urls.filter(Boolean).length,
       });
       const responseBody = {
         success: true,
-        data: { urls: persistedUrls, tasks },
+        data: { urls, tasks },
       };
       await saveGenerationResult(clientRequestId, responseBody);
       return NextResponse.json(responseBody);
@@ -230,12 +216,11 @@ export async function POST(request) {
     }
 
     const urls = Array.isArray(data.data?.url) ? data.data.url : [data.data?.url];
-    const persistedUrls = await persistGeneratedUrls(urls, "generated-nano", storageUserEmail);
-    const tasks = buildCompletedTasks(persistedUrls, "nano");
+    const tasks = buildCompletedTasks(urls, "nano");
 
     const responseBody = {
       success: true,
-      data: { urls: persistedUrls, tasks },
+      data: { urls, tasks },
     };
     await saveGenerationResult(clientRequestId, responseBody);
     return NextResponse.json(responseBody);

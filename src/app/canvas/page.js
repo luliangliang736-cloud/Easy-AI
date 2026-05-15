@@ -633,14 +633,15 @@ function isCloudAssetUrl(url) {
 function shouldUploadToCloudAsset(source) {
   return typeof source === "string" && (
     /^data:(image|video)\//i.test(source) ||
-    isLocalGeneratedMediaUrl(source)
+    isLocalGeneratedMediaUrl(source) ||
+    /^https?:\/\//i.test(source)
   );
 }
 
 async function uploadMediaSourceToCloudAsset(source, filename = "image", scope = "canvas") {
   if (typeof source !== "string") return source;
   if (isCloudAssetUrl(source)) return source;
-  if (isLocalGeneratedMediaUrl(source)) {
+  if (isLocalGeneratedMediaUrl(source) || /^https?:\/\//i.test(source)) {
     const res = await fetch("/api/cloud-assets/upload", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -1640,6 +1641,29 @@ function HomeInner() {
       });
   }, [cloudifyComposerMediaSource, toast, updateConversationMessages]);
 
+  const syncGeneratedResultToCloudInBackground = useCallback(({
+    conversationId,
+    aiMsgId,
+    taskId,
+    canvasItemId,
+    sourceUrl,
+    mediaType,
+  }) => {
+    if (!sourceUrl || !shouldUploadToCloudAsset(sourceUrl)) return;
+
+    void uploadMediaSourceToCloudAsset(sourceUrl, `${mediaType || "image"}-${Date.now()}`, "generated-result")
+      .then((cloudUrl) => {
+        if (!cloudUrl || cloudUrl === sourceUrl) return;
+        patchTask(conversationId, aiMsgId, taskId, { url: cloudUrl });
+        canvasHistory.setState((prev) => prev.map((item) => (
+          item.id === canvasItemId ? { ...item, image_url: cloudUrl } : item
+        )));
+      })
+      .catch(() => {
+        toast("生成结果云端保存失败，换设备可能无法恢复这张图", "warning", 2200);
+      });
+  }, [canvasHistory, patchTask, toast]);
+
   const resetComposer = useCallback(() => {
     setPrompt("");
     setRefImages([]);
@@ -2049,6 +2073,14 @@ function HomeInner() {
                 hidePromptText: hidePlaceholderPrompt,
               },
             ]);
+            syncGeneratedResultToCloudInBackground({
+              conversationId,
+              aiMsgId,
+              taskId,
+              canvasItemId,
+              sourceUrl: url,
+              mediaType,
+            });
             return { status: "completed" };
           };
           const tryRecoverTaskResult = async () => {
@@ -2188,6 +2220,14 @@ function HomeInner() {
                 hidePromptText: hidePlaceholderPrompt,
               },
             ]);
+            syncGeneratedResultToCloudInBackground({
+              conversationId,
+              aiMsgId,
+              taskId,
+              canvasItemId,
+              sourceUrl: url,
+              mediaType,
+            });
             return { status: "completed" };
           } catch (err) {
             if (generationState.cancelled) {
@@ -2312,6 +2352,7 @@ function HomeInner() {
     patchTask,
     canvasHistory,
     semanticSelection,
+    syncGeneratedResultToCloudInBackground,
     syncRefImagesToCloudInBackground,
     toast,
   ]);

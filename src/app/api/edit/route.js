@@ -213,15 +213,14 @@ export async function POST(request) {
         outputCompression: output_compression,
         moderation,
       });
-      const persistedUrls = await persistGeneratedUrls(urls, "edited-gpt-image-2", storageUserEmail);
-      const tasks = buildCompletedTasks(persistedUrls, "gpt-image-2");
+      const tasks = buildCompletedTasks(urls, "gpt-image-2");
       logEditEvent(meta, "success", {
         provider: "gpt-image-2",
-        urlCount: persistedUrls.filter(Boolean).length,
+        urlCount: urls.filter(Boolean).length,
       });
       const responseBody = {
         success: true,
-        data: { urls: persistedUrls, tasks },
+        data: { urls, tasks },
       };
       await saveGenerationResult(clientRequestId, responseBody);
       return NextResponse.json(responseBody);
@@ -246,17 +245,16 @@ export async function POST(request) {
         imageSize,
         aspectRatio: _autoRatio || image_size || "1:1",
       });
-      const persistedUrls = await persistGeneratedUrls(urls, "edited-gemini-native", storageUserEmail);
-      const tasks = buildCompletedTasks(persistedUrls, "gemini-native-edit");
+      const tasks = buildCompletedTasks(urls, "gemini-native-edit");
       logEditEvent(meta, "success", {
         provider: "gemini-native",
         imageSize,
         aspectRatio: _autoRatio || null,
-        urlCount: persistedUrls.filter(Boolean).length,
+        urlCount: urls.filter(Boolean).length,
       });
       const responseBody = {
         success: true,
-        data: { urls: persistedUrls, tasks },
+        data: { urls, tasks },
       };
       await saveGenerationResult(clientRequestId, responseBody);
       return NextResponse.json(responseBody);
@@ -283,15 +281,14 @@ export async function POST(request) {
             imageSize: image_size || "1:1",
             num: Math.min(Math.max(num || 1, 1), MAX_GEN_COUNT),
           });
-      const persistedUrls = await persistGeneratedUrls(urls, "edited-openai-compatible", storageUserEmail);
-      const tasks = buildCompletedTasks(persistedUrls, "nano-openai-edit");
+      const tasks = buildCompletedTasks(urls, "nano-openai-edit");
       logEditEvent(meta, "success", {
         provider: "openai-compatible",
-        urlCount: persistedUrls.filter(Boolean).length,
+        urlCount: urls.filter(Boolean).length,
       });
       const responseBody = {
         success: true,
-        data: { urls: persistedUrls, tasks },
+        data: { urls, tasks },
       };
       await saveGenerationResult(clientRequestId, responseBody);
       return NextResponse.json(responseBody);
@@ -346,12 +343,11 @@ export async function POST(request) {
     }
 
     const urls = Array.isArray(data.data?.url) ? data.data.url : [data.data?.url];
-    const persistedUrls = await persistGeneratedUrls(urls, "edited-nano", storageUserEmail);
-    const tasks = buildCompletedTasks(persistedUrls, "nano");
+    const tasks = buildCompletedTasks(urls, "nano");
 
     const responseBody = {
       success: true,
-      data: { urls: persistedUrls, tasks },
+      data: { urls, tasks },
     };
     await saveGenerationResult(clientRequestId, responseBody);
     return NextResponse.json(responseBody);
