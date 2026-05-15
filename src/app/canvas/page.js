@@ -809,7 +809,7 @@ async function parseApiResponse(res) {
   } catch {
     if (/inactivity timeout/i.test(rawText)) {
       return {
-        error: "生成超时。Netlify 免费函数等待时间有限，请优先尝试 512px 或 1K 模型后重试。",
+        error: "生成超时。部署平台等待时间有限，请优先尝试 512px 或 1K 模型后重试。",
       };
     }
 
