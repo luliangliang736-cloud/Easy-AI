@@ -44,13 +44,14 @@ DATABASE_URL=postgresql://easyai_admin:password@pgm-xxxx.pg.rds.aliyuncs.com:543
 DATABASE_SSL=true
 CLOUD_STATE_MAX_VALUE_CHARS=1500000
 
-# 云端素材文件（阿里云 OSS，后续图片长期存储使用）
+# 云端素材文件（阿里云 OSS，图片/视频长期存储使用）
 OSS_BUCKET=easyai-assets-lqb
 OSS_REGION=oss-cn-beijing
 OSS_ENDPOINT=oss-cn-beijing.aliyuncs.com
 OSS_ACCESS_KEY_ID=replace-with-ram-access-key-id
 OSS_ACCESS_KEY_SECRET=replace-with-ram-access-key-secret
 OSS_TIMEOUT_MS=180000
+CLOUD_MEDIA_MAX_UPLOAD_BYTES=524288000
 
 # SAM（默认优先本地 checkpoint，其次可回退远程接口）
 SAM_MODE=auto

@@ -6,6 +6,7 @@ import {
   chooseWaTemplateIpRole,
 } from "@/lib/oneClickCreationRules";
 import { readGeneratedImage } from "@/lib/server/generatedImageStore";
+import { readCloudAssetImage } from "@/lib/server/cloudAssetStore";
 import { LARK_IDENTITY, runLarkCliJson } from "@/lib/server/larkCliRuntime";
 
 export const runtime = "nodejs";
@@ -224,6 +225,11 @@ async function imageSourceToTempFile(source) {
     if (!image) throw new Error("本地生成图片不存在或已过期");
     buffer = image.buffer;
     ext = filename.split(".").pop() || "png";
+  } else if (String(source || "").includes("/api/cloud-assets/")) {
+    const image = await readCloudAssetImage(source);
+    if (!image) throw new Error("云端生成图片不存在");
+    buffer = image.buffer;
+    ext = image.mimeType.includes("jpeg") || image.mimeType.includes("jpg") ? "jpg" : image.mimeType.includes("webp") ? "webp" : "png";
   } else {
     const res = await fetch(source);
     if (!res.ok) throw new Error(`读取图片失败（${res.status}）`);

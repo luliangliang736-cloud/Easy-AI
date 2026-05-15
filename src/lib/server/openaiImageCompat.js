@@ -1,4 +1,5 @@
 import { normalizeGeneratedImageUrls, readGeneratedImage } from "@/lib/server/generatedImageStore";
+import { readCloudAssetImage } from "@/lib/server/cloudAssetStore";
 
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
 
@@ -142,14 +143,16 @@ async function localGeneratedImageToBuffer(source = "") {
 
 async function normalizeChatImageSource(source = "") {
   const localImage = await localGeneratedImageToBuffer(source);
-  if (!localImage) return source;
-  return `data:${localImage.mimeType};base64,${localImage.buffer.toString("base64")}`;
+  const cloudImage = localImage || await readCloudAssetImage(source);
+  if (!cloudImage) return source;
+  return `data:${cloudImage.mimeType};base64,${cloudImage.buffer.toString("base64")}`;
 }
 
 async function imageSourceToBlob(source) {
   const localImage = await localGeneratedImageToBuffer(source);
-  if (localImage) {
-    return { blob: new Blob([localImage.buffer], { type: localImage.mimeType }), mimeType: localImage.mimeType };
+  const cloudImage = localImage || await readCloudAssetImage(source);
+  if (cloudImage) {
+    return { blob: new Blob([cloudImage.buffer], { type: cloudImage.mimeType }), mimeType: cloudImage.mimeType };
   }
 
   if (typeof source === "string" && /^https?:\/\//i.test(source)) {

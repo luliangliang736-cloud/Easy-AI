@@ -9,6 +9,8 @@ import {
 } from "@/lib/server/openaiImageCompat";
 import { saveGenerationResult } from "@/lib/server/generationResultStore";
 import { readGeneratedImage } from "@/lib/server/generatedImageStore";
+import { copyImageUrlsToCloudAssets, readCloudAssetImage } from "@/lib/server/cloudAssetStore";
+import { getRequestUser } from "@/lib/server/authUser";
 
 const API_BASE = process.env.NANO_API_BASE || "https://api.nanobananaapi.dev";
 const API_KEY = process.env.NANO_API_KEY;
@@ -75,6 +77,20 @@ function formatRouteError(err) {
   return err?.message || "Internal server error";
 }
 
+async function persistGeneratedUrls(urls = [], scope = "edited", userEmail = "system-generated") {
+  return copyImageUrlsToCloudAssets({
+    userEmail,
+    urls,
+    scope,
+  });
+}
+
+function buildCompletedTasks(urls = [], idPrefix = "image") {
+  return urls
+    .filter(Boolean)
+    .map((url, index) => ({ id: `${idPrefix}-${index}`, index, url, status: "completed" }));
+}
+
 async function normalizeCutoutSource(image) {
   const source = Array.isArray(image) ? image[0] : image;
   if (!source || typeof source !== "string") {
@@ -88,6 +104,11 @@ async function normalizeCutoutSource(image) {
       throw new Error("本地生成图已过期或不存在，请重新生成后再抠图。");
     }
     return new Blob([localImage.buffer], { type: localImage.mimeType });
+  }
+
+  const cloudImage = await readCloudAssetImage(source);
+  if (cloudImage) {
+    return new Blob([cloudImage.buffer], { type: cloudImage.mimeType });
   }
 
   if (/^data:image\//i.test(source)) {
@@ -139,6 +160,8 @@ export async function POST(request) {
       clientRequestId: requestIdFromClient,
     } = body;
     clientRequestId = String(requestIdFromClient || "").trim();
+    const requestUser = await getRequestUser(request).catch(() => null);
+    const storageUserEmail = requestUser?.email || "system-generated";
 
     const imageCount = Array.isArray(image) ? image.length : image ? 1 : 0;
     logEditEvent(meta, "start", {
@@ -163,11 +186,12 @@ export async function POST(request) {
 
     if (mode === "cutout") {
       const url = await runLocalCutout(image);
+      const urls = await persistGeneratedUrls([url], "cutout", storageUserEmail);
       const responseBody = {
         success: true,
         data: {
-          urls: [url],
-          tasks: [{ id: "cutout-0", index: 0, url, status: "completed" }],
+          urls,
+          tasks: buildCompletedTasks(urls, "cutout"),
         },
       };
       await saveGenerationResult(clientRequestId, responseBody);
@@ -189,16 +213,15 @@ export async function POST(request) {
         outputCompression: output_compression,
         moderation,
       });
-      const tasks = urls
-        .filter(Boolean)
-        .map((url, index) => ({ id: `gpt-image-2-${index}`, index, url, status: "completed" }));
+      const persistedUrls = await persistGeneratedUrls(urls, "edited-gpt-image-2", storageUserEmail);
+      const tasks = buildCompletedTasks(persistedUrls, "gpt-image-2");
       logEditEvent(meta, "success", {
         provider: "gpt-image-2",
-        urlCount: urls.filter(Boolean).length,
+        urlCount: persistedUrls.filter(Boolean).length,
       });
       const responseBody = {
         success: true,
-        data: { urls, tasks },
+        data: { urls: persistedUrls, tasks },
       };
       await saveGenerationResult(clientRequestId, responseBody);
       return NextResponse.json(responseBody);
@@ -223,18 +246,17 @@ export async function POST(request) {
         imageSize,
         aspectRatio: _autoRatio || image_size || "1:1",
       });
-      const tasks = urls
-        .filter(Boolean)
-        .map((url, index) => ({ id: `gemini-native-edit-${index}`, index, url, status: "completed" }));
+      const persistedUrls = await persistGeneratedUrls(urls, "edited-gemini-native", storageUserEmail);
+      const tasks = buildCompletedTasks(persistedUrls, "gemini-native-edit");
       logEditEvent(meta, "success", {
         provider: "gemini-native",
         imageSize,
         aspectRatio: _autoRatio || null,
-        urlCount: urls.filter(Boolean).length,
+        urlCount: persistedUrls.filter(Boolean).length,
       });
       const responseBody = {
         success: true,
-        data: { urls, tasks },
+        data: { urls: persistedUrls, tasks },
       };
       await saveGenerationResult(clientRequestId, responseBody);
       return NextResponse.json(responseBody);
@@ -261,16 +283,15 @@ export async function POST(request) {
             imageSize: image_size || "1:1",
             num: Math.min(Math.max(num || 1, 1), MAX_GEN_COUNT),
           });
-      const tasks = urls
-        .filter(Boolean)
-        .map((url, index) => ({ id: `nano-openai-edit-${index}`, index, url, status: "completed" }));
+      const persistedUrls = await persistGeneratedUrls(urls, "edited-openai-compatible", storageUserEmail);
+      const tasks = buildCompletedTasks(persistedUrls, "nano-openai-edit");
       logEditEvent(meta, "success", {
         provider: "openai-compatible",
-        urlCount: urls.filter(Boolean).length,
+        urlCount: persistedUrls.filter(Boolean).length,
       });
       const responseBody = {
         success: true,
-        data: { urls, tasks },
+        data: { urls: persistedUrls, tasks },
       };
       await saveGenerationResult(clientRequestId, responseBody);
       return NextResponse.json(responseBody);
@@ -325,13 +346,12 @@ export async function POST(request) {
     }
 
     const urls = Array.isArray(data.data?.url) ? data.data.url : [data.data?.url];
-    const tasks = urls
-      .filter(Boolean)
-      .map((url, index) => ({ id: `nano-${index}`, index, url, status: "completed" }));
+    const persistedUrls = await persistGeneratedUrls(urls, "edited-nano", storageUserEmail);
+    const tasks = buildCompletedTasks(persistedUrls, "nano");
 
     const responseBody = {
       success: true,
-      data: { urls, tasks },
+      data: { urls: persistedUrls, tasks },
     };
     await saveGenerationResult(clientRequestId, responseBody);
     return NextResponse.json(responseBody);

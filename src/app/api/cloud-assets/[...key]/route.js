@@ -18,8 +18,9 @@ export async function GET(request, { params }) {
 
     const keyFromParams = (params?.key || []).map((part) => decodeURIComponent(part)).join("/");
     const key = keyFromParams || getObjectKeyFromRequest(request);
-    const expectedPrefix = `users/${encodeURIComponent(user.email.toLowerCase())}/`;
-    if (!key || !key.startsWith(expectedPrefix)) {
+    const expectedUserPrefix = `users/${encodeURIComponent(user.email.toLowerCase())}/`;
+    const expectedSystemPrefix = "users/system-generated/";
+    if (!key || (!key.startsWith(expectedUserPrefix) && !key.startsWith(expectedSystemPrefix))) {
       return NextResponse.json({ error: "无权访问该素材" }, { status: 403 });
     }
 

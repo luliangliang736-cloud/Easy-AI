@@ -1,5 +1,8 @@
 import { createHmac } from "crypto";
 import { NextResponse } from "next/server";
+import { copyImageUrlsToCloudAssets, readCloudAssetImage } from "@/lib/server/cloudAssetStore";
+import { getRequestUser } from "@/lib/server/authUser";
+import { readGeneratedImage } from "@/lib/server/generatedImageStore";
 
 export const runtime = "nodejs";
 export const maxDuration = 600;
@@ -188,6 +191,57 @@ function getApiErrorMessage(data, status) {
 
 function getErrorCode(error) {
   return error?.cause?.code || error?.code || "";
+}
+
+async function persistVideoUrls(urls = [], userEmail = "system-generated") {
+  return copyImageUrlsToCloudAssets({
+    userEmail,
+    urls,
+    scope: "generated-kling-video",
+  });
+}
+
+async function resolveKlingImageSource(source = "") {
+  const value = String(source || "").trim();
+  const cloudImage = await readCloudAssetImage(value);
+  if (cloudImage) {
+    return `data:${cloudImage.mimeType};base64,${cloudImage.buffer.toString("base64")}`;
+  }
+
+  const localMatch = value.match(/^\/api\/generated-images\/([^/?#]+)/i);
+  if (localMatch) {
+    const localImage = await readGeneratedImage(decodeURIComponent(localMatch[1]));
+    if (!localImage) throw new Error("本地生成图已过期或不存在，请重新生成后再用于视频。");
+    return `data:${localImage.mimeType};base64,${localImage.buffer.toString("base64")}`;
+  }
+
+  return value;
+}
+
+async function resolveKlingImageInputs(body = {}) {
+  const nextBody = { ...body };
+  if (typeof nextBody.image === "string") {
+    nextBody.image = await resolveKlingImageSource(nextBody.image);
+  }
+  if (typeof nextBody.image_tail === "string") {
+    nextBody.image_tail = await resolveKlingImageSource(nextBody.image_tail);
+  }
+  if (Array.isArray(nextBody.ref_images)) {
+    nextBody.ref_images = await Promise.all(nextBody.ref_images.map((image) => (
+      typeof image === "string" ? resolveKlingImageSource(image) : image
+    )));
+  }
+  return nextBody;
+}
+
+function buildVideoTasks(urls = [], idPrefix = "kling-video") {
+  return urls.map((url, index) => ({
+    id: `${idPrefix}-${index}`,
+    index,
+    url,
+    status: "completed",
+    type: "video",
+  }));
 }
 
 function isTransientKlingError(error) {
@@ -429,12 +483,15 @@ export async function POST(request) {
 
   try {
     const body = await request.json();
+    const requestUser = await getRequestUser(request).catch(() => null);
+    const storageUserEmail = requestUser?.email || "system-generated";
     if (!String(body?.prompt || "").trim()) {
       logKlingEvent(meta, "validation_error", { reason: "missing_prompt" });
       return NextResponse.json({ error: "Prompt is required" }, { status: 400 });
     }
 
-    const { path, payload, generationType } = buildTaskPayload(body);
+    const resolvedBody = await resolveKlingImageInputs(body);
+    const { path, payload, generationType } = buildTaskPayload(resolvedBody);
     payload.external_task_id = payload.external_task_id || meta.id;
     logKlingEvent(meta, "start", {
       generationType,
@@ -456,24 +513,19 @@ export async function POST(request) {
     if (!taskId) {
       const immediateUrls = extractVideoUrls(createData);
       if (immediateUrls.length > 0) {
+        const persistedUrls = await persistVideoUrls(immediateUrls, storageUserEmail);
         logKlingEvent(meta, "success", {
           generationType,
           taskMode: "immediate",
-          urlCount: immediateUrls.length,
+          urlCount: persistedUrls.length,
         });
         return NextResponse.json({
           success: true,
           data: {
-            urls: immediateUrls,
+            urls: persistedUrls,
             mediaType: "video",
             generationType,
-            tasks: immediateUrls.map((url, index) => ({
-              id: `kling-video-${index}`,
-              index,
-              url,
-              status: "completed",
-              type: "video",
-            })),
+            tasks: buildVideoTasks(persistedUrls),
           },
         });
       }
@@ -483,25 +535,20 @@ export async function POST(request) {
 
     logKlingEvent(meta, "task_created", { generationType, taskId });
     const urls = await pollTask(path, taskId, meta);
+    const persistedUrls = await persistVideoUrls(urls, storageUserEmail);
     logKlingEvent(meta, "success", {
       generationType,
       taskId,
-      urlCount: urls.length,
+      urlCount: persistedUrls.length,
     });
     return NextResponse.json({
       success: true,
       data: {
-        urls,
+        urls: persistedUrls,
         mediaType: "video",
         generationType,
         taskId,
-        tasks: urls.map((url, index) => ({
-          id: taskId,
-          index,
-          url,
-          status: "completed",
-          type: "video",
-        })),
+        tasks: buildVideoTasks(persistedUrls, taskId || "kling-video"),
       },
     });
   } catch (error) {

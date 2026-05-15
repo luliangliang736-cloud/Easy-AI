@@ -1,4 +1,5 @@
 import { normalizeGeneratedImageUrls, readGeneratedImage } from "@/lib/server/generatedImageStore";
+import { readCloudAssetImage } from "@/lib/server/cloudAssetStore";
 
 const GPT_IMAGE_2_API_BASE_RAW = (
   process.env.GPT_IMAGE_2_API_BASE
@@ -305,6 +306,11 @@ async function imgSrcToBlob(imgSrc) {
       throw new Error("本地生成图已过期或不存在，请重新生成后再作为参考图使用。");
     }
     return { blob: new Blob([image.buffer], { type: image.mimeType }), mimeType: image.mimeType };
+  }
+
+  const cloudImage = await readCloudAssetImage(imgSrc);
+  if (cloudImage) {
+    return { blob: new Blob([cloudImage.buffer], { type: cloudImage.mimeType }), mimeType: cloudImage.mimeType };
   }
 
   if (typeof imgSrc === "string" && /^https?:\/\//i.test(imgSrc)) {
