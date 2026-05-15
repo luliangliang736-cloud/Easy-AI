@@ -620,6 +620,20 @@ function sanitizeStoredImageList(images) {
   }).filter(Boolean);
 }
 
+async function uploadDataUrlToCloudAsset(dataUrl, filename = "image", scope = "canvas") {
+  if (typeof dataUrl !== "string" || !/^data:image\//i.test(dataUrl)) return dataUrl;
+  const res = await fetch("/api/cloud-assets/upload", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ dataUrl, filename, scope }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data?.url) {
+    throw new Error(data?.error || "上传云端素材失败");
+  }
+  return data.url;
+}
+
 function detectRefImageMeta(src) {
   return new Promise((resolve) => {
     if (!src || typeof src !== "string") {
@@ -661,7 +675,11 @@ function detectRefImageMeta(src) {
 }
 
 function isPersistableMediaUrl(url) {
-  return typeof url === "string" && (/^https?:\/\//i.test(url) || /^\/api\/generated-images\//i.test(url));
+  return typeof url === "string" && (
+    /^https?:\/\//i.test(url) ||
+    /^\/api\/generated-images\//i.test(url) ||
+    /^\/api\/cloud-assets\//i.test(url)
+  );
 }
 
 function sanitizeUrlList(urls) {
@@ -2161,6 +2179,22 @@ function HomeInner() {
     });
   }, []);
 
+  const handleRefImagesChange = useCallback((nextImages) => {
+    const list = Array.isArray(nextImages) ? nextImages.filter(Boolean) : [];
+    setRefImages(list);
+
+    list.forEach((item, index) => {
+      if (typeof item !== "string" || !/^data:image\//i.test(item)) return;
+      void uploadDataUrlToCloudAsset(item, `reference-${index + 1}`, "canvas-reference")
+        .then((url) => {
+          setRefImages((prev) => prev.map((existing) => (existing === item ? url : existing)));
+        })
+        .catch(() => {
+          toast("参考图云端保存失败，换设备可能无法恢复这张图", "warning", 2200);
+        });
+    });
+  }, [toast]);
+
   const handleCancelTextEditPanel = useCallback(() => {
     setTextEditBlocks([]);
     setTextEditPanelVisible(false);
@@ -2520,7 +2554,7 @@ function HomeInner() {
     setZoom((prev) => (typeof updater === "function" ? updater(prev) : updater));
   }, []);
 
-  // Drop image files onto canvas → convert to data URL → add as canvas items
+  // Drop image files onto canvas → show immediately, then replace with cloud URL for cross-device restore.
   const handleDropImages = useCallback((files, dropX, dropY) => {
     files.forEach((file, i) => {
       const reader = new FileReader();
@@ -2529,6 +2563,15 @@ function HomeInner() {
         const id = `drop-${Date.now()}-${i}`;
         const newImg = { id, image_url: dataUrl, prompt: file.name };
         canvasHistory.push((prev) => [...prev, newImg]);
+        void uploadDataUrlToCloudAsset(dataUrl, file.name, "canvas-upload")
+          .then((url) => {
+            canvasHistory.push((prev) => prev.map((img) => (
+              img.id === id ? { ...img, image_url: url } : img
+            )));
+          })
+          .catch(() => {
+            toast("图片已添加，但云端保存失败，换设备可能无法恢复", "warning", 2200);
+          });
       };
       reader.readAsDataURL(file);
     });
@@ -2553,14 +2596,24 @@ function HomeInner() {
     (items) => {
       if (!items?.length) return;
       const ts = Date.now();
-      canvasHistory.push((prev) => [
-        ...prev,
-        ...items.map((it, i) => ({
-          id: `paste-${ts}-${i}`,
-          image_url: it.image_url,
-          prompt: (it.prompt && String(it.prompt).trim()) || "粘贴",
-        })),
-      ]);
+      const nextItems = items.map((it, i) => ({
+        id: `paste-${ts}-${i}`,
+        image_url: it.image_url,
+        prompt: (it.prompt && String(it.prompt).trim()) || "粘贴",
+      }));
+      canvasHistory.push((prev) => [...prev, ...nextItems]);
+      nextItems.forEach((item) => {
+        if (!/^data:image\//i.test(item.image_url || "")) return;
+        void uploadDataUrlToCloudAsset(item.image_url, item.prompt, "canvas-paste")
+          .then((url) => {
+            canvasHistory.push((prev) => prev.map((img) => (
+              img.id === item.id ? { ...img, image_url: url } : img
+            )));
+          })
+          .catch(() => {
+            toast("粘贴图片云端保存失败，换设备可能无法恢复", "warning", 2200);
+          });
+      });
       toast(`已粘贴 ${items.length} 张图片`, "success", 1500);
     },
     [canvasHistory, toast]
@@ -2961,7 +3014,7 @@ function HomeInner() {
         showParams={showParams}
         onToggleParams={() => setShowParams(!showParams)}
         refImages={refImages}
-        onRefImagesChange={setRefImages}
+        onRefImagesChange={handleRefImagesChange}
         textEditBlocks={textEditBlocks}
         onTextEditBlocksChange={handleTextEditBlocksChange}
         showTextEditPanelInline={false}
