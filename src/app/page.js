@@ -1545,6 +1545,14 @@ export default function HomePage() {
     setFloatingMessages((prev) => prev.filter((message) => message.id !== messageId));
   };
 
+  const handleFloatingDeleteMessageImage = (messageId, imageIndex) => {
+    setFloatingMessages((prev) => prev.flatMap((message) => {
+      if (message.id !== messageId || !Array.isArray(message.images)) return [message];
+      const nextImages = message.images.filter((_, index) => index !== imageIndex);
+      return nextImages.length > 0 ? [{ ...message, images: nextImages }] : [];
+    }));
+  };
+
   const handleFloatingStopBatchWa = () => {
     batchWaStoppedRef.current = true;
     batchWaAbortControllersRef.current.forEach((controller) => controller.abort());
@@ -1609,17 +1617,33 @@ export default function HomePage() {
     }
     let batchWaPrompts = [];
     let feishuBatchRequest = null;
+    let pendingBatchUserMessage = null;
     if (!override?.skipBatch) {
       feishuBatchRequest = parseFeishuWaBatchRequest(combinedPromptText);
+      if (feishuBatchRequest && !collectResult) {
+        pendingBatchUserMessage = createFloatingMessage("user", prompt || combinedPromptText, {
+          attachments: activeAttachments,
+        });
+        setFloatingMessages((prev) => [...prev, pendingBatchUserMessage]);
+        setFloatingPrompt("");
+        setFloatingRefImages([]);
+        setFloatingAttachments([]);
+        setFloatingRuntimeMode("agent");
+        setFloatingGenerationStage("preparing");
+        setFloatingIsGenerating(true);
+        setFloatingOutputError("");
+      }
       try {
         batchWaPrompts = feishuBatchRequest
           ? await fetchFeishuWaBatchPrompts(feishuBatchRequest)
           : parseBatchWaTemplatePrompts(combinedPromptText);
       } catch (error) {
         if (!collectResult) {
-          setFloatingMessages((prev) => [...prev, createFloatingMessage("user", prompt || combinedPromptText, {
-            attachments: activeAttachments,
-          })]);
+          if (!pendingBatchUserMessage) {
+            setFloatingMessages((prev) => [...prev, createFloatingMessage("user", prompt || combinedPromptText, {
+              attachments: activeAttachments,
+            })]);
+          }
           setFloatingMessages((prev) => [...prev, createFloatingMessage("assistant", error?.message || "读取飞书 WA 表格失败", {
             modelLabel: "飞书 WA",
           })]);
@@ -1652,10 +1676,14 @@ export default function HomePage() {
         })),
       });
       batchWaStoppedRef.current = false;
-      setFloatingMessages((prev) => [...prev, userMessage, batchMessage]);
-      setFloatingPrompt("");
-      setFloatingRefImages([]);
-      setFloatingAttachments([]);
+      setFloatingMessages((prev) => pendingBatchUserMessage
+        ? [...prev, batchMessage]
+        : [...prev, userMessage, batchMessage]);
+      if (!pendingBatchUserMessage) {
+        setFloatingPrompt("");
+        setFloatingRefImages([]);
+        setFloatingAttachments([]);
+      }
       setFloatingRuntimeMode("agent");
       setFloatingGenerationStage("generating");
       setFloatingIsGenerating(true);
@@ -2919,6 +2947,7 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
         onSelectHistory={handleSelectFloatingHistory}
         onDeleteHistory={handleDeleteFloatingHistory}
         onDeleteMessage={handleFloatingDeleteMessage}
+        onDeleteMessageImage={handleFloatingDeleteMessageImage}
         onRegenerateMessage={handleFloatingRegenerateMessage}
         onStopBatchWa={handleFloatingStopBatchWa}
         onExpandFullscreen={handleExpandFullscreen}

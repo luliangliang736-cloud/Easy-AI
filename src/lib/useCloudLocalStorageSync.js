@@ -125,6 +125,9 @@ export function useCloudLocalStorageSync(keys = [], options = {}) {
           writeLocalUpdatedAt(localUpdatedAt);
         }
 
+        // Restore localStorage only. Do not reload the page from this hook:
+        // creation screens keep active composer/reference state in React, and
+        // forced reloads can override the user's current workflow.
         restoredRef.current = true;
       } catch {
         restoredRef.current = true;

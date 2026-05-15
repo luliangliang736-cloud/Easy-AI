@@ -26,6 +26,24 @@ const CANVAS_CLOUD_STATE_KEYS = [
   "lovart-canvas-shapes",
 ];
 
+/**
+ * CREATION LOGIC GUARDRAILS
+ *
+ * This canvas owns the core creation workflow. Fixes for sync, persistence,
+ * login, asset loading, or multi-device edge cases must not change these
+ * user-facing creation behaviors unless the product owner explicitly asks:
+ *
+ * - Do not change model selection, image count resolution, prompt building,
+ *   edit/generate routing, request payload shape, or generation task flow.
+ * - Do not remove or alter the established behavior where selecting one canvas
+ *   image, or multi-selecting canvas images, adds them to the reference tray.
+ * - Do not make cloud/local restore mutate the active reference tray or force
+ *   page reloads. Restore should protect persisted state without taking over
+ *   the user's current composer.
+ * - Deduplication and merge fixes may clean duplicated persisted results, but
+ *   must not suppress intentional multi-image generation with distinct outputs.
+ */
+
 function errStr(e) {
   if (!e) return "未知错误";
   if (typeof e === "string") return e;

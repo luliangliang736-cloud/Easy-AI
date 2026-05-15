@@ -620,6 +620,7 @@ export default function FloatingEntryWidget({
   onSelectHistory,
   onDeleteHistory,
   onDeleteMessage,
+  onDeleteMessageImage,
   onRegenerateMessage,
   onStopBatchWa,
   onClose,
@@ -1804,6 +1805,20 @@ export default function FloatingEntryWidget({
                                     >
                                       <Download size={14} />
                                     </button>
+                                    {message.role === "assistant" ? (
+                                      <button
+                                        type="button"
+                                        onClick={(event) => {
+                                          event.preventDefault();
+                                          event.stopPropagation();
+                                          onDeleteMessageImage?.(message.id, index);
+                                        }}
+                                        className="rounded-lg bg-black/60 p-1.5 text-white backdrop-blur-sm transition-all hover:bg-red-500/80"
+                                        title="删除这张图"
+                                      >
+                                        <Trash2 size={14} />
+                                      </button>
+                                    ) : null}
                                   </div>
                                 </div>
                               ))}
