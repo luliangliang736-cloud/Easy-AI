@@ -27,6 +27,7 @@ export function getOssClient() {
       accessKeySecret: process.env.OSS_ACCESS_KEY_SECRET,
       bucket: process.env.OSS_BUCKET,
       secure: true,
+      timeout: Number(process.env.OSS_TIMEOUT_MS || 180_000),
     });
   }
   return globalThis[globalKey];

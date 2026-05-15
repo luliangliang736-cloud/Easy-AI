@@ -622,10 +622,11 @@ function sanitizeStoredImageList(images) {
 
 async function uploadDataUrlToCloudAsset(dataUrl, filename = "image", scope = "canvas") {
   if (typeof dataUrl !== "string" || !/^data:image\//i.test(dataUrl)) return dataUrl;
+  const uploadDataUrl = await compressImage(dataUrl, 2048, 0.9).catch(() => dataUrl);
   const res = await fetch("/api/cloud-assets/upload", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ dataUrl, filename, scope }),
+    body: JSON.stringify({ dataUrl: uploadDataUrl, filename, scope }),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok || !data?.url) {

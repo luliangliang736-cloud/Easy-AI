@@ -50,6 +50,7 @@ OSS_REGION=oss-cn-beijing
 OSS_ENDPOINT=oss-cn-beijing.aliyuncs.com
 OSS_ACCESS_KEY_ID=replace-with-ram-access-key-id
 OSS_ACCESS_KEY_SECRET=replace-with-ram-access-key-secret
+OSS_TIMEOUT_MS=180000
 
 # SAM（默认优先本地 checkpoint，其次可回退远程接口）
 SAM_MODE=auto
