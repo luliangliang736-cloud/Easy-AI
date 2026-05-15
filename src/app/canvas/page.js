@@ -1107,6 +1107,7 @@ function HomeInner() {
   const generationAbortRef = useRef(null);
   const activeGenerationRef = useRef(null);
   const cloudAssetMigrationRef = useRef(new Map());
+  const cloudAssetUploadRef = useRef(new Map());
   const inspirationResizeFrameRef = useRef(0);
   // 标记 localStorage 已加载完毕，加载前禁止持久化 effect 写入（避免覆盖已保存的数据）
   const persistReadyRef = useRef(false);
@@ -1597,6 +1598,48 @@ function HomeInner() {
     );
   }, [updateConversationMessages]);
 
+  const cloudifyComposerMediaSource = useCallback((source, filename = "reference", scope = "canvas-reference") => {
+    if (!shouldUploadToCloudAsset(source)) return Promise.resolve(source);
+    const cache = cloudAssetUploadRef.current;
+    if (!cache.has(source)) {
+      cache.set(
+        source,
+        uploadMediaSourceToCloudAsset(source, filename, scope).catch((error) => {
+          cache.delete(source);
+          throw error;
+        })
+      );
+    }
+    return cache.get(source);
+  }, []);
+
+  const syncRefImagesToCloudInBackground = useCallback(({
+    conversationId,
+    userMsgId,
+    sourceImages,
+  }) => {
+    if (!conversationId || !userMsgId || !sourceImages?.some(shouldUploadToCloudAsset)) return;
+
+    void Promise.all(sourceImages.map((img, index) => (
+      cloudifyComposerMediaSource(img, `reference-${index + 1}`, "canvas-reference")
+    )))
+      .then(async (cloudImages) => {
+        if (areSameRefImageList(cloudImages, sourceImages)) return;
+        const previewImages = await Promise.all(cloudImages.map((img) => makeMessagePreviewImage(img)));
+        updateConversationMessages(conversationId, (prev) => prev.map((msg) => (
+          msg.id === userMsgId
+            ? { ...msg, refImages: previewImages, requestRefImages: cloudImages }
+            : msg
+        )));
+        setRefImages((current) => (
+          areSameRefImageList(current, sourceImages) ? cloudImages : current
+        ));
+      })
+      .catch(() => {
+        toast("参考图云端保存失败，换设备可能无法恢复这张图", "warning", 2200);
+      });
+  }, [cloudifyComposerMediaSource, toast, updateConversationMessages]);
+
   const resetComposer = useCallback(() => {
     setPrompt("");
     setRefImages([]);
@@ -1817,20 +1860,6 @@ function HomeInner() {
         }
       : effectiveParams;
     const hasImages = effectiveRefImages.length > 0;
-    const storageRefImages = hasImages
-      ? await Promise.all(effectiveRefImages.map(async (img, index) => {
-          if (!shouldUploadToCloudAsset(img)) return img;
-          try {
-            return await uploadMediaSourceToCloudAsset(img, `reference-${index + 1}`, "canvas-reference");
-          } catch {
-            toast("参考图云端保存失败，换设备可能无法恢复这张图", "warning", 2200);
-            return img;
-          }
-        }))
-      : [];
-    if (hasImages && !areSameRefImageList(storageRefImages, effectiveRefImages)) {
-      setRefImages((current) => (areSameRefImageList(current, effectiveRefImages) ? storageRefImages : current));
-    }
     if (hasImages && resolvedParams.image_size === "auto" && (!resolvedParams._autoRatio || !resolvedParams._autoWidth || !resolvedParams._autoHeight)) {
       const meta = await detectRefImageMeta(effectiveRefImages[0]);
       resolvedParams = {
@@ -1848,7 +1877,7 @@ function HomeInner() {
     if (!isKlingVideoRequest && isTextEditing) return;
 
     const messageRefImages = hasImages
-      ? await Promise.all(storageRefImages.map((img) => makeMessagePreviewImage(img)))
+      ? await Promise.all(effectiveRefImages.map((img) => makeMessagePreviewImage(img)))
       : [];
 
     const inferred = inferLoopCountFromPrompt(composerText);
@@ -1873,7 +1902,7 @@ function HomeInner() {
       params: genParams,
       modelLabel,
       refImages: messageRefImages,
-      requestRefImages: storageRefImages,
+      requestRefImages: effectiveRefImages,
       textEditBlocks: effectiveTextEditBlocks,
       entryMode: activeEntryMode,
       composerMode: activeComposerMode,
@@ -1902,6 +1931,11 @@ function HomeInner() {
 
     if (!hideConversationMessages) {
       updateConversationMessages(conversationId, (prev) => [...prev, userMsg, aiMsg]);
+      syncRefImagesToCloudInBackground({
+        conversationId,
+        userMsgId,
+        sourceImages: effectiveRefImages,
+      });
     }
     setActiveGenerationCount((value) => value + 1);
     if (!preserveComposer) {
@@ -2220,9 +2254,7 @@ function HomeInner() {
 
       if (!preserveComposer) {
         setRefImages((current) => (
-          areSameRefImageList(current, effectiveRefImages) || areSameRefImageList(current, storageRefImages)
-            ? []
-            : current
+          areSameRefImageList(current, effectiveRefImages) ? [] : current
         ));
       }
     } catch (err) {
@@ -2280,6 +2312,7 @@ function HomeInner() {
     patchTask,
     canvasHistory,
     semanticSelection,
+    syncRefImagesToCloudInBackground,
     toast,
   ]);
 
@@ -2355,7 +2388,7 @@ function HomeInner() {
 
     list.forEach((item, index) => {
       if (!shouldUploadToCloudAsset(item)) return;
-      void uploadMediaSourceToCloudAsset(item, `reference-${index + 1}`, "canvas-reference")
+      void cloudifyComposerMediaSource(item, `reference-${index + 1}`, "canvas-reference")
         .then((url) => {
           setRefImages((prev) => prev.map((existing) => (existing === item ? url : existing)));
         })
@@ -2363,7 +2396,7 @@ function HomeInner() {
           toast("参考图云端保存失败，换设备可能无法恢复这张图", "warning", 2200);
         });
     });
-  }, [toast]);
+  }, [cloudifyComposerMediaSource, toast]);
 
   const handleCancelTextEditPanel = useCallback(() => {
     setTextEditBlocks([]);
