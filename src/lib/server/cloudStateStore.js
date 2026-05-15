@@ -1,4 +1,9 @@
 import { ensureCloudDbSchema, getCloudDbPool, isCloudDbConfigured } from "@/lib/server/cloudDb";
+import {
+  CLOUD_STATE_DELETIONS_KEY,
+  mergeCloudStateDeletions,
+  normalizeCloudStateDeletions,
+} from "@/lib/cloudStateDeletions";
 
 const MAX_STATE_VALUE_CHARS = Number(process.env.CLOUD_STATE_MAX_VALUE_CHARS || 1_500_000);
 
@@ -15,6 +20,7 @@ export const CLOUD_STATE_KEYS = [
   "lovart-canvas-texts",
   "lovart-canvas-shapes",
   "lovart-canvas-ref-images",
+  CLOUD_STATE_DELETIONS_KEY,
 ];
 
 const allowedStateKeys = new Set(CLOUD_STATE_KEYS);
@@ -23,6 +29,7 @@ const MERGEABLE_STATE_KEYS = new Set([
   "lovart-canvas-boards",
   "lovart-canvas-images",
   "lovart-canvas-ref-images",
+  CLOUD_STATE_DELETIONS_KEY,
 ]);
 
 function safeJsonParse(value, fallback) {
@@ -44,6 +51,129 @@ function getUpdatedAt(item) {
 
 function isCloudAssetUrl(url = "") {
   return /^\/api\/cloud-assets\//i.test(String(url || ""));
+}
+
+function hasDeletedId(deletions = {}, scope = "", id = "") {
+  return Boolean(scope && id && deletions?.[scope]?.[String(id)]);
+}
+
+function hasDeletedUrl(deletions = {}, url = "") {
+  return Boolean(url && deletions?.imageUrls?.[String(url)]);
+}
+
+function filterDeletedMediaUrls(urls = [], deletions = {}) {
+  if (!Array.isArray(urls)) return [];
+  return urls.filter((url) => url && !hasDeletedUrl(deletions, url));
+}
+
+function filterDeletedCanvasItems(items = [], deletions = {}) {
+  if (!Array.isArray(items)) return [];
+  return items.filter((item) => {
+    const id = getItemId(item);
+    const url = item?.image_url || item?.url || "";
+    return !hasDeletedId(deletions, "canvasImageIds", id) && !hasDeletedUrl(deletions, url);
+  });
+}
+
+function filterDeletedMessages(messages = [], deletions = {}) {
+  if (!Array.isArray(messages)) return [];
+  return messages
+    .filter((message) => !hasDeletedId(deletions, "messageIds", getItemId(message)) && !hasDeletedId(deletions, "chatMessageIds", getItemId(message)))
+    .map((message) => {
+      const tasks = Array.isArray(message?.tasks)
+        ? message.tasks.filter((task) => !hasDeletedId(deletions, "taskIds", getItemId(task)) && !hasDeletedUrl(deletions, task?.url))
+        : message?.tasks;
+      const urls = filterDeletedMediaUrls(message?.urls || [], deletions);
+      const images = filterDeletedMediaUrls(message?.images || [], deletions);
+      const refImages = filterDeletedMediaUrls(message?.refImages || [], deletions);
+      return { ...message, tasks, urls, images, refImages };
+    })
+    .filter((message) => {
+      const hasText = String(message?.text || "").trim();
+      const hasTasks = Array.isArray(message?.tasks) && message.tasks.length > 0;
+      const hasUrls = Array.isArray(message?.urls) && message.urls.length > 0;
+      const hasImages = Array.isArray(message?.images) && message.images.length > 0;
+      return hasText || hasTasks || hasUrls || hasImages || message?.role === "user";
+    });
+}
+
+function filterDeletedConversations(conversations = [], deletions = {}) {
+  if (!Array.isArray(conversations)) return [];
+  return conversations
+    .filter((conversation) => !hasDeletedId(deletions, "conversationIds", getItemId(conversation)))
+    .map((conversation) => ({
+      ...conversation,
+      messages: filterDeletedMessages(conversation.messages || [], deletions),
+    }));
+}
+
+function filterDeletedCanvasBoards(boards = [], deletions = {}) {
+  if (!Array.isArray(boards)) return [];
+  return boards
+    .filter((board) => !hasDeletedId(deletions, "canvasBoardIds", getItemId(board)))
+    .map((board) => ({
+      ...board,
+      images: filterDeletedCanvasItems(board.images || [], deletions),
+      texts: Array.isArray(board.texts)
+        ? board.texts.filter((item) => !hasDeletedId(deletions, "canvasTextIds", getItemId(item)))
+        : board.texts,
+      shapes: Array.isArray(board.shapes)
+        ? board.shapes.filter((item) => !hasDeletedId(deletions, "canvasShapeIds", getItemId(item)))
+        : board.shapes,
+    }));
+}
+
+function filterDeletedChatSession(session = {}, deletions = {}) {
+  if (!session || typeof session !== "object" || Array.isArray(session)) return session;
+  return {
+    ...session,
+    messages: filterDeletedMessages(session.messages || [], deletions),
+    refImages: filterDeletedMediaUrls(session.refImages || [], deletions),
+  };
+}
+
+function filterDeletedImageHistory(history = [], deletions = {}) {
+  if (!Array.isArray(history)) return [];
+  return history
+    .filter((item) => !hasDeletedId(deletions, "imageHistoryIds", getItemId(item)))
+    .map((item) => ({
+      ...item,
+      urls: filterDeletedMediaUrls(item.urls || [], deletions),
+    }))
+    .filter((item) => Array.isArray(item.urls) && item.urls.length > 0);
+}
+
+function applyDeletionsToStateValue(key, value = "", deletions = {}) {
+  if (!value || key === CLOUD_STATE_DELETIONS_KEY) return value;
+  if (key === "lovart-conversations") {
+    const parsed = safeJsonParse(value, []);
+    return Array.isArray(parsed) ? JSON.stringify(filterDeletedConversations(parsed, deletions)) : value;
+  }
+  if (key === "lovart-canvas-boards") {
+    const parsed = safeJsonParse(value, []);
+    return Array.isArray(parsed) ? JSON.stringify(filterDeletedCanvasBoards(parsed, deletions)) : value;
+  }
+  if (key === "lovart-canvas-images") {
+    const parsed = safeJsonParse(value, []);
+    return Array.isArray(parsed) ? JSON.stringify(filterDeletedCanvasItems(parsed, deletions)) : value;
+  }
+  if (key === "lovart-canvas-texts") {
+    const parsed = safeJsonParse(value, []);
+    return Array.isArray(parsed) ? JSON.stringify(parsed.filter((item) => !hasDeletedId(deletions, "canvasTextIds", getItemId(item)))) : value;
+  }
+  if (key === "lovart-canvas-shapes") {
+    const parsed = safeJsonParse(value, []);
+    return Array.isArray(parsed) ? JSON.stringify(parsed.filter((item) => !hasDeletedId(deletions, "canvasShapeIds", getItemId(item)))) : value;
+  }
+  if (key === "lovart-chat-fullscreen-session") {
+    const parsed = safeJsonParse(value, null);
+    return parsed && typeof parsed === "object" ? JSON.stringify(filterDeletedChatSession(parsed, deletions)) : value;
+  }
+  if (key === "lovart-chat-image-history") {
+    const parsed = safeJsonParse(value, []);
+    return Array.isArray(parsed) ? JSON.stringify(filterDeletedImageHistory(parsed, deletions)) : value;
+  }
+  return value;
 }
 
 function preferCanvasItem(existing, incoming) {
@@ -129,17 +259,20 @@ function mergeMessages(existing = [], incoming = []) {
     .slice(-200);
 }
 
-function mergeConversations(existingValue = "", incomingValue = "") {
+function mergeConversations(existingValue = "", incomingValue = "", deletions = {}) {
   const existing = safeJsonParse(existingValue, []);
   const incoming = safeJsonParse(incomingValue, []);
   if (!Array.isArray(existing) || !Array.isArray(incoming)) return incomingValue;
 
-  const merged = mergeArrayById(existing, incoming, (oldConversation, newConversation) => {
+  const merged = mergeArrayById(
+    filterDeletedConversations(existing, deletions),
+    filterDeletedConversations(incoming, deletions),
+    (oldConversation, newConversation) => {
     if (!oldConversation) return newConversation;
     if (!newConversation) return oldConversation;
     const newer = getUpdatedAt(newConversation) >= getUpdatedAt(oldConversation) ? newConversation : oldConversation;
     const older = newer === newConversation ? oldConversation : newConversation;
-    const messages = mergeMessages(oldConversation.messages || [], newConversation.messages || []);
+    const messages = filterDeletedMessages(mergeMessages(oldConversation.messages || [], newConversation.messages || []), deletions);
     return {
       ...older,
       ...newer,
@@ -148,15 +281,18 @@ function mergeConversations(existingValue = "", incomingValue = "") {
     };
   });
 
-  return JSON.stringify(merged.slice(-50));
+  return JSON.stringify(filterDeletedConversations(merged, deletions).slice(-50));
 }
 
-function mergeCanvasBoards(existingValue = "", incomingValue = "") {
+function mergeCanvasBoards(existingValue = "", incomingValue = "", deletions = {}) {
   const existing = safeJsonParse(existingValue, []);
   const incoming = safeJsonParse(incomingValue, []);
   if (!Array.isArray(existing) || !Array.isArray(incoming)) return incomingValue;
 
-  const merged = mergeArrayById(existing, incoming, (oldBoard, newBoard) => {
+  const merged = mergeArrayById(
+    filterDeletedCanvasBoards(existing, deletions),
+    filterDeletedCanvasBoards(incoming, deletions),
+    (oldBoard, newBoard) => {
     if (!oldBoard) return newBoard;
     if (!newBoard) return oldBoard;
     const newer = getUpdatedAt(newBoard) >= getUpdatedAt(oldBoard) ? newBoard : oldBoard;
@@ -164,14 +300,14 @@ function mergeCanvasBoards(existingValue = "", incomingValue = "") {
     return {
       ...older,
       ...newer,
-      images: mergeArrayById(oldBoard.images || [], newBoard.images || []).slice(-100),
+      images: filterDeletedCanvasItems(mergeArrayById(oldBoard.images || [], newBoard.images || []), deletions).slice(-100),
       texts: mergeArrayById(oldBoard.texts || [], newBoard.texts || []).slice(-100),
       shapes: mergeArrayById(oldBoard.shapes || [], newBoard.shapes || []).slice(-200),
       updatedAt: Math.max(getUpdatedAt(oldBoard), getUpdatedAt(newBoard), Date.now()),
     };
   });
 
-  return JSON.stringify(merged.slice(-30));
+  return JSON.stringify(filterDeletedCanvasBoards(merged, deletions).slice(-30));
 }
 
 function mergeUniqueStringArrays(existingValue = "", incomingValue = "", limit = 100) {
@@ -181,14 +317,15 @@ function mergeUniqueStringArrays(existingValue = "", incomingValue = "", limit =
   return JSON.stringify([...new Set([...existing, ...incoming].filter(Boolean))].slice(-limit));
 }
 
-function mergeCloudStateValue(key, existingValue = "", incomingValue = "") {
-  if (key === "lovart-conversations") return mergeConversations(existingValue, incomingValue);
-  if (key === "lovart-canvas-boards") return mergeCanvasBoards(existingValue, incomingValue);
+function mergeCloudStateValue(key, existingValue = "", incomingValue = "", deletions = {}) {
+  if (key === CLOUD_STATE_DELETIONS_KEY) return JSON.stringify(mergeCloudStateDeletions(existingValue, incomingValue));
+  if (key === "lovart-conversations") return mergeConversations(existingValue, incomingValue, deletions);
+  if (key === "lovart-canvas-boards") return mergeCanvasBoards(existingValue, incomingValue, deletions);
   if (key === "lovart-canvas-images") {
     const existing = safeJsonParse(existingValue, []);
     const incoming = safeJsonParse(incomingValue, []);
     if (!Array.isArray(existing) || !Array.isArray(incoming)) return incomingValue;
-    return JSON.stringify(mergeArrayById(existing, incoming).slice(-100));
+    return JSON.stringify(filterDeletedCanvasItems(mergeArrayById(existing, incoming), deletions).slice(-100));
   }
   if (key === "lovart-canvas-ref-images") return mergeUniqueStringArrays(existingValue, incomingValue, 14);
   return incomingValue;
@@ -216,11 +353,13 @@ export async function readUserCloudState(userEmail = "") {
     `,
     [userEmail],
   );
+  const deletionRow = result.rows.find((row) => row.state_key === CLOUD_STATE_DELETIONS_KEY);
+  const deletions = normalizeCloudStateDeletions(deletionRow?.state_value || "{}");
   return {
     configured: true,
     items: result.rows.map((row) => ({
       key: row.state_key,
-      value: row.state_value,
+      value: applyDeletionsToStateValue(row.state_key, row.state_value, deletions),
       clientUpdatedAt: Number(row.client_updated_at || 0),
       serverUpdatedAt: row.server_updated_at,
     })),
@@ -237,8 +376,20 @@ export async function upsertUserCloudState(userEmail = "", rawItems = []) {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+    const existingDeletionResult = await client.query(
+      `
+        SELECT state_value, client_updated_at
+        FROM user_cloud_state
+        WHERE user_email = $1 AND state_key = $2
+        FOR UPDATE
+      `,
+      [userEmail, CLOUD_STATE_DELETIONS_KEY],
+    );
+    const incomingDeletionItem = items.find((item) => item.key === CLOUD_STATE_DELETIONS_KEY);
+    const existingDeletionValue = existingDeletionResult.rows[0]?.state_value || "{}";
+    const combinedDeletions = mergeCloudStateDeletions(existingDeletionValue, incomingDeletionItem?.value || "{}");
     for (const item of items) {
-      let stateValue = item.value;
+      let stateValue = applyDeletionsToStateValue(item.key, item.value, combinedDeletions);
       let clientUpdatedAt = item.clientUpdatedAt;
 
       if (MERGEABLE_STATE_KEYS.has(item.key)) {
@@ -257,7 +408,7 @@ export async function upsertUserCloudState(userEmail = "", rawItems = []) {
         );
         const existing = existingResult.rows[0];
         if (existing?.state_value) {
-          stateValue = mergeCloudStateValue(item.key, existing.state_value, item.value);
+          stateValue = mergeCloudStateValue(item.key, existing.state_value, stateValue, combinedDeletions);
           // A merge can produce a value that is newer than either browser's local snapshot.
           // Bump the timestamp so both tabs/devices restore the merged server copy.
           clientUpdatedAt = Math.max(Number(existing.client_updated_at || 0), item.clientUpdatedAt, Date.now());

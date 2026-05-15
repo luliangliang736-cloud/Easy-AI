@@ -27,6 +27,7 @@ import {
 import { compressImage } from "@/lib/imageUtils";
 import { useAuthSessionGuard } from "@/lib/useAuthSessionGuard";
 import { useCloudLocalStorageSync } from "@/lib/useCloudLocalStorageSync";
+import { CLOUD_STATE_DELETIONS_KEY, recordCloudDeletions } from "@/lib/cloudStateDeletions";
 import { GENERATION_STAGE_ORDER, getGenerationStageCopy } from "@/lib/generationStages";
 import BrandLogo from "@/components/BrandLogo";
 import {
@@ -48,7 +49,7 @@ import {
 
 const CHAT_SESSION_KEY = "lovart-chat-fullscreen-session";
 const IMAGE_HISTORY_KEY = "lovart-chat-image-history";
-const CHAT_CLOUD_STATE_KEYS = [CHAT_SESSION_KEY, IMAGE_HISTORY_KEY];
+const CHAT_CLOUD_STATE_KEYS = [CLOUD_STATE_DELETIONS_KEY, CHAT_SESSION_KEY, IMAGE_HISTORY_KEY];
 const IMAGE_HISTORY_LIMIT = 100;
 const ATTACHMENT_ACCEPT = "image/*,.pdf,.doc,.docx,.txt,.md,.markdown,.rtf,.csv,.json,.xml,.xls,.xlsx,.ppt,.pptx";
 const EZFAMILY_ASSET_URL = "/api/ezfamily";
@@ -600,6 +601,12 @@ function createMessage(role, text = "", extra = {}) {
   };
 }
 
+function writeImageHistory(nextHistory) {
+  try {
+    window.localStorage.setItem(IMAGE_HISTORY_KEY, JSON.stringify(nextHistory));
+  } catch {}
+}
+
 function formatGenerationError(error) {
   const message = String(error?.message || "").trim();
   if (error?.name === "TimeoutError" || /failed to fetch|请求等待时间过长/i.test(message)) {
@@ -1144,15 +1151,48 @@ export default function ChatPage() {
   };
 
   const handleDeleteMessage = (messageId) => {
+    const messageToDelete = messages.find((message) => message.id === messageId);
+    const imageUrls = Array.isArray(messageToDelete?.images) ? messageToDelete.images.filter(Boolean) : [];
+    recordCloudDeletions({
+      chatMessageIds: messageId,
+      imageUrls,
+    });
     setMessages((prev) => prev.filter((message) => message.id !== messageId));
+    if (imageUrls.length > 0) {
+      setImageHistory((prev) => {
+        const nextHistory = prev
+          .map((item) => ({
+            ...item,
+            urls: (item.urls || []).filter((url) => !imageUrls.includes(url)),
+          }))
+          .filter((item) => item.urls.length > 0);
+        writeImageHistory(nextHistory);
+        return nextHistory;
+      });
+    }
   };
 
   const handleDeleteMessageImage = (messageId, imageIndex) => {
+    const messageToUpdate = messages.find((message) => message.id === messageId);
+    const deletedUrl = Array.isArray(messageToUpdate?.images) ? messageToUpdate.images[imageIndex] : "";
+    recordCloudDeletions({ imageUrls: deletedUrl });
     setMessages((prev) => prev.flatMap((message) => {
       if (message.id !== messageId || !Array.isArray(message.images)) return [message];
       const nextImages = message.images.filter((_, index) => index !== imageIndex);
       return nextImages.length > 0 ? [{ ...message, images: nextImages }] : [];
     }));
+    if (deletedUrl) {
+      setImageHistory((prev) => {
+        const nextHistory = prev
+          .map((item) => ({
+            ...item,
+            urls: (item.urls || []).filter((url) => url !== deletedUrl),
+          }))
+          .filter((item) => item.urls.length > 0);
+        writeImageHistory(nextHistory);
+        return nextHistory;
+      });
+    }
   };
 
   const handleStopBatchWa = () => {

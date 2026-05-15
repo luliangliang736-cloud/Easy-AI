@@ -12,11 +12,13 @@ import { useHistory } from "@/lib/useHistory";
 import { useTheme } from "@/lib/useTheme";
 import { useAuthSessionGuard } from "@/lib/useAuthSessionGuard";
 import { useCloudLocalStorageSync } from "@/lib/useCloudLocalStorageSync";
+import { CLOUD_STATE_DELETIONS_KEY, recordCloudDeletions } from "@/lib/cloudStateDeletions";
 import { MAX_GEN_COUNT } from "@/lib/genLimits";
 
 const FLOATING_ENTRY_DRAFT_KEY = "lovart-floating-entry-draft";
 const CANVAS_REF_IMAGES_STORAGE_KEY = "lovart-canvas-ref-images";
 const CANVAS_CLOUD_STATE_KEYS = [
+  CLOUD_STATE_DELETIONS_KEY,
   "lovart-conversations",
   "lovart-active-conversation",
   "lovart-canvas-boards",
@@ -833,6 +835,17 @@ function sanitizeCanvasBoardsForStorage(boards) {
   }));
 }
 
+function collectMessageImageUrls(message) {
+  if (!message || typeof message !== "object") return [];
+  const urls = [
+    ...(Array.isArray(message.urls) ? message.urls : []),
+    ...(Array.isArray(message.images) ? message.images : []),
+    ...(Array.isArray(message.refImages) ? message.refImages : []),
+    ...(Array.isArray(message.tasks) ? message.tasks.map((task) => task?.url) : []),
+  ];
+  return urls.filter(Boolean);
+}
+
 function normalizeCanvasBoards(boards) {
   if (!Array.isArray(boards) || boards.length === 0) return [];
   return boards.map((board) => createCanvasBoard(board));
@@ -1579,6 +1592,7 @@ function HomeInner() {
 
   const handleDeleteCanvasText = useCallback((id) => {
     const item = canvasTexts.find((t) => t.id === id);
+    recordCloudDeletions({ canvasTextIds: id });
     canvasTextsHistory.push((prev) => prev.filter((t) => t.id !== id));
     if (String(item?.text || "").trim() && !item?.isDraft) {
       toast("已删除文案", "info", 1200);
@@ -1596,6 +1610,7 @@ function HomeInner() {
   }, [canvasShapesHistory]);
 
   const handleDeleteCanvasShape = useCallback((id) => {
+    recordCloudDeletions({ canvasShapeIds: id });
     canvasShapesHistory.push((prev) => prev.filter((s) => s.id !== id));
     toast("已删除形状", "info", 1200);
   }, [canvasShapesHistory, toast]);
@@ -2436,10 +2451,15 @@ function HomeInner() {
   }, [toast, updateConversationMessages]);
 
   const handleDeleteImage = useCallback((id) => {
+    const item = canvasImages.find((img) => img.id === id);
+    recordCloudDeletions({
+      canvasImageIds: id,
+      imageUrls: item?.image_url || item?.url,
+    });
     canvasHistory.push((prev) => prev.filter((img) => img.id !== id));
     setSelectedImage((prev) => (prev?.id === id ? null : prev));
     toast("已删除", "info", 1200);
-  }, [canvasHistory, toast]);
+  }, [canvasHistory, canvasImages, toast]);
 
   const handleSendToChat = useCallback((img) => {
     if (img?.media_type === "video" || img?.mediaType === "video") {
@@ -2966,6 +2986,11 @@ function HomeInner() {
   }, [toast, setParamsClamped]);
 
   const handleClearHistory = useCallback(() => {
+    const messagesToDelete = conversations.flatMap((conversation) => conversation.messages || []);
+    recordCloudDeletions({
+      messageIds: messagesToDelete.map((message) => message.id),
+      imageUrls: messagesToDelete.flatMap(collectMessageImageUrls),
+    });
     setConversations((prev) => prev.map((conversation) => ({
       ...conversation,
       title: DEFAULT_CONVERSATION_TITLE,
@@ -2975,7 +3000,7 @@ function HomeInner() {
     localStorage.removeItem("lovart-conversations");
     localStorage.removeItem("lovart-active-conversation");
     toast("历史记录已清空", "info", 1500);
-  }, [toast]);
+  }, [conversations, toast]);
 
   const handleNewConversation = useCallback(() => {
     if (isNavigationBusy) {
@@ -3056,6 +3081,14 @@ function HomeInner() {
       toast("生成过程中暂时不能删除画布", "info", 1500);
       return;
     }
+    const boardToDelete = canvasBoards.find((board) => board.id === boardId);
+    recordCloudDeletions({
+      canvasBoardIds: boardId,
+      canvasImageIds: (boardToDelete?.images || []).map((item) => item?.id),
+      imageUrls: (boardToDelete?.images || []).map((item) => item?.image_url || item?.url),
+      canvasTextIds: (boardToDelete?.texts || []).map((item) => item?.id),
+      canvasShapeIds: (boardToDelete?.shapes || []).map((item) => item?.id),
+    });
 
     setCanvasBoards((prev) => {
       if (prev.length <= 1) {
@@ -3082,7 +3115,7 @@ function HomeInner() {
       return remaining;
     });
     toast("画布已删除", "info", 1200);
-  }, [activeCanvasBoardId, canvasHistory, canvasTextsHistory, canvasShapesHistory, isNavigationBusy, toast]);
+  }, [activeCanvasBoardId, canvasBoards, canvasHistory, canvasTextsHistory, canvasShapesHistory, isNavigationBusy, toast]);
 
   const handleSelectConversation = useCallback((conversationId) => {
     if (isNavigationBusy) {
@@ -3098,6 +3131,13 @@ function HomeInner() {
       toast("生成过程中暂时不能删除对话", "info", 1500);
       return;
     }
+    const conversationToDelete = conversations.find((conversation) => conversation.id === conversationId);
+    const messagesToDelete = conversationToDelete?.messages || [];
+    recordCloudDeletions({
+      conversationIds: conversationId,
+      messageIds: messagesToDelete.map((message) => message.id),
+      imageUrls: messagesToDelete.flatMap(collectMessageImageUrls),
+    });
 
     setConversations((prev) => {
       if (prev.length <= 1) {
@@ -3116,7 +3156,7 @@ function HomeInner() {
     });
 
     toast("对话已删除", "info", 1200);
-  }, [activeConversationId, isNavigationBusy, resetComposer, toast]);
+  }, [activeConversationId, conversations, isNavigationBusy, resetComposer, toast]);
 
   const handleDeleteMessage = useCallback((messageId) => {
     if (isNavigationBusy) {
@@ -3127,9 +3167,14 @@ function HomeInner() {
       return;
     }
 
+    const messageToDelete = messages.find((message) => message.id === messageId);
+    recordCloudDeletions({
+      messageIds: messageId,
+      imageUrls: collectMessageImageUrls(messageToDelete),
+    });
     updateConversationMessages(activeConversationId, (prev) => prev.filter((message) => message.id !== messageId));
     toast("记录已删除", "info", 1200);
-  }, [activeConversationId, isNavigationBusy, toast, updateConversationMessages]);
+  }, [activeConversationId, isNavigationBusy, messages, toast, updateConversationMessages]);
 
   return (
     <div className="h-screen flex overflow-hidden">
