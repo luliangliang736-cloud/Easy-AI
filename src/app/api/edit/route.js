@@ -8,7 +8,7 @@ import {
   editWithOpenAICompatibleImage,
 } from "@/lib/server/openaiImageCompat";
 import { saveGenerationResult } from "@/lib/server/generationResultStore";
-import { readGeneratedImage } from "@/lib/server/generatedImageStore";
+import { normalizeGeneratedImageUrls, readGeneratedImage } from "@/lib/server/generatedImageStore";
 import { copyImageUrlsToCloudAssets, readCloudAssetImage } from "@/lib/server/cloudAssetStore";
 import { getRequestUser } from "@/lib/server/authUser";
 
@@ -213,14 +213,15 @@ export async function POST(request) {
         outputCompression: output_compression,
         moderation,
       });
-      const tasks = buildCompletedTasks(urls, "gpt-image-2");
+      const displayUrls = await normalizeGeneratedImageUrls(urls);
+      const tasks = buildCompletedTasks(displayUrls, "gpt-image-2");
       logEditEvent(meta, "success", {
         provider: "gpt-image-2",
-        urlCount: urls.filter(Boolean).length,
+        urlCount: displayUrls.filter(Boolean).length,
       });
       const responseBody = {
         success: true,
-        data: { urls, tasks },
+        data: { urls: displayUrls, tasks },
       };
       await saveGenerationResult(clientRequestId, responseBody);
       return NextResponse.json(responseBody);
@@ -245,16 +246,17 @@ export async function POST(request) {
         imageSize,
         aspectRatio: _autoRatio || image_size || "1:1",
       });
-      const tasks = buildCompletedTasks(urls, "gemini-native-edit");
+      const displayUrls = await normalizeGeneratedImageUrls(urls);
+      const tasks = buildCompletedTasks(displayUrls, "gemini-native-edit");
       logEditEvent(meta, "success", {
         provider: "gemini-native",
         imageSize,
         aspectRatio: _autoRatio || null,
-        urlCount: urls.filter(Boolean).length,
+        urlCount: displayUrls.filter(Boolean).length,
       });
       const responseBody = {
         success: true,
-        data: { urls, tasks },
+        data: { urls: displayUrls, tasks },
       };
       await saveGenerationResult(clientRequestId, responseBody);
       return NextResponse.json(responseBody);
@@ -281,14 +283,15 @@ export async function POST(request) {
             imageSize: image_size || "1:1",
             num: Math.min(Math.max(num || 1, 1), MAX_GEN_COUNT),
           });
-      const tasks = buildCompletedTasks(urls, "nano-openai-edit");
+      const displayUrls = await normalizeGeneratedImageUrls(urls);
+      const tasks = buildCompletedTasks(displayUrls, "nano-openai-edit");
       logEditEvent(meta, "success", {
         provider: "openai-compatible",
-        urlCount: urls.filter(Boolean).length,
+        urlCount: displayUrls.filter(Boolean).length,
       });
       const responseBody = {
         success: true,
-        data: { urls, tasks },
+        data: { urls: displayUrls, tasks },
       };
       await saveGenerationResult(clientRequestId, responseBody);
       return NextResponse.json(responseBody);
@@ -343,11 +346,12 @@ export async function POST(request) {
     }
 
     const urls = Array.isArray(data.data?.url) ? data.data.url : [data.data?.url];
-    const tasks = buildCompletedTasks(urls, "nano");
+    const displayUrls = await normalizeGeneratedImageUrls(urls);
+    const tasks = buildCompletedTasks(displayUrls, "nano");
 
     const responseBody = {
       success: true,
-      data: { urls, tasks },
+      data: { urls: displayUrls, tasks },
     };
     await saveGenerationResult(clientRequestId, responseBody);
     return NextResponse.json(responseBody);

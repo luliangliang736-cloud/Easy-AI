@@ -5,6 +5,7 @@ import { tmpdir } from "os";
 
 const STORE_DIR = join(tmpdir(), "easyai-generated-images");
 const MAX_FILE_AGE_MS = 6 * 60 * 60 * 1000;
+const MAX_REMOTE_IMAGE_BYTES = Number(process.env.GENERATED_IMAGE_CACHE_MAX_BYTES || 25 * 1024 * 1024);
 const DATA_IMAGE_PATTERN = /^data:(image\/(?:png|jpe?g|webp|gif));base64,([\s\S]+)$/i;
 
 function getExtForMime(mimeType = "image/png") {
@@ -49,25 +50,47 @@ async function cleanupOldFiles() {
   }
 }
 
+export async function saveGeneratedImageBuffer(buffer, mimeType = "image/png") {
+  if (!Buffer.isBuffer(buffer)) return "";
+  await mkdir(STORE_DIR, { recursive: true });
+  void cleanupOldFiles();
+
+  const filename = `${randomUUID()}.${getExtForMime(mimeType)}`;
+  await writeFile(join(STORE_DIR, filename), buffer);
+  return `/api/generated-images/${filename}`;
+}
+
 export async function saveGeneratedDataImage(dataUrl) {
   const parsed = parseDataImage(dataUrl);
   if (!parsed) return dataUrl;
 
-  await mkdir(STORE_DIR, { recursive: true });
-  void cleanupOldFiles();
+  return saveGeneratedImageBuffer(parsed.buffer, parsed.mimeType);
+}
 
-  const filename = `${randomUUID()}.${getExtForMime(parsed.mimeType)}`;
-  await writeFile(join(STORE_DIR, filename), parsed.buffer);
-  return `/api/generated-images/${filename}`;
+async function saveGeneratedRemoteImage(url = "") {
+  const source = String(url || "");
+  if (!/^https?:\/\//i.test(source)) return source;
+  const res = await fetch(source);
+  if (!res.ok) throw new Error(`Failed to cache generated image (${res.status})`);
+  const contentType = res.headers.get("content-type")?.split(";")[0]?.trim().toLowerCase() || "image/png";
+  if (!contentType.startsWith("image/")) return source;
+  const buffer = Buffer.from(await res.arrayBuffer());
+  if (buffer.byteLength > MAX_REMOTE_IMAGE_BYTES) return source;
+  return saveGeneratedImageBuffer(buffer, contentType);
 }
 
 export async function normalizeGeneratedImageUrls(urls = []) {
   if (!Array.isArray(urls)) return [];
   return Promise.all(urls.map(async (url) => {
     if (typeof url !== "string" || !url) return "";
-    if (!DATA_IMAGE_PATTERN.test(url)) return url;
     try {
-      return await saveGeneratedDataImage(url);
+      if (/^data:image\//i.test(url)) {
+        return await saveGeneratedDataImage(url);
+      }
+      if (/^https?:\/\//i.test(url)) {
+        return await saveGeneratedRemoteImage(url);
+      }
+      return url;
     } catch {
       return url;
     }

@@ -633,15 +633,14 @@ function isCloudAssetUrl(url) {
 function shouldUploadToCloudAsset(source) {
   return typeof source === "string" && (
     /^data:(image|video)\//i.test(source) ||
-    isLocalGeneratedMediaUrl(source) ||
-    /^https?:\/\//i.test(source)
+    isLocalGeneratedMediaUrl(source)
   );
 }
 
 async function uploadMediaSourceToCloudAsset(source, filename = "image", scope = "canvas") {
   if (typeof source !== "string") return source;
   if (isCloudAssetUrl(source)) return source;
-  if (isLocalGeneratedMediaUrl(source) || /^https?:\/\//i.test(source)) {
+  if (isLocalGeneratedMediaUrl(source)) {
     const res = await fetch("/api/cloud-assets/upload", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
