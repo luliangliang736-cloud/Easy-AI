@@ -1114,7 +1114,7 @@ function HomeInner() {
   const persistReadyRef = useRef(false);
   const activeConversation = conversations.find((conversation) => conversation.id === activeConversationId) || conversations[0];
   useAuthSessionGuard();
-  useCloudLocalStorageSync(CANVAS_CLOUD_STATE_KEYS, { overwriteOnFirstRestore: true });
+  useCloudLocalStorageSync(CANVAS_CLOUD_STATE_KEYS, { overwriteOnFirstRestore: true, intervalMs: 2000 });
   const activeCanvasBoard = canvasBoards.find((board) => board.id === activeCanvasBoardId) || canvasBoards[0];
   const messages = activeConversation?.messages || [];
   const isGenerating = activeGenerationCount > 0;
