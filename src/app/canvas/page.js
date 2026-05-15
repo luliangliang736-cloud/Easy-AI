@@ -1667,7 +1667,6 @@ function HomeInner() {
     setShowParams(false);
     setSemanticSelection(null);
     setSelectedImage(null);
-    canvasSelectionUrlsRef.current = [];
   }, []);
 
   const handleComposerModeChange = useCallback((nextMode) => {
@@ -2740,54 +2739,20 @@ function HomeInner() {
 
   const handleUpdateImage = useCallback(() => {}, []);
 
-  /** 由画布选中同步到右侧参考图的 URL 列表（单选 / 框选多图） */
-  const canvasSelectionUrlsRef = useRef([]);
-
   const handleSelectImage = useCallback((img) => {
     if (!img?.image_url) {
-      const toRemove = [...canvasSelectionUrlsRef.current];
-      canvasSelectionUrlsRef.current = [];
       setSelectedImage(null);
       setSemanticSelection(null);
       setTextEditPanelVisible(false);
-      setRefImages((prev) =>
-        prev.filter((u) => !toRemove.includes(u))
-      );
       return;
     }
-    const prevCanvasUrls = [...canvasSelectionUrlsRef.current];
-    canvasSelectionUrlsRef.current = [img.image_url];
-    setRefImages((prev) => {
-      const withoutCanvas = prev.filter((u) => !prevCanvasUrls.includes(u));
-      const seen = new Set(withoutCanvas);
-      if (!seen.has(img.image_url)) {
-        return [...withoutCanvas, img.image_url];
-      }
-      return withoutCanvas;
-    });
     setSelectedImage(img);
     setSemanticSelection(null);
   }, []);
 
-  /** 框选多张画布图片时，批量同步到右侧参考图（与模型最大参考图数量对齐） */
-  const MAX_REF_IMAGES = 14;
-  const handleSyncCanvasRefImages = useCallback((urls) => {
-    const list = (urls || []).filter(Boolean);
-    if (list.length < 2) return;
-    const prevCanvasUrls = [...canvasSelectionUrlsRef.current];
-    canvasSelectionUrlsRef.current = [...list];
+  const handleSyncCanvasRefImages = useCallback(() => {
     setTextEditPanelVisible(false);
-    setRefImages((prev) => {
-      const withoutCanvas = prev.filter((u) => !prevCanvasUrls.includes(u));
-      const merged = [...withoutCanvas];
-      for (const u of list) {
-        if (merged.length >= MAX_REF_IMAGES) break;
-        if (u && !merged.includes(u)) merged.push(u);
-      }
-      return merged;
-    });
-    toast("已同步到右侧参考图", "success", 1500);
-  }, [toast]);
+  }, []);
 
   const handleZoomChange = useCallback((updater) => {
     setZoom((prev) => (typeof updater === "function" ? updater(prev) : updater));
