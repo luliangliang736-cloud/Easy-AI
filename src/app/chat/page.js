@@ -1147,6 +1147,14 @@ export default function ChatPage() {
     setMessages((prev) => prev.filter((message) => message.id !== messageId));
   };
 
+  const handleDeleteMessageImage = (messageId, imageIndex) => {
+    setMessages((prev) => prev.flatMap((message) => {
+      if (message.id !== messageId || !Array.isArray(message.images)) return [message];
+      const nextImages = message.images.filter((_, index) => index !== imageIndex);
+      return nextImages.length > 0 ? [{ ...message, images: nextImages }] : [];
+    }));
+  };
+
   const handleStopBatchWa = () => {
     batchWaStoppedRef.current = true;
     batchWaAbortControllersRef.current.forEach((controller) => controller.abort());
@@ -1316,15 +1324,26 @@ export default function ChatPage() {
     }
     let batchWaPrompts = [];
     let feishuBatchRequest = null;
+    let pendingBatchUserMessage = null;
     if (!override?.skipBatch) {
       feishuBatchRequest = parseFeishuWaBatchRequest(text);
+      if (feishuBatchRequest && !collectResult) {
+        pendingBatchUserMessage = createMessage("user", text);
+        setMessages((prev) => [...prev, pendingBatchUserMessage]);
+        setPrompt("");
+        setRefImages([]);
+        setGenerationStage("preparing");
+        setIsGenerating(true);
+      }
       try {
         batchWaPrompts = feishuBatchRequest
           ? await fetchFeishuWaBatchPrompts(feishuBatchRequest)
           : parseBatchWaTemplatePrompts(text);
       } catch (error) {
         if (!collectResult) {
-          setMessages((prev) => [...prev, createMessage("user", text)]);
+          if (!pendingBatchUserMessage) {
+            setMessages((prev) => [...prev, createMessage("user", text)]);
+          }
           setMessages((prev) => [...prev, createMessage("assistant", error?.message || "读取飞书 WA 表格失败", {
             modelLabel: "飞书 WA",
           })]);
@@ -1353,9 +1372,13 @@ export default function ChatPage() {
         })),
       });
       batchWaStoppedRef.current = false;
-      setMessages((prev) => [...prev, userMsg, batchMessage]);
-      setPrompt("");
-      setRefImages([]);
+      setMessages((prev) => pendingBatchUserMessage
+        ? [...prev, batchMessage]
+        : [...prev, userMsg, batchMessage]);
+      if (!pendingBatchUserMessage) {
+        setPrompt("");
+        setRefImages([]);
+      }
       setGenerationStage("generating");
       setIsGenerating(true);
 
@@ -2094,6 +2117,19 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
                               <div className="absolute right-2 top-2 flex gap-1.5">
                                 <button type="button" onClick={(e) => { e.stopPropagation(); setPreviewSrc(src); }} className="rounded-lg bg-black/60 p-1.5 text-white backdrop-blur-sm hover:bg-black/80"><Maximize2 size={14} /></button>
                                 <button type="button" onClick={(e) => { e.stopPropagation(); void handleDownloadImage(src, i); }} className="rounded-lg bg-black/60 p-1.5 text-white backdrop-blur-sm hover:bg-black/80"><Download size={14} /></button>
+                                {message.role === "assistant" ? (
+                                  <button
+                                    type="button"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleDeleteMessageImage(message.id, i);
+                                    }}
+                                    className="rounded-lg bg-black/60 p-1.5 text-white backdrop-blur-sm hover:bg-red-500/80"
+                                    title="删除这张图"
+                                  >
+                                    <Trash2 size={14} />
+                                  </button>
+                                ) : null}
                               </div>
                             </div>
                           ))}
