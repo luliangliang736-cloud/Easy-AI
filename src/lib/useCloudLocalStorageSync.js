@@ -31,6 +31,7 @@ async function saveSnapshot(items = []) {
 export function useCloudLocalStorageSync(keys = [], options = {}) {
   const enabled = options.enabled !== false;
   const intervalMs = Number(options.intervalMs || DEFAULT_INTERVAL_MS);
+  const overwriteOnFirstRestore = options.overwriteOnFirstRestore === true;
   const lastSignatureRef = useRef("");
   const restoredRef = useRef(false);
 
@@ -42,15 +43,19 @@ export function useCloudLocalStorageSync(keys = [], options = {}) {
     async function restoreCloudState() {
       try {
         const res = await fetch("/api/cloud-state", { method: "GET" });
-        if (!res.ok) return;
+        if (!res.ok) {
+          restoredRef.current = true;
+          return;
+        }
         const data = await res.json();
         const items = Array.isArray(data?.items) ? data.items : [];
         let restoredCount = 0;
+        const shouldOverwriteLocal = overwriteOnFirstRestore && !window.sessionStorage.getItem(reloadMarker);
 
         for (const item of items) {
           if (!keys.includes(item.key) || typeof item.value !== "string") continue;
           const localValue = window.localStorage.getItem(item.key);
-          if (localValue === null && item.value) {
+          if (item.value && (localValue === null || (shouldOverwriteLocal && localValue !== item.value))) {
             window.localStorage.setItem(item.key, item.value);
             restoredCount += 1;
           }
@@ -89,5 +94,5 @@ export function useCloudLocalStorageSync(keys = [], options = {}) {
       window.clearInterval(timer);
       window.removeEventListener("beforeunload", syncNow);
     };
-  }, [enabled, intervalMs, keys]);
+  }, [enabled, intervalMs, keys, overwriteOnFirstRestore]);
 }

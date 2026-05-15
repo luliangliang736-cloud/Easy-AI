@@ -1037,7 +1037,10 @@ export default function HomePage() {
     ? floatingRuntimeMode
     : detectOneClickEntryMode(floatingPrompt, floatingRefImages);
   const profileAvatarSrc = profileAvatar || "/images/internal-user-avatar.png";
-  useCloudLocalStorageSync(HOME_CLOUD_STATE_KEYS, { enabled: Boolean(authUser?.email) });
+  useCloudLocalStorageSync(HOME_CLOUD_STATE_KEYS, {
+    enabled: Boolean(authUser?.email),
+    overwriteOnFirstRestore: true,
+  });
 
   useEffect(() => {
     let cancelled = false;

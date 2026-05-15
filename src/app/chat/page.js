@@ -992,7 +992,7 @@ export default function ChatPage() {
   const isLightTheme = theme === "light";
   const generationStageCopy = getGenerationStageCopy(generationStage);
   const activeGenerationStageIndex = Math.max(0, GENERATION_STAGE_ORDER.indexOf(generationStage));
-  useCloudLocalStorageSync(CHAT_CLOUD_STATE_KEYS);
+  useCloudLocalStorageSync(CHAT_CLOUD_STATE_KEYS, { overwriteOnFirstRestore: true });
 
   const showGenerationStage = useCallback(async (stage, duration = GENERATION_STAGE_MIN_MS, signal = null) => {
     setGenerationStage(stage);
