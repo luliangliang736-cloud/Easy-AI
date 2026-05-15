@@ -7,6 +7,7 @@ export const runtime = "nodejs";
 const HERO_ASSET_DIR = path.resolve(process.cwd(), "public", "images", "home-hero-carousel");
 const HERO_ASSET_LIST_CACHE = "public, max-age=60, stale-while-revalidate=300";
 const HERO_MEDIA_CACHE = "public, max-age=31536000, immutable";
+const DEFAULT_HERO_ASSET_FILES = ["1.mp4", "2.jpg", "3.mp4", "4.mp4", "5.jpg", "6.mp4", "7.jpg"];
 const MEDIA_TYPES = {
   ".gif": { contentType: "image/gif", type: "image" },
   ".jpg": { contentType: "image/jpeg", type: "image" },
@@ -20,6 +21,58 @@ function getMediaMeta(filename) {
   return MEDIA_TYPES[path.extname(filename).toLowerCase()] || null;
 }
 
+function trimSlashes(value = "") {
+  return String(value || "").replace(/^\/+|\/+$/g, "");
+}
+
+function getDirectAssetBaseUrl() {
+  const configured = String(process.env.HOME_HERO_ASSET_BASE_URL || "").trim();
+  if (configured) return configured.replace(/\/+$/g, "");
+
+  const homeAssetBaseUrl = String(process.env.HOME_ASSET_BASE_URL || "").trim();
+  if (homeAssetBaseUrl) {
+    return `${homeAssetBaseUrl.replace(/\/+$/g, "")}/home-hero-carousel`;
+  }
+
+  const bucket = String(process.env.OSS_BUCKET || "").trim();
+  const endpoint = String(process.env.OSS_ENDPOINT || "").trim();
+  const prefix = trimSlashes(process.env.HOME_HERO_ASSET_PREFIX || "home-hero-carousel");
+  if (!bucket || !endpoint || process.env.HOME_HERO_USE_OSS_DIRECT !== "true") return "";
+  return `https://${bucket}.${endpoint}${prefix ? `/${prefix}` : ""}`;
+}
+
+function getConfiguredAssetNames() {
+  const configured = String(process.env.HOME_HERO_ASSET_FILES || "")
+    .split(",")
+    .map((item) => path.basename(item.trim()))
+    .filter((item) => item && getMediaMeta(item));
+  return configured.length > 0 ? configured : DEFAULT_HERO_ASSET_FILES;
+}
+
+function withVersion(url) {
+  const version = String(process.env.HOME_HERO_ASSET_VERSION || "").trim();
+  if (!version) return url;
+  const separator = url.includes("?") ? "&" : "?";
+  return `${url}${separator}v=${encodeURIComponent(version)}`;
+}
+
+function getDirectAssetUrl(filename = "") {
+  const baseUrl = getDirectAssetBaseUrl();
+  if (!baseUrl) return "";
+  return withVersion(`${baseUrl}/${encodeURIComponent(filename)}`);
+}
+
+function buildDirectAssetItems() {
+  const baseUrl = getDirectAssetBaseUrl();
+  if (!baseUrl) return [];
+  return getConfiguredAssetNames().map((name, index) => ({
+    type: getMediaMeta(name).type,
+    src: getDirectAssetUrl(name),
+    label: `EasyAI 创作首页封面 ${index + 1}`,
+    name,
+  }));
+}
+
 export async function GET(request) {
   const { searchParams } = new URL(request.url);
   const requestedFile = searchParams.get("file");
@@ -30,6 +83,16 @@ export async function GET(request) {
       const meta = getMediaMeta(safeName);
       if (!meta || safeName !== requestedFile) {
         return NextResponse.json({ error: "Invalid hero asset" }, { status: 400 });
+      }
+
+      const directUrl = getDirectAssetUrl(safeName);
+      if (directUrl) {
+        return NextResponse.redirect(directUrl, {
+          status: 307,
+          headers: {
+            "Cache-Control": HERO_ASSET_LIST_CACHE,
+          },
+        });
       }
 
       const filePath = path.resolve(HERO_ASSET_DIR, safeName);
@@ -72,6 +135,15 @@ export async function GET(request) {
         headers: {
           ...headers,
           "Content-Length": String(file.length),
+        },
+      });
+    }
+
+    const directItems = buildDirectAssetItems();
+    if (directItems.length > 0) {
+      return NextResponse.json({ items: directItems }, {
+        headers: {
+          "Cache-Control": HERO_ASSET_LIST_CACHE,
         },
       });
     }

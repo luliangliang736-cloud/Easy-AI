@@ -2,7 +2,7 @@
 
 import { useEffect } from "react";
 
-const DEFAULT_CHECK_INTERVAL_MS = 5_000;
+const DEFAULT_CHECK_INTERVAL_MS = 30_000;
 
 function redirectToLogin() {
   const next = `${window.location.pathname}${window.location.search}`;
@@ -39,13 +39,9 @@ export function useAuthSessionGuard(options = {}) {
 
     void checkSession();
     const timer = window.setInterval(checkSession, intervalMs);
-    window.addEventListener("focus", checkSession);
-    window.addEventListener("visibilitychange", checkSession);
     return () => {
       cancelled = true;
       window.clearInterval(timer);
-      window.removeEventListener("focus", checkSession);
-      window.removeEventListener("visibilitychange", checkSession);
     };
   }, [enabled, intervalMs, onUnauthorized]);
 }

@@ -70,6 +70,7 @@ export function useCloudLocalStorageSync(keys = [], options = {}) {
   useEffect(() => {
     if (!enabled || typeof window === "undefined" || keys.length === 0) return undefined;
     let cancelled = false;
+    const reloadMarker = `easyai-cloud-state-restored:${window.location.pathname}`;
     const syncDelayMs = Math.min(1000, intervalMs);
     let syncTimer = 0;
 
@@ -101,6 +102,7 @@ export function useCloudLocalStorageSync(keys = [], options = {}) {
         const data = await res.json();
         const items = Array.isArray(data?.items) ? data.items : [];
         let restoredCount = 0;
+        const restoredSignatures = [];
         const localUpdatedAt = readLocalUpdatedAt();
         let localUpdatedAtChanged = false;
 
@@ -120,6 +122,7 @@ export function useCloudLocalStorageSync(keys = [], options = {}) {
             window.localStorage.setItem(item.key, item.value);
             localUpdatedAt[item.key] = cloudUpdatedAt || Date.now();
             localUpdatedAtChanged = true;
+            restoredSignatures.push(`${item.key}:${cloudUpdatedAt}:${getValueSignature(item.value)}`);
             restoredCount += 1;
           }
         }
@@ -128,7 +131,13 @@ export function useCloudLocalStorageSync(keys = [], options = {}) {
         }
 
         if (restoredCount > 0) {
-          window.location.reload();
+          const restoreSignature = restoredSignatures.join("|");
+          if (restoreSignature && window.sessionStorage.getItem(reloadMarker) !== restoreSignature) {
+            window.sessionStorage.setItem(reloadMarker, restoreSignature);
+            window.location.reload();
+            return;
+          }
+          restoredRef.current = true;
           return;
         }
 

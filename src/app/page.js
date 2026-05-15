@@ -908,14 +908,27 @@ const MODELS = [
   { icon: Sparkles, name: "GPT Image 2", desc: "灵活尺寸 · 高保真输入 · 图像编辑", cost: "平均一张图 0.08-0.10元", color: "text-fuchsia-400" },
 ];
 
+const HOME_ASSET_PUBLIC_BASE_URL = String(process.env.NEXT_PUBLIC_HOME_ASSET_BASE_URL || "").replace(/\/+$/g, "");
+const HOME_ASSET_PUBLIC_VERSION = String(process.env.NEXT_PUBLIC_HOME_ASSET_VERSION || "");
+
+function getHomeAssetSrc(relativePath) {
+  const safePath = String(relativePath || "").replace(/^\/+/, "");
+  const src = HOME_ASSET_PUBLIC_BASE_URL
+    ? `${HOME_ASSET_PUBLIC_BASE_URL}/${safePath.split("/").map(encodeURIComponent).join("/")}`
+    : `/images/${safePath}`;
+  return HOME_ASSET_PUBLIC_VERSION
+    ? `${src}${src.includes("?") ? "&" : "?"}v=${encodeURIComponent(HOME_ASSET_PUBLIC_VERSION)}`
+    : src;
+}
+
 const BUSINESS_SHOWCASE_COVERS = [
-  { src: "/images/business-showcase/cover-1.jpg", alt: "业务展示封面 1" },
-  { src: "/images/business-showcase/cover-2.jpg", alt: "业务展示封面 2" },
+  { src: getHomeAssetSrc("business-showcase/cover-1.jpg"), alt: "业务展示封面 1" },
+  { src: getHomeAssetSrc("business-showcase/cover-2.jpg"), alt: "业务展示封面 2" },
 ];
 
 const EFFECT_SHOWCASE_CARDS = [
   {
-    src: "/images/effect-showcase-card-3.jpg",
+    src: getHomeAssetSrc("effect-showcase-card-3.jpg"),
     alt: "效果展示卡片 3",
     left: 10,
     top: 63,
@@ -929,7 +942,7 @@ const EFFECT_SHOWCASE_CARDS = [
     zIndex: 1,
   },
   {
-    src: "/images/effect-showcase-card-2.jpg",
+    src: getHomeAssetSrc("effect-showcase-card-2.jpg"),
     alt: "效果展示卡片 2",
     left: 27,
     top: 52,
@@ -941,7 +954,7 @@ const EFFECT_SHOWCASE_CARDS = [
     zIndex: 2,
   },
   {
-    src: "/images/effect-showcase-card-4.jpg",
+    src: getHomeAssetSrc("effect-showcase-card-4.jpg"),
     alt: "效果展示卡片 4",
     left: 50,
     top: 45,
@@ -953,7 +966,7 @@ const EFFECT_SHOWCASE_CARDS = [
     zIndex: 5,
   },
   {
-    src: "/images/effect-showcase-card-1.jpg",
+    src: getHomeAssetSrc("effect-showcase-card-1.jpg"),
     alt: "效果展示卡片 1",
     left: 73,
     top: 52,
@@ -965,7 +978,7 @@ const EFFECT_SHOWCASE_CARDS = [
     zIndex: 2,
   },
   {
-    src: "/images/effect-showcase-card-5.jpg",
+    src: getHomeAssetSrc("effect-showcase-card-5.jpg"),
     alt: "效果展示卡片 5",
     left: 90,
     top: 63,
@@ -980,15 +993,33 @@ const EFFECT_SHOWCASE_CARDS = [
   },
 ];
 
-const HERO_CAROUSEL_FALLBACK_ITEMS = [
-  { type: "video", src: "/images/home-hero-carousel/1.mp4", label: "EasyAI 创作首页封面 1" },
-  { type: "image", src: "/images/home-hero-carousel/2.jpg", label: "EasyAI 创作首页封面 2" },
-  { type: "video", src: "/images/home-hero-carousel/3.mp4", label: "EasyAI 创作首页封面 3" },
-  { type: "video", src: "/images/home-hero-carousel/4.mp4", label: "EasyAI 创作首页封面 4" },
-  { type: "image", src: "/images/home-hero-carousel/5.jpg", label: "EasyAI 创作首页封面 5" },
-  { type: "video", src: "/images/home-hero-carousel/6.mp4", label: "EasyAI 创作首页封面 6" },
-  { type: "image", src: "/images/home-hero-carousel/7.jpg", label: "EasyAI 创作首页封面 7" },
-];
+const HERO_CAROUSEL_FILES = ["1.mp4", "2.jpg", "3.mp4", "4.mp4", "5.jpg", "6.mp4", "7.jpg"];
+const HERO_CAROUSEL_PUBLIC_BASE_URL = String(
+  process.env.NEXT_PUBLIC_HOME_HERO_ASSET_BASE_URL
+    || (HOME_ASSET_PUBLIC_BASE_URL ? `${HOME_ASSET_PUBLIC_BASE_URL}/home-hero-carousel` : ""),
+).replace(/\/+$/g, "");
+const HERO_CAROUSEL_PUBLIC_VERSION = String(process.env.NEXT_PUBLIC_HOME_HERO_ASSET_VERSION || "");
+
+function getHeroCarouselSrc(filename) {
+  if (!HERO_CAROUSEL_PUBLIC_BASE_URL) {
+    return `/api/home-hero-assets?file=${encodeURIComponent(filename)}`;
+  }
+  const src = `${HERO_CAROUSEL_PUBLIC_BASE_URL}/${encodeURIComponent(filename)}`;
+  return HERO_CAROUSEL_PUBLIC_VERSION
+    ? `${src}?v=${encodeURIComponent(HERO_CAROUSEL_PUBLIC_VERSION)}`
+    : src;
+}
+
+const HERO_CAROUSEL_FALLBACK_ITEMS = HERO_CAROUSEL_FILES.map((filename, index) => ({
+  type: filename.endsWith(".mp4") ? "video" : "image",
+  src: getHeroCarouselSrc(filename),
+  label: `EasyAI 创作首页封面 ${index + 1}`,
+  name: filename,
+}));
+const DEFAULT_PROFILE_AVATAR_SRC = getHomeAssetSrc("internal-user-avatar.png");
+const HOME_SCROLL_PERSON_SRC = getHomeAssetSrc("home-scroll-person-3.jpg");
+const HOME_BOTTOM_SUMMARY_SRC = getHomeAssetSrc("home-bottom-summary.mp4");
+const FOOTER_BOTTOM_SRC = getHomeAssetSrc("footer-bottom.jpg");
 const HERO_CAROUSEL_INTERVAL_MS = 3000;
 
 export default function HomePage() {
@@ -1037,7 +1068,7 @@ export default function HomePage() {
   const floatingEntryMode = floatingIsGenerating
     ? floatingRuntimeMode
     : detectOneClickEntryMode(floatingPrompt, floatingRefImages);
-  const profileAvatarSrc = profileAvatar || "/images/internal-user-avatar.png";
+  const profileAvatarSrc = profileAvatar || DEFAULT_PROFILE_AVATAR_SRC;
   const handleAuthSessionUnauthorized = useCallback(() => {
     setAuthUser(null);
     setIsProfileMenuOpen(false);
@@ -2563,7 +2594,7 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
           <div
             className="h-full w-full bg-cover bg-center bg-no-repeat"
             style={{
-              backgroundImage: "url('/images/home-scroll-person-3.jpg')",
+              backgroundImage: `url('${HOME_SCROLL_PERSON_SRC}')`,
               backgroundAttachment: "fixed",
             }}
           />
@@ -2812,7 +2843,7 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
           <video
             className="h-full w-full object-cover will-change-[object-position]"
             style={{ objectPosition: `center ${-20 + bottomSummaryParallax * 140}%` }}
-            src="/images/home-bottom-summary.mp4"
+            src={HOME_BOTTOM_SUMMARY_SRC}
             aria-label="Easy AI 企业级视觉生产基础设施总结视频"
             autoPlay
             muted
@@ -2835,7 +2866,7 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
         <div className="relative overflow-hidden">
           <div
             className="absolute inset-0 bg-cover bg-[center_78%] bg-no-repeat bg-fixed"
-            style={{ backgroundImage: "url('/images/footer-bottom.jpg')" }}
+            style={{ backgroundImage: `url('${FOOTER_BOTTOM_SRC}')` }}
           />
           <div className="relative mx-auto max-w-5xl px-6 py-12 lg:px-0">
             <div className="grid min-h-56 grid-cols-1 items-center gap-10 md:grid-cols-[1fr_1fr]">
