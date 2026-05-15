@@ -63,7 +63,6 @@ async function saveSnapshot(items = []) {
 export function useCloudLocalStorageSync(keys = [], options = {}) {
   const enabled = options.enabled !== false;
   const intervalMs = Number(options.intervalMs || DEFAULT_INTERVAL_MS);
-  const overwriteOnFirstRestore = options.overwriteOnFirstRestore === true;
   const lastSignatureRef = useRef("");
   const restoredRef = useRef(false);
   const keySignaturesRef = useRef({});
@@ -71,7 +70,6 @@ export function useCloudLocalStorageSync(keys = [], options = {}) {
   useEffect(() => {
     if (!enabled || typeof window === "undefined" || keys.length === 0) return undefined;
     let cancelled = false;
-    const reloadMarker = `easyai-cloud-state-restored:${window.location.pathname}`;
     const syncDelayMs = Math.min(1000, intervalMs);
     let syncTimer = 0;
 
@@ -103,7 +101,6 @@ export function useCloudLocalStorageSync(keys = [], options = {}) {
         const data = await res.json();
         const items = Array.isArray(data?.items) ? data.items : [];
         let restoredCount = 0;
-        const shouldOverwriteLocal = overwriteOnFirstRestore && !window.sessionStorage.getItem(reloadMarker);
         const localUpdatedAt = readLocalUpdatedAt();
         let localUpdatedAtChanged = false;
 
@@ -119,7 +116,7 @@ export function useCloudLocalStorageSync(keys = [], options = {}) {
           }
           const cloudIsNewer = cloudUpdatedAt > localValueUpdatedAt
             || (cloudUpdatedAt === localValueUpdatedAt && localValue !== item.value);
-          if (item.value && (localValue === null || (shouldOverwriteLocal && cloudIsNewer && localValue !== item.value))) {
+          if (item.value && (localValue === null || (cloudIsNewer && localValue !== item.value))) {
             window.localStorage.setItem(item.key, item.value);
             localUpdatedAt[item.key] = cloudUpdatedAt || Date.now();
             localUpdatedAtChanged = true;
@@ -130,8 +127,7 @@ export function useCloudLocalStorageSync(keys = [], options = {}) {
           writeLocalUpdatedAt(localUpdatedAt);
         }
 
-        if (restoredCount > 0 && !window.sessionStorage.getItem(reloadMarker)) {
-          window.sessionStorage.setItem(reloadMarker, "1");
+        if (restoredCount > 0) {
           window.location.reload();
           return;
         }
@@ -169,5 +165,5 @@ export function useCloudLocalStorageSync(keys = [], options = {}) {
       window.removeEventListener("visibilitychange", syncNow);
       window.removeEventListener("focus", scheduleSyncSoon);
     };
-  }, [enabled, intervalMs, keys, overwriteOnFirstRestore]);
+  }, [enabled, intervalMs, keys]);
 }

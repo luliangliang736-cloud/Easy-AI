@@ -235,6 +235,10 @@ export async function upsertUserCloudState(userEmail = "", rawItems = []) {
       let clientUpdatedAt = item.clientUpdatedAt;
 
       if (MERGEABLE_STATE_KEYS.has(item.key)) {
+        await client.query(
+          "SELECT pg_advisory_xact_lock(hashtext($1), hashtext($2))",
+          [userEmail, item.key],
+        );
         const existingResult = await client.query(
           `
             SELECT state_value, client_updated_at
