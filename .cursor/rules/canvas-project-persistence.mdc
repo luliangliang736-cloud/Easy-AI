@@ -10,6 +10,7 @@ Professional creation mode project/canvas data is durable user work. Preserve th
 
 - Every new canvas/project must persist across refreshes, returning from the home page, new browser sessions, and cloud sync.
 - Each canvas must keep its own images, text items, shapes, order, title, and active selection target unless the user explicitly changes them.
+- Each canvas must keep its own composer reference tray. Switching projects must load that project's pending reference images and must not leak reference images from another canvas.
 - Every canvas must use the same professional creation behavior and settings. Switching projects must not change generation, editing, reference image, drag/drop, copy/paste, delete, history, or cloud sync rules.
 - Generation tasks are canvas-scoped. Placeholders, in-flight task status, successful results, failed tasks, and OSS URL replacements must stay attached to the canvas where the task was started, even if the user switches to another canvas before completion.
 - Canvas task completion reminders are UI-only. Status badges/toasts may indicate generating, completed, or failed tasks for another canvas, but must not auto-switch canvases, mutate generation requests, move results, or change conversation/history ownership.

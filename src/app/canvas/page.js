@@ -577,6 +577,7 @@ function createCanvasBoard(overrides = {}) {
     id: overrides.id || `board-${now}-${Math.random().toString(36).slice(2, 8)}`,
     title: overrides.title || DEFAULT_CANVAS_BOARD_TITLE,
     images: Array.isArray(overrides.images) ? overrides.images : [],
+    refImages: Array.isArray(overrides.refImages) ? overrides.refImages.filter(Boolean) : [],
     texts: Array.isArray(overrides.texts) ? overrides.texts : [],
     shapes: Array.isArray(overrides.shapes) ? overrides.shapes : [],
     createdAt: overrides.createdAt || now,
@@ -842,6 +843,7 @@ function sanitizeCanvasBoardsForStorage(boards) {
     ...board,
     title: board?.title || DEFAULT_CANVAS_BOARD_TITLE,
     images: sanitizeCanvasImagesForStorage(board?.images || []).slice(0, 100),
+    refImages: sanitizeStoredImageList(board?.refImages || []).slice(0, MAX_IMAGES),
     texts: Array.isArray(board?.texts) ? board.texts.slice(0, 100) : [],
     shapes: Array.isArray(board?.shapes) ? board.shapes.slice(0, 200) : [],
   }));
@@ -863,6 +865,7 @@ function normalizeCanvasBoards(boards) {
   return boards.map((board, index) => createCanvasBoard({
     ...board,
     images: normalizeCanvasImageItems(board?.images || [], `board-${board?.id || index}`),
+    refImages: sanitizeStoredImageList(board?.refImages || []),
   }));
 }
 
@@ -1323,6 +1326,7 @@ function HomeInner() {
         setCanvasBoards(parsedBoards);
         setActiveCanvasBoardId(nextActiveBoard.id);
         canvasHistory.setState(nextActiveBoard.images || []);
+        setRefImages(nextActiveBoard.refImages || []);
         canvasTextsHistory.setState(nextActiveBoard.texts || []);
         canvasShapesHistory.setState(nextActiveBoard.shapes || []);
       } else {
@@ -1330,6 +1334,7 @@ function HomeInner() {
           id: initialCanvasBoardRef.current.id,
           title: "默认画布",
           images: normalizeCanvasImageItems(parsedImages || [], "legacy-board"),
+          refImages: [],
           texts: parsedTexts || [],
           shapes: parsedShapes || [],
           createdAt: initialCanvasBoardRef.current.createdAt,
@@ -1613,13 +1618,14 @@ function HomeInner() {
         ? {
             ...board,
             images: canvasImages,
+            refImages: Array.isArray(refImages) ? refImages.filter(Boolean) : [],
             texts: canvasTexts,
             shapes: canvasShapes,
             updatedAt: Date.now(),
           }
         : board
     )));
-  }, [activeCanvasBoardId, canvasImages, canvasTexts, canvasShapes, persistReady]);
+  }, [activeCanvasBoardId, canvasImages, refImages, canvasTexts, canvasShapes, persistReady]);
 
   useEffect(() => {
     if (!persistReady) return;
@@ -2640,19 +2646,34 @@ function HomeInner() {
 
   const handleRefImagesChange = useCallback((nextImages) => {
     const list = Array.isArray(nextImages) ? nextImages.filter(Boolean) : [];
+    const refImagesBoardId = activeCanvasBoardId;
     setRefImages(list);
+    setCanvasBoards((prev) => prev.map((board) => (
+      board.id === refImagesBoardId
+        ? { ...board, refImages: list, updatedAt: Date.now() }
+        : board
+    )));
 
     list.forEach((item, index) => {
       if (!shouldUploadToCloudAsset(item)) return;
       void cloudifyComposerMediaSource(item, `reference-${index + 1}`, "canvas-reference")
         .then((url) => {
           setRefImages((prev) => prev.map((existing) => (existing === item ? url : existing)));
+          setCanvasBoards((prev) => prev.map((board) => (
+            board.id === refImagesBoardId
+              ? {
+                  ...board,
+                  refImages: (board.refImages || []).map((existing) => (existing === item ? url : existing)),
+                  updatedAt: Date.now(),
+                }
+              : board
+          )));
         })
         .catch(() => {
           toast("参考图云端保存失败，换设备可能无法恢复这张图", "warning", 2200);
         });
     });
-  }, [cloudifyComposerMediaSource, toast]);
+  }, [activeCanvasBoardId, cloudifyComposerMediaSource, toast]);
 
   const handleCancelTextEditPanel = useCallback(() => {
     setTextEditBlocks([]);
@@ -3190,15 +3211,31 @@ function HomeInner() {
       return;
     }
     const nextBoard = createCanvasBoard({ title: `画布 ${canvasBoards.length + 1}` });
-    setCanvasBoards((prev) => [nextBoard, ...prev]);
+    setCanvasBoards((prev) => [
+      nextBoard,
+      ...prev.map((board) => (
+        board.id === activeCanvasBoardId
+          ? {
+              ...board,
+              images: canvasImages,
+              refImages: Array.isArray(refImages) ? refImages.filter(Boolean) : [],
+              texts: canvasTexts,
+              shapes: canvasShapes,
+              updatedAt: Date.now(),
+            }
+          : board
+      )),
+    ]);
     setActiveCanvasBoardId(nextBoard.id);
     canvasHistory.setState([]);
+    setRefImages([]);
     canvasTextsHistory.setState([]);
     canvasShapesHistory.setState([]);
     setSelectedImage(null);
     setSemanticSelection(null);
+    canvasSelectionUrlsRef.current = [];
     toast("已新建画布", "success", 1200);
-  }, [canvasBoards.length, canvasHistory, canvasTextsHistory, canvasShapesHistory, isTextEditing, toast]);
+  }, [activeCanvasBoardId, canvasBoards.length, canvasHistory, canvasImages, canvasTexts, canvasTextsHistory, canvasShapes, canvasShapesHistory, isTextEditing, refImages, toast]);
 
   const handleSelectCanvasBoard = useCallback((boardId) => {
     if (isTextEditing) {
@@ -3213,6 +3250,7 @@ function HomeInner() {
         ? {
             ...board,
             images: canvasImages,
+            refImages: Array.isArray(refImages) ? refImages.filter(Boolean) : [],
             texts: canvasTexts,
             shapes: canvasShapes,
             updatedAt: Date.now(),
@@ -3221,16 +3259,19 @@ function HomeInner() {
     )));
     setActiveCanvasBoardId(targetBoard.id);
     canvasHistory.setState(targetBoard.images || []);
+    setRefImages(targetBoard.refImages || []);
     canvasTextsHistory.setState(targetBoard.texts || []);
     canvasShapesHistory.setState(targetBoard.shapes || []);
     setSelectedImage(null);
     setSemanticSelection(null);
+    canvasSelectionUrlsRef.current = [];
     toast(`已切换到 ${targetBoard.title || "画布"}`, "info", 1200);
   }, [
     activeCanvasBoardId,
     canvasBoards,
     canvasHistory,
     canvasImages,
+    refImages,
     canvasShapes,
     canvasShapesHistory,
     canvasTexts,
@@ -3266,10 +3307,12 @@ function HomeInner() {
         const nextBoard = createCanvasBoard({ title: "默认画布" });
         setActiveCanvasBoardId(nextBoard.id);
         canvasHistory.setState([]);
+        setRefImages([]);
         canvasTextsHistory.setState([]);
         canvasShapesHistory.setState([]);
         setSelectedImage(null);
         setSemanticSelection(null);
+        canvasSelectionUrlsRef.current = [];
         return [nextBoard];
       }
 
@@ -3278,10 +3321,12 @@ function HomeInner() {
         const nextBoard = remaining[0];
         setActiveCanvasBoardId(nextBoard.id);
         canvasHistory.setState(nextBoard.images || []);
+        setRefImages(nextBoard.refImages || []);
         canvasTextsHistory.setState(nextBoard.texts || []);
         canvasShapesHistory.setState(nextBoard.shapes || []);
         setSelectedImage(null);
         setSemanticSelection(null);
+        canvasSelectionUrlsRef.current = [];
       }
       return remaining;
     });
