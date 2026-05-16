@@ -1187,6 +1187,7 @@ function HomeInner() {
   useAuthSessionGuard();
   useCloudLocalStorageSync(CANVAS_CLOUD_STATE_KEYS, { overwriteOnFirstRestore: true, intervalMs: 2000 });
   const activeCanvasBoard = canvasBoards.find((board) => board.id === activeCanvasBoardId) || canvasBoards[0];
+  const activeCanvasBoardIdRef = useRef(activeCanvasBoardId);
   const messages = activeConversation?.messages || [];
   const isGenerating = activeGenerationCount > 0;
   const isBusy = isTextEditing;
@@ -1216,6 +1217,10 @@ function HomeInner() {
       _conversationId: conversation.id,
     }))
   );
+
+  useEffect(() => {
+    activeCanvasBoardIdRef.current = activeCanvasBoardId;
+  }, [activeCanvasBoardId]);
 
   // Load from localStorage
   useEffect(() => {
@@ -1669,6 +1674,45 @@ function HomeInner() {
     );
   }, [updateConversationMessages]);
 
+  const appendCanvasImagesToBoard = useCallback((boardId, items) => {
+    const nextItems = Array.isArray(items) ? items.filter(Boolean) : [];
+    if (!boardId || nextItems.length === 0) return;
+    if (activeCanvasBoardIdRef.current === boardId) {
+      canvasHistory.push((prev) => [...prev, ...nextItems]);
+      return;
+    }
+    setCanvasBoards((prev) => prev.map((board) => (
+      board.id === boardId
+        ? {
+            ...board,
+            images: [...(board.images || []), ...nextItems],
+            updatedAt: Date.now(),
+          }
+        : board
+    )));
+  }, [canvasHistory]);
+
+  const updateCanvasImageInBoard = useCallback((boardId, imageId, patch) => {
+    if (!boardId || !imageId || !patch) return;
+    if (activeCanvasBoardIdRef.current === boardId) {
+      canvasHistory.setState((prev) => prev.map((item) => (
+        item.id === imageId ? { ...item, ...patch } : item
+      )));
+      return;
+    }
+    setCanvasBoards((prev) => prev.map((board) => (
+      board.id === boardId
+        ? {
+            ...board,
+            images: (board.images || []).map((item) => (
+              item.id === imageId ? { ...item, ...patch } : item
+            )),
+            updatedAt: Date.now(),
+          }
+        : board
+    )));
+  }, [canvasHistory]);
+
   const cloudifyComposerMediaSource = useCallback((source, filename = "reference", scope = "canvas-reference") => {
     if (!shouldUploadToCloudAsset(source)) return Promise.resolve(source);
     const cache = cloudAssetUploadRef.current;
@@ -1712,6 +1756,7 @@ function HomeInner() {
   }, [cloudifyComposerMediaSource, toast, updateConversationMessages]);
 
   const syncGeneratedResultToCloudInBackground = useCallback(({
+    boardId,
     conversationId,
     aiMsgId,
     taskId,
@@ -1725,14 +1770,12 @@ function HomeInner() {
       .then((cloudUrl) => {
         if (!cloudUrl || cloudUrl === sourceUrl) return;
         patchTask(conversationId, aiMsgId, taskId, { url: cloudUrl });
-        canvasHistory.setState((prev) => prev.map((item) => (
-          item.id === canvasItemId ? { ...item, image_url: cloudUrl } : item
-        )));
+        updateCanvasImageInBoard(boardId, canvasItemId, { image_url: cloudUrl });
       })
       .catch(() => {
         toast("生成结果云端保存失败，换设备可能无法恢复这张图", "warning", 2200);
       });
-  }, [canvasHistory, patchTask, toast]);
+  }, [patchTask, toast, updateCanvasImageInBoard]);
 
   const resetComposer = useCallback(() => {
     setPrompt("");
@@ -1823,6 +1866,7 @@ function HomeInner() {
     const hideConversationMessages = Boolean(retryPayload?.hideConversationMessages);
     const editMode = retryPayload?.editMode || null;
     if (!text || !activeConversationId) return;
+    const generationBoardId = activeCanvasBoardId;
 
     if (
       POINT_IMAGE_EDIT_ENABLED
@@ -1907,14 +1951,14 @@ function HomeInner() {
           urls,
           error: null,
         });
-        canvasHistory.push((prev) => [
-          ...prev,
-          ...urls.map((url, index) => ({
+        appendCanvasImagesToBoard(
+          generationBoardId,
+          urls.map((url, index) => ({
             id: `${aiMsgId}-${index}`,
             image_url: url,
             prompt: composerText,
-          })),
-        ]);
+          }))
+        );
         setSemanticSelection(null);
         toast(`局部编辑完成，${urls.length} 张结果已添加到画布`, "success", 2200);
       } catch (err) {
@@ -2080,6 +2124,7 @@ function HomeInner() {
         ...prev,
         ...tasks.map((task) => ({
           id: `${aiMsgId}-${task.id}`,
+          boardId: generationBoardId,
           aiMsgId,
           taskId: task.id,
           slotIndex: task.index,
@@ -2126,17 +2171,18 @@ function HomeInner() {
             setCanvasGeneratingItems((prev) =>
               prev.filter((item) => item.id !== canvasItemId)
             );
-            canvasHistory.push((prev) => [
-              ...prev,
-              {
+            appendCanvasImagesToBoard(
+              generationBoardId,
+              [{
                 id: canvasItemId,
                 image_url: url,
                 media_type: mediaType,
                 prompt: displayText,
                 hidePromptText: hidePlaceholderPrompt,
-              },
-            ]);
+              }]
+            );
             syncGeneratedResultToCloudInBackground({
+              boardId: generationBoardId,
               conversationId,
               aiMsgId,
               taskId,
@@ -2273,17 +2319,18 @@ function HomeInner() {
             setCanvasGeneratingItems((prev) =>
               prev.filter((item) => item.id !== canvasItemId)
             );
-            canvasHistory.push((prev) => [
-              ...prev,
-              {
+            appendCanvasImagesToBoard(
+              generationBoardId,
+              [{
                 id: canvasItemId,
                 image_url: url,
                 media_type: mediaType,
                 prompt: displayText,
                 hidePromptText: hidePlaceholderPrompt,
-              },
-            ]);
+              }]
+            );
             syncGeneratedResultToCloudInBackground({
+              boardId: generationBoardId,
               conversationId,
               aiMsgId,
               taskId,
@@ -2407,13 +2454,14 @@ function HomeInner() {
     prompt,
     isTextEditing,
     activeConversationId,
+    activeCanvasBoardId,
     params,
     refImages,
     textEditBlocks,
     updateMessage,
     updateConversationMessages,
     patchTask,
-    canvasHistory,
+    appendCanvasImagesToBoard,
     semanticSelection,
     syncGeneratedResultToCloudInBackground,
     syncRefImagesToCloudInBackground,
@@ -2540,6 +2588,7 @@ function HomeInner() {
     const displayText = String(prompt || "").trim() || "请替换这张图中的指定文字，并保持原尺寸、原版式与原视觉风格。";
     const ts = Date.now();
     const conversationId = activeConversationId;
+    const textEditBoardId = activeCanvasBoardId;
     const userMsgId = `user-text-edit-${ts}`;
     const aiMsgId = `ai-text-edit-${ts}`;
     let previewImage = sourceImage;
@@ -2604,14 +2653,14 @@ function HomeInner() {
         error: null,
       });
 
-      canvasHistory.push((prev) => [
-        ...prev,
-        ...urls.map((url, index) => ({
+      appendCanvasImagesToBoard(
+        textEditBoardId,
+        urls.map((url, index) => ({
           id: `${aiMsgId}-${index}`,
           image_url: url,
           prompt: displayText,
-        })),
-      ]);
+        }))
+      );
       toast(`文字替换完成，${urls.length} 张结果已添加到画布`, "success", 2200);
     } catch (err) {
       updateMessage(conversationId, aiMsgId, {
@@ -2624,7 +2673,8 @@ function HomeInner() {
     }
   }, [
     activeConversationId,
-    canvasHistory,
+    activeCanvasBoardId,
+    appendCanvasImagesToBoard,
     isBusy,
     prompt,
     refImages,
@@ -3028,8 +3078,8 @@ function HomeInner() {
   }, [isNavigationBusy, resetComposer, toast]);
 
   const handleNewCanvasBoard = useCallback(() => {
-    if (isNavigationBusy) {
-      toast("生成过程中暂时不能新建画布", "info", 1500);
+    if (isTextEditing) {
+      toast("文字编辑过程中暂时不能新建画布", "info", 1500);
       return;
     }
     const nextBoard = createCanvasBoard({ title: `画布 ${canvasBoards.length + 1}` });
@@ -3041,11 +3091,11 @@ function HomeInner() {
     setSelectedImage(null);
     setSemanticSelection(null);
     toast("已新建画布", "success", 1200);
-  }, [canvasBoards.length, canvasHistory, canvasTextsHistory, canvasShapesHistory, isNavigationBusy, toast]);
+  }, [canvasBoards.length, canvasHistory, canvasTextsHistory, canvasShapesHistory, isTextEditing, toast]);
 
   const handleSelectCanvasBoard = useCallback((boardId) => {
-    if (isNavigationBusy) {
-      toast("生成过程中暂时不能切换画布", "info", 1500);
+    if (isTextEditing) {
+      toast("文字编辑过程中暂时不能切换画布", "info", 1500);
       return;
     }
     const targetBoard = canvasBoards.find((board) => board.id === boardId);
@@ -3078,7 +3128,7 @@ function HomeInner() {
     canvasShapesHistory,
     canvasTexts,
     canvasTextsHistory,
-    isNavigationBusy,
+    isTextEditing,
     toast,
   ]);
 
@@ -3464,7 +3514,7 @@ function HomeInner() {
       <Canvas
         ref={canvasRef}
         images={canvasImages}
-        generatingItems={canvasGeneratingItems}
+        generatingItems={canvasGeneratingItems.filter((item) => !item.boardId || item.boardId === activeCanvasBoardId)}
         selectedImage={selectedImage}
         onSelectImage={handleSelectImage}
         onDeleteImage={handleDeleteImage}
