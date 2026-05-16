@@ -49,10 +49,6 @@ function getUpdatedAt(item) {
   return Number(item?.updatedAt || item?.createdAt || 0);
 }
 
-function getLastGeneratedAt(item) {
-  return Number(item?.lastGeneratedAt || 0);
-}
-
 function isCloudAssetUrl(url = "") {
   return /^\/api\/cloud-assets\//i.test(String(url || ""));
 }
@@ -307,7 +303,6 @@ function mergeCanvasBoards(existingValue = "", incomingValue = "", deletions = {
       images: filterDeletedCanvasItems(mergeArrayById(oldBoard.images || [], newBoard.images || []), deletions).slice(-100),
       texts: mergeArrayById(oldBoard.texts || [], newBoard.texts || []).slice(-100),
       shapes: mergeArrayById(oldBoard.shapes || [], newBoard.shapes || []).slice(-200),
-      lastGeneratedAt: Math.max(getLastGeneratedAt(oldBoard), getLastGeneratedAt(newBoard)) || null,
       updatedAt: Math.max(getUpdatedAt(oldBoard), getUpdatedAt(newBoard), Date.now()),
     };
   });

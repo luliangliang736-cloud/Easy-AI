@@ -582,7 +582,6 @@ function createCanvasBoard(overrides = {}) {
     shapes: Array.isArray(overrides.shapes) ? overrides.shapes : [],
     createdAt: overrides.createdAt || now,
     updatedAt: overrides.updatedAt || now,
-    lastGeneratedAt: overrides.lastGeneratedAt || inferLastGeneratedAtFromImages(overrides.images) || null,
   };
 }
 
@@ -597,47 +596,6 @@ function deriveConversationTitle(currentTitle, messages) {
     return normalized.length > 20 ? `${normalized.slice(0, 20)}...` : normalized;
   }
   return currentTitle || DEFAULT_CONVERSATION_TITLE;
-}
-
-function formatCanvasUpdatedAt(value) {
-  const timestamp = Number(value);
-  if (!Number.isFinite(timestamp) || timestamp <= 0) return "";
-  const now = Date.now();
-  const diffMs = Math.max(0, now - timestamp);
-  const minuteMs = 60 * 1000;
-  const hourMs = 60 * minuteMs;
-  const dayMs = 24 * hourMs;
-  const date = new Date(timestamp);
-  const pad = (num) => String(num).padStart(2, "0");
-  const timeText = `${pad(date.getHours())}:${pad(date.getMinutes())}`;
-
-  if (diffMs < minuteMs) return "刚刚生图";
-  if (diffMs < hourMs) return `${Math.floor(diffMs / minuteMs)}分钟前`;
-  if (diffMs < dayMs && date.toDateString() === new Date(now).toDateString()) {
-    return `今天 ${timeText}`;
-  }
-  const yesterday = new Date(now - dayMs);
-  if (date.toDateString() === yesterday.toDateString()) {
-    return `昨天 ${timeText}`;
-  }
-  return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${timeText}`;
-}
-
-function getGeneratedTimestampFromCanvasImage(item) {
-  const id = String(item?.id || "");
-  const match = id.match(/^ai(?:-[a-z]+)*-(\d{10,})/i);
-  if (!match) return 0;
-  const timestamp = Number(match[1]);
-  const lowerBound = new Date("2024-01-01").getTime();
-  const upperBound = Date.now() + 24 * 60 * 60 * 1000;
-  return Number.isFinite(timestamp) && timestamp >= lowerBound && timestamp <= upperBound
-    ? timestamp
-    : 0;
-}
-
-function inferLastGeneratedAtFromImages(images = []) {
-  if (!Array.isArray(images)) return 0;
-  return images.reduce((latest, item) => Math.max(latest, getGeneratedTimestampFromCanvasImage(item)), 0);
 }
 
 async function makeMessagePreviewImage(img) {
@@ -1780,12 +1738,6 @@ function HomeInner() {
   const appendCanvasImagesToBoard = useCallback((boardId, items) => {
     const nextItems = Array.isArray(items) ? items.filter(Boolean) : [];
     if (!boardId || nextItems.length === 0) return;
-    const generatedAt = Date.now();
-    setCanvasBoards((prev) => prev.map((board) => (
-      board.id === boardId
-        ? { ...board, lastGeneratedAt: generatedAt, updatedAt: generatedAt }
-        : board
-    )));
     if (activeCanvasBoardIdRef.current === boardId) {
       canvasHistory.push((prev) => [...prev, ...nextItems]);
       return;
@@ -1795,8 +1747,7 @@ function HomeInner() {
         ? {
             ...board,
             images: [...(board.images || []), ...nextItems],
-            lastGeneratedAt: generatedAt,
-            updatedAt: generatedAt,
+            updatedAt: Date.now(),
           }
         : board
     )));
@@ -3594,7 +3545,6 @@ function HomeInner() {
                   const taskNotice = canvasBoardTaskNotices[board.id] || null;
                   const showCompletedNotice = !generatingCount && taskNotice?.completed;
                   const showFailedNotice = !generatingCount && !showCompletedNotice && taskNotice?.failed;
-                  const lastGeneratedAtText = formatCanvasUpdatedAt(board.lastGeneratedAt);
                   const showDropBefore = projectDropIndicator?.boardId === board.id && projectDropIndicator.position === "before";
                   const showDropAfter = projectDropIndicator?.boardId === board.id && projectDropIndicator.position === "after";
                   return (
@@ -3666,18 +3616,9 @@ function HomeInner() {
                           onClick={() => handleSelectCanvasBoard(board.id)}
                           onDoubleClick={() => startProjectRename(board)}
                           title="双击重命名"
-                          className="min-w-0 flex-1 cursor-move text-left"
+                          className="min-w-0 flex-1 cursor-move truncate text-left text-sm font-medium"
                         >
-                          <span className="block truncate text-sm font-medium">
-                            {board.title || "默认画布"}
-                          </span>
-                          {lastGeneratedAtText && (
-                            <span className={`mt-0.5 block truncate text-[10px] font-normal ${
-                              theme === "light" ? "text-black/38" : "text-white/35"
-                            }`}>
-                              {lastGeneratedAtText}
-                            </span>
-                          )}
+                          {board.title || "默认画布"}
                         </button>
                       )}
                       {generatingCount > 0 && !isRenaming && (
