@@ -14,7 +14,7 @@ import { useAuthSessionGuard } from "@/lib/useAuthSessionGuard";
 import { useCloudLocalStorageSync } from "@/lib/useCloudLocalStorageSync";
 import { CLOUD_STATE_DELETIONS_KEY, recordCloudDeletions } from "@/lib/cloudStateDeletions";
 import { MAX_GEN_COUNT } from "@/lib/genLimits";
-import { Layers, Plus } from "lucide-react";
+import { Layers, Loader2, Plus } from "lucide-react";
 
 const FLOATING_ENTRY_DRAFT_KEY = "lovart-floating-entry-draft";
 const CANVAS_REF_IMAGES_STORAGE_KEY = "lovart-canvas-ref-images";
@@ -1191,6 +1191,7 @@ function HomeInner() {
   const [draggingProjectBoardId, setDraggingProjectBoardId] = useState("");
   const [projectDropIndicator, setProjectDropIndicator] = useState(null);
   const [projectContextMenu, setProjectContextMenu] = useState(null);
+  const [canvasBoardTaskNotices, setCanvasBoardTaskNotices] = useState({});
   const [historySearch, setHistorySearch] = useState("");
   const canvasRef = useRef(null);
   const generationAbortRef = useRef(null);
@@ -1250,6 +1251,23 @@ function HomeInner() {
   useEffect(() => {
     activeCanvasBoardIdRef.current = activeCanvasBoardId;
   }, [activeCanvasBoardId]);
+
+  useEffect(() => {
+    if (!activeCanvasBoardId) return;
+    setCanvasBoardTaskNotices((prev) => {
+      if (!prev[activeCanvasBoardId]) return prev;
+      const next = { ...prev };
+      delete next[activeCanvasBoardId];
+      return next;
+    });
+  }, [activeCanvasBoardId]);
+
+  const generatingCountByBoard = canvasGeneratingItems.reduce((acc, item) => {
+    const boardId = item?.boardId || activeCanvasBoardId;
+    if (!boardId) return acc;
+    acc[boardId] = (acc[boardId] || 0) + 1;
+    return acc;
+  }, {});
 
   // Load from localStorage
   useEffect(() => {
@@ -1750,6 +1768,28 @@ function HomeInner() {
     )));
   }, [canvasHistory]);
 
+  const markCanvasBoardTaskNotice = useCallback((boardId, status) => {
+    if (!boardId || !["completed", "failed"].includes(status)) return;
+    const isActiveBoard = activeCanvasBoardIdRef.current === boardId;
+    if (!isActiveBoard) {
+      setCanvasBoardTaskNotices((prev) => ({
+        ...prev,
+        [boardId]: {
+          ...(prev[boardId] || {}),
+          [status]: true,
+        },
+      }));
+      const boardTitle = canvasBoards.find((board) => board.id === boardId)?.title || "画布";
+      toast(
+        status === "completed"
+          ? `${boardTitle} 生成完成`
+          : `${boardTitle} 生成失败`,
+        status === "completed" ? "success" : "info",
+        2200
+      );
+    }
+  }, [canvasBoards, toast]);
+
   const cloudifyComposerMediaSource = useCallback((source, filename = "reference", scope = "canvas-reference") => {
     if (!shouldUploadToCloudAsset(source)) return Promise.resolve(source);
     const cache = cloudAssetUploadRef.current;
@@ -1999,13 +2039,21 @@ function HomeInner() {
           }))
         );
         setSemanticSelection(null);
-        toast(`局部编辑完成，${urls.length} 张结果已添加到画布`, "success", 2200);
+        if (activeCanvasBoardIdRef.current === generationBoardId) {
+          toast(`局部编辑完成，${urls.length} 张结果已添加到画布`, "success", 2200);
+        } else {
+          markCanvasBoardTaskNotice(generationBoardId, "completed");
+        }
       } catch (err) {
         updateMessage(conversationId, aiMsgId, {
           status: "failed",
           error: errStr(err),
         });
-        toast(errStr(err) || "局部编辑失败", "info", 2200);
+        if (activeCanvasBoardIdRef.current === generationBoardId) {
+          toast(errStr(err) || "局部编辑失败", "info", 2200);
+        } else {
+          markCanvasBoardTaskNotice(generationBoardId, "failed");
+        }
       } finally {
         setActiveGenerationCount((value) => Math.max(0, value - 1));
       }
@@ -2430,17 +2478,21 @@ function HomeInner() {
             ? (taskResults.find((result) => result?.error)?.error || "全部任务失败")
             : null,
         });
-        toast(
-          successCount > 0
-            ? isKlingVideoRequest
-              ? "视频生成完成，已添加到画布"
-              : `生成完成，${successCount}/${count} 张已添加到画布`
-            : isKlingVideoRequest
-              ? "视频生成失败"
-              : `生成结束，0/${count} 张成功`,
-          successCount > 0 ? "success" : "info",
-          2200
-        );
+        if (activeCanvasBoardIdRef.current === generationBoardId) {
+          toast(
+            successCount > 0
+              ? isKlingVideoRequest
+                ? "视频生成完成，已添加到画布"
+                : `生成完成，${successCount}/${count} 张已添加到画布`
+              : isKlingVideoRequest
+                ? "视频生成失败"
+                : `生成结束，0/${count} 张成功`,
+            successCount > 0 ? "success" : "info",
+            2200
+          );
+        } else {
+          markCanvasBoardTaskNotice(generationBoardId, successCount > 0 ? "completed" : "failed");
+        }
       }
 
       if (!preserveComposer) {
@@ -2475,6 +2527,9 @@ function HomeInner() {
           };
         })
       );
+      if (activeCanvasBoardIdRef.current !== generationBoardId) {
+        markCanvasBoardTaskNotice(generationBoardId, "failed");
+      }
     } finally {
       setCanvasGeneratingItems((prev) =>
         prev.filter((item) => item.aiMsgId !== aiMsgId)
@@ -2503,6 +2558,7 @@ function HomeInner() {
     updateConversationMessages,
     patchTask,
     appendCanvasImagesToBoard,
+    markCanvasBoardTaskNotice,
     semanticSelection,
     syncGeneratedResultToCloudInBackground,
     syncRefImagesToCloudInBackground,
@@ -2704,13 +2760,21 @@ function HomeInner() {
           prompt: displayText,
         }))
       );
-      toast(`文字替换完成，${urls.length} 张结果已添加到画布`, "success", 2200);
+      if (activeCanvasBoardIdRef.current === textEditBoardId) {
+        toast(`文字替换完成，${urls.length} 张结果已添加到画布`, "success", 2200);
+      } else {
+        markCanvasBoardTaskNotice(textEditBoardId, "completed");
+      }
     } catch (err) {
       updateMessage(conversationId, aiMsgId, {
         status: "failed",
         error: errStr(err),
       });
-      toast(errStr(err) || "文字替换失败", "info", 2200);
+      if (activeCanvasBoardIdRef.current === textEditBoardId) {
+        toast(errStr(err) || "文字替换失败", "info", 2200);
+      } else {
+        markCanvasBoardTaskNotice(textEditBoardId, "failed");
+      }
     } finally {
       setIsTextEditing(false);
     }
@@ -2719,6 +2783,7 @@ function HomeInner() {
     activeCanvasBoardId,
     appendCanvasImagesToBoard,
     isBusy,
+    markCanvasBoardTaskNotice,
     prompt,
     refImages,
     selectedImage,
@@ -3353,6 +3418,9 @@ function HomeInner() {
   const contextProjectBoard = projectContextMenu
     ? canvasBoards.find((board) => board.id === projectContextMenu.boardId)
     : null;
+  const hasOtherBoardTaskNotice = Object.entries(canvasBoardTaskNotices).some(([boardId, notice]) => (
+    boardId !== activeCanvasBoardId && (notice?.completed || notice?.failed)
+  ));
 
   return (
     <div className="h-screen flex overflow-hidden">
@@ -3385,6 +3453,9 @@ function HomeInner() {
           }`}
         >
           {activeCanvasBoard?.title || "项目层"}
+          {hasOtherBoardTaskNotice && (
+            <span className="h-1.5 w-1.5 rounded-full bg-green-500" aria-label="其它画布有新结果" />
+          )}
         </button>
       </div>
       {isInspirationMode && (
@@ -3425,6 +3496,10 @@ function HomeInner() {
                   const isActive = board.id === activeCanvasBoardId;
                   const isRenaming = projectRenamingBoardId === board.id;
                   const isDragging = draggingProjectBoardId === board.id;
+                  const generatingCount = generatingCountByBoard[board.id] || 0;
+                  const taskNotice = canvasBoardTaskNotices[board.id] || null;
+                  const showCompletedNotice = !generatingCount && taskNotice?.completed;
+                  const showFailedNotice = !generatingCount && !showCompletedNotice && taskNotice?.failed;
                   const showDropBefore = projectDropIndicator?.boardId === board.id && projectDropIndicator.position === "before";
                   const showDropAfter = projectDropIndicator?.boardId === board.id && projectDropIndicator.position === "after";
                   return (
@@ -3500,6 +3575,38 @@ function HomeInner() {
                         >
                           {board.title || "默认画布"}
                         </button>
+                      )}
+                      {generatingCount > 0 && !isRenaming && (
+                        <span
+                          className={`relative inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full ${
+                          theme === "light"
+                            ? "bg-green-500/12 text-green-600"
+                            : "bg-green-400/15 text-green-200"
+                        }`}
+                          title={generatingCount > 1 ? `生成中 ${generatingCount}` : "生成中"}
+                          aria-label={generatingCount > 1 ? `生成中 ${generatingCount}` : "生成中"}
+                        >
+                          <Loader2 size={12} className="animate-spin" />
+                          {generatingCount > 1 && (
+                            <span className="absolute -right-1 -top-1 min-w-3 rounded-full bg-green-500 px-0.5 text-center text-[8px] leading-3 text-white">
+                              {generatingCount}
+                            </span>
+                          )}
+                        </span>
+                      )}
+                      {showCompletedNotice && !isRenaming && (
+                        <span className="shrink-0 rounded-md bg-green-500/15 px-1.5 py-0.5 text-[10px] text-green-600">
+                          完成
+                        </span>
+                      )}
+                      {showFailedNotice && !isRenaming && (
+                        <span className={`shrink-0 rounded-md px-1.5 py-0.5 text-[10px] ${
+                          theme === "light"
+                            ? "bg-red-500/10 text-red-600"
+                            : "bg-red-400/15 text-red-200"
+                        }`}>
+                          失败
+                        </span>
                       )}
                       {isActive && !isRenaming && (
                         <span className="shrink-0 rounded-md bg-green-500/15 px-1.5 py-0.5 text-[10px] text-green-600">
