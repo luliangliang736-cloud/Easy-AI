@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { isLocalDevAuthBypassEnabled } from "@/lib/authBypass";
 import { getRequestUser } from "@/lib/server/authUser";
 import { getCloudAssetSignedUrl } from "@/lib/server/cloudAssetStore";
 
@@ -20,7 +21,7 @@ export async function GET(request, { params }) {
     const key = keyFromParams || getObjectKeyFromRequest(request);
     const expectedUserPrefix = `users/${encodeURIComponent(user.email.toLowerCase())}/`;
     const expectedSystemPrefix = "users/system-generated/";
-    if (!key || (!key.startsWith(expectedUserPrefix) && !key.startsWith(expectedSystemPrefix))) {
+    if (!key || (!isLocalDevAuthBypassEnabled() && !key.startsWith(expectedUserPrefix) && !key.startsWith(expectedSystemPrefix))) {
       return NextResponse.json({ error: "无权访问该素材" }, { status: 403 });
     }
 

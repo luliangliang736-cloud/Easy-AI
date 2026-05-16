@@ -2,7 +2,6 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import Image from "next/image";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
@@ -652,11 +651,83 @@ function resolveImageSrc(src = "") {
   return value.startsWith("/") ? value : `/${value}`;
 }
 
+function isCloudAssetUrl(url = "") {
+  return /^\/api\/cloud-assets\//i.test(String(url || ""));
+}
+
+function shouldUploadToCloudAsset(url = "") {
+  const value = String(url || "");
+  if (!value || isCloudAssetUrl(value)) return false;
+  return (
+    /^\/api\/generated-images\//i.test(value)
+    || /^https?:\/\//i.test(value)
+    || /^data:image\//i.test(value)
+  );
+}
+
+async function uploadImageSourceToCloudAsset(source, filename = "chat-image", scope = "chat-generated") {
+  if (!shouldUploadToCloudAsset(source)) return source;
+  const isDataUrl = /^data:image\//i.test(source);
+  const body = isDataUrl
+    ? {
+        dataUrl: await compressImage(source, 2048, 0.9).catch(() => source),
+        filename,
+        scope,
+      }
+    : { sourceUrl: source, filename, scope };
+  const res = await fetch("/api/cloud-assets/upload", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data?.url) throw new Error(data?.error || "上传云端素材失败");
+  return data.url;
+}
+
 function appendImageRetryParam(src = "", retry = 0) {
   const value = resolveImageSrc(src);
   if (!value || value.startsWith("data:") || value.startsWith("blob:")) return value;
   const separator = value.includes("?") ? "&" : "?";
   return `${value}${separator}retry=${retry}`;
+}
+
+function ReliableImage({ src, alt, className = "" }) {
+  const [retryState, setRetryState] = useState({ src: "", count: 0 });
+  const [failedSrc, setFailedSrc] = useState("");
+  const retry = retryState.src === src ? retryState.count : 0;
+  const failed = failedSrc === src;
+  const imageSrc = appendImageRetryParam(src, retry);
+
+  if (failed) {
+    return (
+      <div className={`flex items-center justify-center bg-black/[0.04] ${className}`}>
+        <ImageIcon size={18} className="text-[#3FCA58]/80" />
+      </div>
+    );
+  }
+
+  return (
+    <img
+      src={imageSrc}
+      alt={alt}
+      className={className}
+      loading="lazy"
+      decoding="async"
+      onError={() => {
+        if (retry < 5) {
+          window.setTimeout(() => {
+            setRetryState((value) => ({
+              src,
+              count: value.src === src ? value.count + 1 : 1,
+            }));
+          }, 500);
+        } else {
+          setFailedSrc(src);
+        }
+      }}
+    />
+  );
 }
 
 function formatHistoryTime(value) {
@@ -816,7 +887,10 @@ function BatchWaImage({ src, alt, onPreview, onDownload, isFeishuBackfilled = fa
   const [retry, setRetry] = useState(0);
   const [loaded, setLoaded] = useState(false);
   const [failed, setFailed] = useState(false);
-  const imageSrc = appendImageRetryParam(src, retry);
+  const [rescue, setRescue] = useState({ src: "", tried: false, url: "" });
+  const rescueForCurrentSrc = rescue.src === src ? rescue : { src, tried: false, url: "" };
+  const displaySrc = rescueForCurrentSrc.url || src;
+  const imageSrc = appendImageRetryParam(displaySrc, retry);
 
   return (
     <div className="relative aspect-square w-full overflow-hidden rounded-2xl bg-black/[0.04]">
@@ -852,6 +926,23 @@ function BatchWaImage({ src, alt, onPreview, onDownload, isFeishuBackfilled = fa
           }}
           onError={() => {
             setLoaded(false);
+            if (!rescueForCurrentSrc.tried && shouldUploadToCloudAsset(src)) {
+              setRescue({ src, tried: true, url: "" });
+              void uploadImageSourceToCloudAsset(src, alt || "batch-wa-preview", "chat-batch-wa-preview")
+                .then((cloudUrl) => {
+                  if (cloudUrl && cloudUrl !== src) {
+                    setRetry(0);
+                    setFailed(false);
+                    setRescue({ src, tried: true, url: cloudUrl });
+                  } else {
+                    setRetry((value) => value + 1);
+                  }
+                })
+                .catch(() => {
+                  setRetry((value) => value + 1);
+                });
+              return;
+            }
             if (retry < 5) {
               window.setTimeout(() => setRetry((value) => value + 1), 500);
             } else {
@@ -992,6 +1083,7 @@ export default function ChatPage() {
   const feishuWaTaskPollingRef = useRef(false);
   const handleSubmitRef = useRef(null);
   const sessionStorageReadyRef = useRef(false);
+  const cloudAssetUploadRef = useRef(new Map());
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null);
   const promptTextareaRef = useRef(null);
@@ -1194,6 +1286,86 @@ export default function ChatPage() {
       });
     }
   };
+
+  const syncChatUrlsToCloudInBackground = useCallback(({ messageId, batchItemId = "", urls = [], promptText = "" }) => {
+    const sourceUrls = (Array.isArray(urls) ? urls : []).filter(shouldUploadToCloudAsset);
+    if (!sourceUrls.length) return;
+
+    void Promise.all(sourceUrls.map((url, index) => (
+      (() => {
+        const cache = cloudAssetUploadRef.current;
+        if (!cache.has(url)) {
+          cache.set(
+            url,
+            uploadImageSourceToCloudAsset(url, `${promptText || "chat-result"}-${index + 1}`, batchItemId ? "chat-batch-wa" : "chat-generated")
+              .catch((error) => {
+                cache.delete(url);
+                throw error;
+              })
+          );
+        }
+        return cache.get(url).catch(() => url);
+      })()
+    ))).then((cloudUrls) => {
+      const replacements = new Map(sourceUrls.map((url, index) => [url, cloudUrls[index]]));
+      if ([...replacements].every(([from, to]) => from === to)) return;
+
+      setMessages((prev) => prev.map((message) => {
+        if (message.id !== messageId) return message;
+        if (batchItemId && Array.isArray(message.batchWaItems)) {
+          return {
+            ...message,
+            batchWaItems: message.batchWaItems.map((item) => (
+              item.id === batchItemId
+                ? { ...item, urls: (item.urls || []).map((url) => replacements.get(url) || url) }
+                : item
+            )),
+          };
+        }
+        if (Array.isArray(message.images)) {
+          return {
+            ...message,
+            images: message.images.map((url) => replacements.get(url) || url),
+          };
+        }
+        return message;
+      }));
+
+      setImageHistory((prev) => {
+        const nextHistory = prev.map((item) => ({
+          ...item,
+          urls: (item.urls || []).map((url) => replacements.get(url) || url),
+        }));
+        writeImageHistory(nextHistory);
+        return nextHistory;
+      });
+    });
+  }, []);
+
+  useEffect(() => {
+    if (!sessionStorageReadyRef.current || !messages.length) return;
+    for (const message of messages) {
+      if (Array.isArray(message.images) && message.images.some(shouldUploadToCloudAsset)) {
+        syncChatUrlsToCloudInBackground({
+          messageId: message.id,
+          urls: message.images,
+          promptText: message.text || "chat-history",
+        });
+      }
+      if (Array.isArray(message.batchWaItems)) {
+        for (const item of message.batchWaItems) {
+          if (Array.isArray(item.urls) && item.urls.some(shouldUploadToCloudAsset)) {
+            syncChatUrlsToCloudInBackground({
+              messageId: message.id,
+              batchItemId: item.id,
+              urls: item.urls,
+              promptText: item.prompt || item.label || message.text || "batch-wa-history",
+            });
+          }
+        }
+      }
+    }
+  }, [messages, syncChatUrlsToCloudInBackground]);
 
   const handleStopBatchWa = () => {
     batchWaStoppedRef.current = true;
@@ -1464,6 +1636,12 @@ export default function ChatPage() {
                 ? { ...current, status: "success", urls: result.urls, attempts: attempt, error: "", feishuStatus: item.recordId ? "uploading" : "" }
                 : current
             )));
+            syncChatUrlsToCloudInBackground({
+              messageId: batchMessage.id,
+              batchItemId: `wa-${item.index}`,
+              urls: result.urls,
+              promptText: item.prompt || text,
+            });
             if (item.recordId) {
               try {
                 await uploadFeishuWaImage({
@@ -1723,6 +1901,11 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
       );
       if (!suppressUserMessage) {
         setMessages((prev) => [...prev, assistantMessage]);
+        syncChatUrlsToCloudInBackground({
+          messageId: assistantMessage.id,
+          urls,
+          promptText: text,
+        });
       }
 
       if (waTemplateRequest && !suppressUserMessage) {
@@ -1984,7 +2167,7 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
                                 onClick={() => setPreviewSrc(url)}
                                 className={`relative aspect-square overflow-hidden rounded-lg ${isLightTheme ? "border border-black/8 bg-black/[0.03]" : "border border-white/8 bg-white/[0.03]"}`}
                               >
-                                <Image src={url} alt={`生成图 ${i + 1}`} fill unoptimized className="object-cover" />
+                                <ReliableImage src={url} alt={`生成图 ${i + 1}`} className="absolute inset-0 h-full w-full object-cover" />
                               </button>
                             ))}
                           </div>
@@ -2125,7 +2308,7 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
                           <button key={i} type="button" onClick={() => setPreviewSrc(src)}
                             className={`relative h-16 w-16 overflow-hidden rounded-xl ${isLightTheme ? "border border-black/10" : "border border-white/10"}`}
                           >
-                            <Image src={src} alt={`参考图 ${i + 1}`} fill unoptimized className="object-cover" />
+                            <ReliableImage src={src} alt={`参考图 ${i + 1}`} className="absolute inset-0 h-full w-full object-cover" />
                           </button>
                         ))}
                       </div>
@@ -2152,7 +2335,7 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
                           {message.images.map((src, i) => (
                             <div key={i} className={`relative aspect-square overflow-hidden rounded-2xl ${isLightTheme ? "border border-black/10" : "border border-white/10"}`}>
                               <button type="button" className="absolute inset-0" onClick={() => setPreviewSrc(src)}>
-                                <Image src={src} alt={`生成结果 ${i + 1}`} fill unoptimized className="object-cover" />
+                                <ReliableImage src={src} alt={`生成结果 ${i + 1}`} className="absolute inset-0 h-full w-full object-cover" />
                               </button>
                               <div className="absolute right-2 top-2 flex gap-1.5">
                                 <button type="button" onClick={(e) => { e.stopPropagation(); setPreviewSrc(src); }} className="rounded-lg bg-black/60 p-1.5 text-white backdrop-blur-sm hover:bg-black/80"><Maximize2 size={14} /></button>
@@ -2400,7 +2583,7 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
               <div className={`flex flex-wrap gap-2 mb-3 px-1`}>
                 {refImages.map((src, i) => (
                   <div key={i} className={`relative h-14 w-14 rounded-xl overflow-hidden ${isLightTheme ? "border border-black/10" : "border border-white/10"}`}>
-                    <Image src={src} alt={`参考图 ${i + 1}`} fill unoptimized className="object-cover" />
+                    <ReliableImage src={src} alt={`参考图 ${i + 1}`} className="absolute inset-0 h-full w-full object-cover" />
                     <button type="button" onClick={() => setRefImages((prev) => prev.filter((_, idx) => idx !== i))}
                       className="absolute right-0.5 top-0.5 h-4 w-4 rounded-full bg-black/65 text-white flex items-center justify-center hover:bg-black/85">
                       <X size={9} />

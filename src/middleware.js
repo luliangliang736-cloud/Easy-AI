@@ -1,9 +1,11 @@
 import { NextResponse } from "next/server";
 import { AUTH_COOKIE_NAME, verifySessionValue } from "./lib/authSession";
+import { isLocalDevAuthBypassEnabled } from "./lib/authBypass";
 
 const PUBLIC_API_PREFIXES = [
   "/api/auth",
   "/api/feishu-im-webhook",
+  "/api/generated-images",
   "/api/home-hero-assets",
 ];
 
@@ -61,6 +63,10 @@ function unauthorizedJson() {
 export async function middleware(request) {
   const { pathname } = request.nextUrl;
   if (request.method === "OPTIONS" || isPublicPath(pathname) || isPublicApi(pathname)) {
+    return NextResponse.next();
+  }
+
+  if (isLocalDevAuthBypassEnabled()) {
     return NextResponse.next();
   }
 

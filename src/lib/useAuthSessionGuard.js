@@ -3,6 +3,7 @@
 import { useEffect } from "react";
 
 const DEFAULT_CHECK_INTERVAL_MS = 30_000;
+const LOCAL_DEV_AUTH_BYPASS = process.env.NODE_ENV !== "production" && process.env.NEXT_PUBLIC_DISABLE_LOCAL_AUTH !== "0";
 
 function redirectToLogin() {
   const next = `${window.location.pathname}${window.location.search}`;
@@ -13,7 +14,7 @@ function redirectToLogin() {
 }
 
 export function useAuthSessionGuard(options = {}) {
-  const enabled = options.enabled !== false;
+  const enabled = options.enabled !== false && !LOCAL_DEV_AUTH_BYPASS;
   const intervalMs = Number(options.intervalMs || DEFAULT_CHECK_INTERVAL_MS);
   const onUnauthorized = options.onUnauthorized;
 
