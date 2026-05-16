@@ -656,6 +656,10 @@ function shouldUploadToCloudAsset(source) {
   );
 }
 
+function shouldKeepLocalAssetWhenCloudUnavailable(errorMessage = "") {
+  return process.env.NODE_ENV !== "production" && /OSS is not configured/i.test(String(errorMessage || ""));
+}
+
 async function uploadMediaSourceToCloudAsset(source, filename = "image", scope = "canvas") {
   if (typeof source !== "string") return source;
   if (isCloudAssetUrl(source)) return source;
@@ -667,6 +671,7 @@ async function uploadMediaSourceToCloudAsset(source, filename = "image", scope =
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok || !data?.url) {
+      if (shouldKeepLocalAssetWhenCloudUnavailable(data?.error)) return source;
       throw new Error(data?.error || "上传云端素材失败");
     }
     return data.url;
@@ -682,6 +687,7 @@ async function uploadMediaSourceToCloudAsset(source, filename = "image", scope =
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok || !data?.url) {
+    if (shouldKeepLocalAssetWhenCloudUnavailable(data?.error)) return source;
     throw new Error(data?.error || "上传云端素材失败");
   }
   return data.url;
@@ -818,10 +824,21 @@ function safeParseStorageArray(value) {
   }
 }
 
+function normalizeCanvasImageItems(items, prefix = "canvas") {
+  if (!Array.isArray(items)) return [];
+  return items
+    .filter((item) => item && item.image_url)
+    .map((item, index) => ({
+      ...item,
+      id: item.id || `${prefix}-${Date.now()}-${index}`,
+    }));
+}
+
 function sanitizeCanvasImagesForStorage(items) {
   if (!Array.isArray(items)) return [];
   // base64 图片/视频太大，只保留可重新访问的远程或站内生成图链接。
-  return items.filter((item) => item && isPersistableMediaUrl(item.image_url));
+  return normalizeCanvasImageItems(items, "stored-canvas")
+    .filter((item) => item && isPersistableMediaUrl(item.image_url));
 }
 
 function sanitizeCanvasBoardsForStorage(boards) {
@@ -848,7 +865,10 @@ function collectMessageImageUrls(message) {
 
 function normalizeCanvasBoards(boards) {
   if (!Array.isArray(boards) || boards.length === 0) return [];
-  return boards.map((board) => createCanvasBoard(board));
+  return boards.map((board, index) => createCanvasBoard({
+    ...board,
+    images: normalizeCanvasImageItems(board?.images || [], `board-${board?.id || index}`),
+  }));
 }
 
 async function parseApiResponse(res) {
@@ -1239,7 +1259,7 @@ function HomeInner() {
       }
 
       const parsedImages = safeParseStorageArray(savedImages);
-      if (parsedImages) canvasHistory.setState(parsedImages);
+      if (parsedImages) canvasHistory.setState(normalizeCanvasImageItems(parsedImages, "legacy-canvas"));
 
       const parsedTexts = safeParseStorageArray(savedTexts);
       if (parsedTexts) canvasTextsHistory.setState(parsedTexts);
@@ -1259,7 +1279,7 @@ function HomeInner() {
         const migratedBoard = createCanvasBoard({
           id: initialCanvasBoardRef.current.id,
           title: "默认画布",
-          images: parsedImages || [],
+          images: normalizeCanvasImageItems(parsedImages || [], "legacy-board"),
           texts: parsedTexts || [],
           shapes: parsedShapes || [],
           createdAt: initialCanvasBoardRef.current.createdAt,
@@ -2452,14 +2472,16 @@ function HomeInner() {
 
   const handleDeleteImage = useCallback((id) => {
     const item = canvasImages.find((img) => img.id === id);
-    recordCloudDeletions({
-      canvasImageIds: id,
-      imageUrls: item?.image_url || item?.url,
-    });
+    const generatingItem = canvasGeneratingItems.find((img) => img.id === id);
+    setCanvasGeneratingItems((prev) => prev.filter((img) => img.id !== id));
     canvasHistory.push((prev) => prev.filter((img) => img.id !== id));
     setSelectedImage((prev) => (prev?.id === id ? null : prev));
+    recordCloudDeletions({
+      canvasImageIds: id,
+      imageUrls: item?.image_url || item?.url || generatingItem?.image_url || generatingItem?.url,
+    });
     toast("已删除", "info", 1200);
-  }, [canvasHistory, canvasImages, toast]);
+  }, [canvasGeneratingItems, canvasHistory, canvasImages, toast]);
 
   const handleSendToChat = useCallback((img) => {
     if (img?.media_type === "video" || img?.mediaType === "video") {

@@ -1,6 +1,7 @@
 export const CLOUD_STATE_DELETIONS_KEY = "easyai-cloud-state-deletions";
 
 const MAX_DELETION_RECORDS_PER_SCOPE = 1000;
+const MAX_DELETION_KEY_CHARS = 512;
 
 function safeParseDeletions(value) {
   try {
@@ -15,10 +16,28 @@ function normalizeScopeRecords(records) {
   if (!records || typeof records !== "object" || Array.isArray(records)) return {};
   return Object.fromEntries(
     Object.entries(records)
-      .filter(([key]) => key)
+      .filter(([key]) => isValidDeletionRecordKey(key))
       .map(([key, value]) => [String(key), Number(value || Date.now())])
       .sort((a, b) => b[1] - a[1])
       .slice(0, MAX_DELETION_RECORDS_PER_SCOPE)
+  );
+}
+
+function isValidDeletionRecordKey(value = "") {
+  const key = String(value || "").trim();
+  if (!key || key.length > MAX_DELETION_KEY_CHARS) return false;
+  if (/^(data|blob):/i.test(key)) return false;
+  return true;
+}
+
+function isDeletionValueAllowedForScope(scope = "", value = "") {
+  const text = String(value || "").trim();
+  if (!isValidDeletionRecordKey(text)) return false;
+  if (scope !== "imageUrls") return true;
+  return (
+    /^\/api\/cloud-assets\//i.test(text)
+    || /^\/api\/generated-images\//i.test(text)
+    || /^https?:\/\//i.test(text)
   );
 }
 
@@ -51,12 +70,18 @@ export function recordCloudDeletions(records = {}) {
   const current = normalizeCloudStateDeletions(window.localStorage.getItem(CLOUD_STATE_DELETIONS_KEY));
   for (const [scope, values] of Object.entries(records || {})) {
     const list = Array.isArray(values) ? values : [values];
-    const cleanValues = list.map((value) => String(value || "").trim()).filter(Boolean);
+    const cleanValues = list
+      .map((value) => String(value || "").trim())
+      .filter((value) => isDeletionValueAllowedForScope(scope, value));
     if (!cleanValues.length) continue;
     current[scope] = current[scope] || {};
     for (const value of cleanValues) {
       current[scope][value] = now;
     }
   }
-  window.localStorage.setItem(CLOUD_STATE_DELETIONS_KEY, JSON.stringify(normalizeCloudStateDeletions(current)));
+  try {
+    window.localStorage.setItem(CLOUD_STATE_DELETIONS_KEY, JSON.stringify(normalizeCloudStateDeletions(current)));
+  } catch {
+    // Deletion records must never block the user's actual delete/copy/paste action.
+  }
 }

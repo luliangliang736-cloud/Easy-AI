@@ -383,6 +383,14 @@ export default function Canvas({
     ...images,
     ...generatingItems.filter((item) => !images.some((img) => img.id === item.id)),
   ], [images, generatingItems]);
+  const imagesRef = useRef(images);
+  const renderImagesRef = useRef(renderImages);
+  const selectedImageIdRef = useRef(selectedImage?.id || "");
+  const multiSelectedImageIdsRef = useRef(multiSelectedImageIds);
+  imagesRef.current = images;
+  renderImagesRef.current = renderImages;
+  selectedImageIdRef.current = selectedImage?.id || "";
+  multiSelectedImageIdsRef.current = multiSelectedImageIds;
 
   const positionsRef = useRef({});
   const imageMetaRef = useRef({});
@@ -865,16 +873,23 @@ export default function Canvas({
   ];
 
   const copyCanvasImages = useCallback(async () => {
+    const currentMultiIds = multiSelectedImageIdsRef.current || [];
+    const currentSelectedId = selectedImageIdRef.current || "";
     const ids =
-      multiSelectedImageIds.length > 0
-        ? [...multiSelectedImageIds]
-        : selectedImage
-          ? [selectedImage.id]
+      currentMultiIds.length > 0
+        ? [...currentMultiIds]
+        : currentSelectedId
+          ? [currentSelectedId]
           : [];
     if (ids.length === 0) return;
+    const currentImages = imagesRef.current || [];
+    const currentRenderImages = renderImagesRef.current || [];
     const items = ids
-      .map((iid) => images.find((im) => im.id === iid))
-      .filter(Boolean)
+      .map((iid) => (
+        currentImages.find((im) => im.id === iid)
+        || currentRenderImages.find((im) => im.id === iid)
+      ))
+      .filter((im) => im?.image_url && !im?.isGeneratingPlaceholder)
       .map((im) => ({ image_url: im.image_url, prompt: im.prompt || "" }));
     if (items.length === 0) return;
     canvasClipboardRef.current = { items };
@@ -889,10 +904,22 @@ export default function Canvas({
     } catch {
       toast("已复制（可在画布内粘贴）", "info", 1500);
     }
-  }, [images, multiSelectedImageIds, selectedImage, toast]);
+  }, [toast]);
 
   const pasteCanvasImages = useCallback(async () => {
     if (!onPasteImages) return;
+    if (canvasClipboardRef.current?.items?.length) {
+      onPasteImages(
+        canvasClipboardRef.current.items.map((it) => ({
+          image_url: it.image_url,
+          prompt: (it.prompt && String(it.prompt).trim())
+            ? `${it.prompt} (副本)`
+            : "副本",
+        }))
+      );
+      return;
+    }
+
     const tryClipboard = async () => {
       try {
         const clipItems = await navigator.clipboard.read();
@@ -914,18 +941,7 @@ export default function Canvas({
       onPasteImages(fromClip);
       return;
     }
-    if (canvasClipboardRef.current?.items?.length) {
-      onPasteImages(
-        canvasClipboardRef.current.items.map((it) => ({
-          image_url: it.image_url,
-          prompt: (it.prompt && String(it.prompt).trim())
-            ? `${it.prompt} (副本)`
-            : "副本",
-        }))
-      );
-    } else {
-      toast("剪贴板无图片", "info", 1200);
-    }
+    toast("剪贴板无图片", "info", 1200);
   }, [onPasteImages, toast]);
 
   useEffect(() => {
@@ -946,11 +962,13 @@ export default function Canvas({
       const mod = e.ctrlKey || e.metaKey;
       if (mod && e.key.toLowerCase() === "c") {
         if (hasTextSelection()) return;
+        const currentMultiIds = multiSelectedImageIdsRef.current || [];
+        const currentSelectedId = selectedImageIdRef.current || "";
         const ids =
-          multiSelectedImageIds.length > 0
-            ? multiSelectedImageIds
-            : selectedImage
-              ? [selectedImage.id]
+          currentMultiIds.length > 0
+            ? currentMultiIds
+            : currentSelectedId
+              ? [currentSelectedId]
               : [];
         if (ids.length === 0) return;
         e.preventDefault();
@@ -968,8 +986,6 @@ export default function Canvas({
   }, [
     copyCanvasImages,
     pasteCanvasImages,
-    multiSelectedImageIds,
-    selectedImage,
   ]);
 
   /**
@@ -1084,6 +1100,7 @@ export default function Canvas({
     setUpscaleMenuFor(null);
     const target = e.target;
     if (target.closest?.("[data-text-editor]")) return;
+    containerRef.current?.focus?.({ preventScroll: true });
 
     if (spacePanHeldRef.current && e.button === 0) {
       e.preventDefault();
@@ -1160,6 +1177,8 @@ export default function Canvas({
       const img = images.find((i) => i.id === id);
       if (semanticEditEnabled && isSelectTool && (e.ctrlKey || e.metaKey) && img && !target.closest?.("button")) {
         const imageNode = imgEl.querySelector("img");
+        selectedImageIdRef.current = img.id;
+        multiSelectedImageIdsRef.current = [];
         setMultiSelectedImageIds([]);
         setMultiSelectedTextIds([]);
         setSelectedTextId(null);
@@ -1181,9 +1200,13 @@ export default function Canvas({
         setSelectedTextId(null);
         setMultiSelectedTextIds([]);
         if (nextIds.length <= 1 && img) {
+          selectedImageIdRef.current = img.id;
+          multiSelectedImageIdsRef.current = [];
           setMultiSelectedImageIds([]);
           onSelectImage(img);
         } else {
+          selectedImageIdRef.current = "";
+          multiSelectedImageIdsRef.current = nextIds;
           setMultiSelectedImageIds(nextIds);
           onSelectImage(null);
           onSyncCanvasRefImages?.(nextUrls);
@@ -1225,7 +1248,11 @@ export default function Canvas({
       setMultiSelectedTextIds([]);
       setSelectedTextId(null);
       setSemanticSelection(null);
-      if (img) onSelectImage(img);
+      if (img) {
+        selectedImageIdRef.current = img.id;
+        multiSelectedImageIdsRef.current = [];
+        onSelectImage(img);
+      }
       if (lockedRef.current.has(id)) return;
       setAction({
         type: "drag", id,
@@ -1438,6 +1465,8 @@ export default function Canvas({
       const mh = my2 - my1;
       if (mw < 1 && mh < 1) {
         onSelectImage?.(null);
+        selectedImageIdRef.current = "";
+        multiSelectedImageIdsRef.current = [];
         setMultiSelectedImageIds([]);
         setMultiSelectedTextIds([]);
         setSelectedShapeId(null);
@@ -1471,6 +1500,8 @@ export default function Canvas({
             }
           });
         }
+        selectedImageIdRef.current = "";
+        multiSelectedImageIdsRef.current = hitsImg;
         setMultiSelectedImageIds(hitsImg);
         setMultiSelectedTextIds(hitsTx);
         if (hitsImg.length === 0) {
@@ -1490,9 +1521,13 @@ export default function Canvas({
             const one = renderImages.find((im) => im.id === hitsImg[0]);
             if (one?.isGeneratingPlaceholder) {
               onSelectImage?.(null);
+              selectedImageIdRef.current = "";
+              multiSelectedImageIdsRef.current = [one.id];
               setMultiSelectedImageIds([one.id]);
               setMultiSelectedTextIds([]);
             } else if (one) {
+              selectedImageIdRef.current = one.id;
+              multiSelectedImageIdsRef.current = [];
               onSelectImage?.(one);
               setMultiSelectedImageIds([]);
               setMultiSelectedTextIds([]);
@@ -1500,6 +1535,8 @@ export default function Canvas({
             setSelectedTextId(null);
           } else if (hitsTx.length === 1) {
             onSelectImage?.(null);
+            selectedImageIdRef.current = "";
+            multiSelectedImageIdsRef.current = [];
             setSelectedTextId(hitsTx[0]);
             setMultiSelectedImageIds([]);
             setMultiSelectedTextIds([]);
@@ -1739,9 +1776,11 @@ export default function Canvas({
   return (
     <div
       ref={containerRef}
+      tabIndex={0}
       className={`flex-1 relative overflow-hidden select-none ${cursor}`}
       style={{
         background: canvasBackgroundColor || "var(--bg-primary)",
+        outline: "none",
       }}
       onPointerDownCapture={handleMiddleButtonPanCapture}
       onPointerDown={handlePointerDown}
