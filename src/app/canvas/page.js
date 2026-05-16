@@ -585,6 +585,10 @@ function createCanvasBoard(overrides = {}) {
   };
 }
 
+function isDefaultCanvasBoard(board) {
+  return String(board?.title || "").trim() === "默认画布";
+}
+
 function createClientRequestId(prefix = "canvas") {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
@@ -1326,14 +1330,20 @@ function HomeInner() {
       if (parsedBoards.length > 0) {
         const activeBoardBeforeFallback = parsedBoards.find((board) => board.id === savedActiveBoardId) || parsedBoards[0];
         const fallbackImages = normalizeCanvasImageItems(parsedImages || [], "legacy-board-fallback");
-        const shouldBackfillActiveBoardImages = (activeBoardBeforeFallback.images || []).length === 0 && fallbackImages.length > 0;
-        const boardsWithFallback = shouldBackfillActiveBoardImages
-          ? parsedBoards.map((board) => (
-              board.id === activeBoardBeforeFallback.id
-                ? { ...board, images: fallbackImages, updatedAt: Date.now() }
-                : board
-            ))
-          : parsedBoards;
+        const fallbackImagesByBoard = fallbackImages.reduce((acc, image) => {
+          const imageBoardId = image.canvasBoardId || image.boardId || activeBoardBeforeFallback.id;
+          if (!imageBoardId) return acc;
+          if (!acc.has(imageBoardId)) acc.set(imageBoardId, []);
+          acc.get(imageBoardId).push({ ...image, canvasBoardId: imageBoardId });
+          return acc;
+        }, new Map());
+        const boardsWithFallback = parsedBoards.map((board) => {
+          if ((board.images || []).length > 0) return board;
+          const boardFallbackImages = fallbackImagesByBoard.get(board.id) || [];
+          return boardFallbackImages.length > 0
+            ? { ...board, images: boardFallbackImages, updatedAt: Date.now() }
+            : board;
+        });
         const nextActiveBoard = boardsWithFallback.find((board) => board.id === activeBoardBeforeFallback.id) || boardsWithFallback[0];
         setCanvasBoards(boardsWithFallback);
         setActiveCanvasBoardId(nextActiveBoard.id);
@@ -1760,7 +1770,9 @@ function HomeInner() {
   }, [updateConversationMessages]);
 
   const appendCanvasImagesToBoard = useCallback((boardId, items) => {
-    const nextItems = Array.isArray(items) ? items.filter(Boolean) : [];
+    const nextItems = Array.isArray(items)
+      ? items.filter(Boolean).map((item) => ({ ...item, canvasBoardId: item.canvasBoardId || boardId }))
+      : [];
     if (!boardId || nextItems.length === 0) return;
     if (activeCanvasBoardIdRef.current === boardId) {
       canvasHistory.push((prev) => [...prev, ...nextItems]);
@@ -3078,7 +3090,7 @@ function HomeInner() {
       reader.onload = (e) => {
         const dataUrl = e.target.result;
         const id = `drop-${Date.now()}-${i}`;
-        const newImg = { id, image_url: dataUrl, prompt: file.name };
+        const newImg = { id, image_url: dataUrl, prompt: file.name, canvasBoardId: activeCanvasBoardId };
         canvasHistory.push((prev) => [...prev, newImg]);
         void uploadMediaSourceToCloudAsset(dataUrl, file.name, "canvas-upload")
           .then((url) => {
@@ -3093,7 +3105,7 @@ function HomeInner() {
       reader.readAsDataURL(file);
     });
     toast(`已添加 ${files.length} 张图片到画布`, "success");
-  }, [canvasHistory, toast]);
+  }, [activeCanvasBoardId, canvasHistory, toast]);
 
   const handleDropGeneratedImage = useCallback((item, dropX, dropY) => {
     if (!item?.url) return;
@@ -3103,10 +3115,11 @@ function HomeInner() {
       image_url: item.url,
       media_type: mediaType,
       prompt: item.prompt || (mediaType === "video" ? "拖入视频" : "拖入图片"),
+      canvasBoardId: activeCanvasBoardId,
     };
     canvasHistory.push((prev) => [...prev, newImg]);
     toast("已添加到画布", "success", 1200);
-  }, [canvasHistory, toast]);
+  }, [activeCanvasBoardId, canvasHistory, toast]);
 
   /** 画布内复制后粘贴（Ctrl/Cmd+V），或与系统剪贴板图片合并 */
   const handlePasteCanvasImages = useCallback(
@@ -3117,6 +3130,7 @@ function HomeInner() {
         id: `paste-${ts}-${i}`,
         image_url: it.image_url,
         prompt: (it.prompt && String(it.prompt).trim()) || "粘贴",
+        canvasBoardId: activeCanvasBoardId,
       }));
       canvasHistory.push((prev) => [...prev, ...nextItems]);
       nextItems.forEach((item) => {
@@ -3133,7 +3147,7 @@ function HomeInner() {
       });
       toast(`已粘贴 ${items.length} 张图片`, "success", 1500);
     },
-    [canvasHistory, toast]
+    [activeCanvasBoardId, canvasHistory, toast]
   );
 
   const handleRetry = useCallback((msg) => {
@@ -3305,23 +3319,28 @@ function HomeInner() {
   ]);
 
   const handleRenameCanvasBoard = useCallback((boardId, title) => {
+    const targetBoard = canvasBoards.find((board) => board.id === boardId);
+    if (isDefaultCanvasBoard(targetBoard)) {
+      toast("默认画布不能重命名", "info", 1500);
+      return;
+    }
     const nextTitle = String(title || "").trim();
     if (!nextTitle) return;
     setCanvasBoards((prev) => prev.map((board) => (
       board.id === boardId ? { ...board, title: nextTitle, updatedAt: Date.now() } : board
     )));
-  }, []);
+  }, [canvasBoards, toast]);
 
   const handleDeleteCanvasBoard = useCallback((boardId) => {
     if (isNavigationBusy) {
       toast("生成过程中暂时不能删除画布", "info", 1500);
       return;
     }
-    if (canvasBoards.length <= 1) {
+    const boardToDelete = canvasBoards.find((board) => board.id === boardId);
+    if (canvasBoards.length <= 1 || isDefaultCanvasBoard(boardToDelete)) {
       toast("默认画布不能删除", "info", 1500);
       return;
     }
-    const boardToDelete = canvasBoards.find((board) => board.id === boardId);
     recordCloudDeletions({
       canvasBoardIds: boardId,
       canvasImageIds: (boardToDelete?.images || []).map((item) => item?.id),
@@ -3420,9 +3439,13 @@ function HomeInner() {
 
   const projectBoards = canvasBoards;
   const startProjectRename = useCallback((board) => {
+    if (isDefaultCanvasBoard(board)) {
+      toast("默认画布不能重命名", "info", 1500);
+      return;
+    }
     setProjectRenamingBoardId(board?.id || "");
     setProjectRenamingTitle(board?.title || "默认画布");
-  }, []);
+  }, [toast]);
   const cancelProjectRename = useCallback(() => {
     setProjectRenamingBoardId("");
     setProjectRenamingTitle("");
@@ -3480,7 +3503,8 @@ function HomeInner() {
   const contextProjectBoard = projectContextMenu
     ? canvasBoards.find((board) => board.id === projectContextMenu.boardId)
     : null;
-  const canDeleteContextProjectBoard = Boolean(contextProjectBoard) && canvasBoards.length > 1;
+  const canRenameContextProjectBoard = Boolean(contextProjectBoard) && !isDefaultCanvasBoard(contextProjectBoard);
+  const canDeleteContextProjectBoard = canRenameContextProjectBoard && canvasBoards.length > 1;
   const hasOtherBoardTaskNotice = Object.entries(canvasBoardTaskNotices).some(([boardId, notice]) => (
     boardId !== activeCanvasBoardId && (notice?.completed || notice?.failed)
   ));
@@ -3557,6 +3581,8 @@ function HomeInner() {
               ) : (
                 projectBoards.map((board) => {
                   const isActive = board.id === activeCanvasBoardId;
+                  const isDefaultBoard = isDefaultCanvasBoard(board);
+                  const canRenameBoard = !isDefaultBoard;
                   const isRenaming = projectRenamingBoardId === board.id;
                   const isDragging = draggingProjectBoardId === board.id;
                   const generatingCount = generatingCountByBoard[board.id] || 0;
@@ -3588,6 +3614,7 @@ function HomeInner() {
                       }}
                       onContextMenu={(event) => {
                         event.preventDefault();
+                        if (isDefaultBoard) return;
                         setProjectContextMenu({
                           boardId: board.id,
                           x: event.clientX,
@@ -3632,8 +3659,10 @@ function HomeInner() {
                         <button
                           type="button"
                           onClick={() => handleSelectCanvasBoard(board.id)}
-                          onDoubleClick={() => startProjectRename(board)}
-                          title="双击重命名"
+                          onDoubleClick={() => {
+                            if (canRenameBoard) startProjectRename(board);
+                          }}
+                          title={canRenameBoard ? "双击重命名" : "默认画布不能重命名"}
                           className="min-w-0 flex-1 cursor-move truncate text-left text-sm font-medium"
                         >
                           {board.title || "默认画布"}
@@ -3695,18 +3724,20 @@ function HomeInner() {
                 style={{ left: projectContextMenu.x, top: projectContextMenu.y }}
                 onPointerDown={(event) => event.stopPropagation()}
               >
-                <button
-                  type="button"
-                  onClick={() => {
-                    setProjectContextMenu(null);
-                    startProjectRename(contextProjectBoard);
-                  }}
-                  className={`block w-full px-3 py-2 text-left text-sm transition-colors ${
-                    theme === "light" ? "hover:bg-black/[0.05]" : "hover:bg-white/[0.06]"
-                  }`}
-                >
-                  重命名
-                </button>
+                {canRenameContextProjectBoard && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setProjectContextMenu(null);
+                      startProjectRename(contextProjectBoard);
+                    }}
+                    className={`block w-full px-3 py-2 text-left text-sm transition-colors ${
+                      theme === "light" ? "hover:bg-black/[0.05]" : "hover:bg-white/[0.06]"
+                    }`}
+                  >
+                    重命名
+                  </button>
+                )}
                 {canDeleteContextProjectBoard && (
                   <button
                     type="button"
