@@ -1,7 +1,11 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { CLOUD_STATE_DELETIONS_CHANGED_EVENT, CLOUD_STATE_DELETIONS_KEY } from "@/lib/cloudStateDeletions";
+import {
+  CLOUD_STATE_DELETIONS_CHANGED_EVENT,
+  CLOUD_STATE_DELETIONS_KEY,
+  normalizeCloudStateDeletions,
+} from "@/lib/cloudStateDeletions";
 
 const DEFAULT_INTERVAL_MS = 6000;
 const LOCAL_UPDATED_AT_KEY = "easyai-cloud-state-local-updated-at";
@@ -55,6 +59,119 @@ function installCloudStateStoragePatch() {
 
 function getValueSignature(value = "") {
   return `${value.length}:${value.slice(0, 64)}`;
+}
+
+function safeJsonParse(value, fallback) {
+  try {
+    const parsed = JSON.parse(value);
+    return parsed ?? fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function getItemId(item) {
+  return item?.id ? String(item.id) : "";
+}
+
+function hasDeletedId(deletions = {}, scope = "", id = "") {
+  return Boolean(scope && id && deletions?.[scope]?.[String(id)]);
+}
+
+function hasDeletedUrl(deletions = {}, url = "") {
+  return Boolean(url && deletions?.imageUrls?.[String(url)]);
+}
+
+function filterDeletedMediaUrls(urls = [], deletions = {}) {
+  if (!Array.isArray(urls)) return [];
+  return urls.filter((url) => url && !hasDeletedUrl(deletions, url));
+}
+
+function filterDeletedCanvasItems(items = [], deletions = {}) {
+  if (!Array.isArray(items)) return [];
+  return items.filter((item) => {
+    const id = getItemId(item);
+    const url = item?.image_url || item?.url || "";
+    return !hasDeletedId(deletions, "canvasImageIds", id) && !hasDeletedUrl(deletions, url);
+  });
+}
+
+function filterDeletedMessages(messages = [], deletions = {}) {
+  if (!Array.isArray(messages)) return [];
+  return messages
+    .filter((message) => !hasDeletedId(deletions, "messageIds", getItemId(message)) && !hasDeletedId(deletions, "chatMessageIds", getItemId(message)))
+    .map((message) => ({
+      ...message,
+      urls: filterDeletedMediaUrls(message.urls || [], deletions),
+      images: filterDeletedMediaUrls(message.images || [], deletions),
+      refImages: filterDeletedMediaUrls(message.refImages || [], deletions),
+      tasks: Array.isArray(message.tasks)
+        ? message.tasks.filter((task) => !hasDeletedId(deletions, "taskIds", getItemId(task)) && !hasDeletedUrl(deletions, task?.url))
+        : message.tasks,
+    }));
+}
+
+function filterDeletedConversations(conversations = [], deletions = {}) {
+  if (!Array.isArray(conversations)) return [];
+  return conversations
+    .filter((conversation) => !hasDeletedId(deletions, "conversationIds", getItemId(conversation)))
+    .map((conversation) => ({
+      ...conversation,
+      messages: filterDeletedMessages(conversation.messages || [], deletions),
+    }));
+}
+
+function filterDeletedCanvasBoards(boards = [], deletions = {}) {
+  if (!Array.isArray(boards)) return [];
+  return boards
+    .filter((board) => !hasDeletedId(deletions, "canvasBoardIds", getItemId(board)))
+    .map((board) => ({
+      ...board,
+      images: filterDeletedCanvasItems(board.images || [], deletions),
+      texts: Array.isArray(board.texts)
+        ? board.texts.filter((item) => !hasDeletedId(deletions, "canvasTextIds", getItemId(item)))
+        : board.texts,
+      shapes: Array.isArray(board.shapes)
+        ? board.shapes.filter((item) => !hasDeletedId(deletions, "canvasShapeIds", getItemId(item)))
+        : board.shapes,
+    }));
+}
+
+function applyLocalDeletionsToStateValue(key, value = "", deletions = {}) {
+  if (!value || key === CLOUD_STATE_DELETIONS_KEY) return value;
+  if (key === "lovart-canvas-boards") {
+    const parsed = safeJsonParse(value, []);
+    return Array.isArray(parsed) ? JSON.stringify(filterDeletedCanvasBoards(parsed, deletions)) : value;
+  }
+  if (key === "lovart-canvas-images") {
+    const parsed = safeJsonParse(value, []);
+    return Array.isArray(parsed) ? JSON.stringify(filterDeletedCanvasItems(parsed, deletions)) : value;
+  }
+  if (key === "lovart-conversations") {
+    const parsed = safeJsonParse(value, []);
+    return Array.isArray(parsed) ? JSON.stringify(filterDeletedConversations(parsed, deletions)) : value;
+  }
+  if (key === "lovart-canvas-texts") {
+    const parsed = safeJsonParse(value, []);
+    return Array.isArray(parsed) ? JSON.stringify(parsed.filter((item) => !hasDeletedId(deletions, "canvasTextIds", getItemId(item)))) : value;
+  }
+  if (key === "lovart-canvas-shapes") {
+    const parsed = safeJsonParse(value, []);
+    return Array.isArray(parsed) ? JSON.stringify(parsed.filter((item) => !hasDeletedId(deletions, "canvasShapeIds", getItemId(item)))) : value;
+  }
+  if (key === "lovart-chat-fullscreen-session") {
+    const parsed = safeJsonParse(value, null);
+    return parsed && typeof parsed === "object"
+      ? JSON.stringify({ ...parsed, messages: filterDeletedMessages(parsed.messages || [], deletions), refImages: filterDeletedMediaUrls(parsed.refImages || [], deletions) })
+      : value;
+  }
+  if (key === "lovart-chat-image-history") {
+    const parsed = safeJsonParse(value, []);
+    return Array.isArray(parsed)
+      ? JSON.stringify(parsed.map((item) => ({ ...item, urls: filterDeletedMediaUrls(item.urls || [], deletions) })).filter((item) => item.urls?.length > 0))
+      : value;
+  }
+  return value;
 }
 
 function readSnapshot(keys = []) {
@@ -155,10 +272,12 @@ export function useCloudLocalStorageSync(keys = [], options = {}) {
         const data = await res.json();
         const items = Array.isArray(data?.items) ? data.items : [];
         const localUpdatedAt = readLocalUpdatedAt();
+        const localDeletions = normalizeCloudStateDeletions(window.localStorage.getItem(CLOUD_STATE_DELETIONS_KEY));
         let localUpdatedAtChanged = false;
 
         for (const item of items) {
           if (!keys.includes(item.key) || typeof item.value !== "string") continue;
+          const incomingValue = applyLocalDeletionsToStateValue(item.key, item.value, localDeletions);
           const localValue = window.localStorage.getItem(item.key);
           const cloudUpdatedAt = Number(item.clientUpdatedAt || 0);
           let localValueUpdatedAt = Number(localUpdatedAt[item.key] || 0);
@@ -168,9 +287,9 @@ export function useCloudLocalStorageSync(keys = [], options = {}) {
             localUpdatedAtChanged = true;
           }
           const cloudIsNewer = cloudUpdatedAt > localValueUpdatedAt
-            || (cloudUpdatedAt === localValueUpdatedAt && localValue !== item.value);
-          if (item.value && (localValue === null || (cloudIsNewer && localValue !== item.value))) {
-            window.localStorage.setItem(item.key, item.value);
+            || (cloudUpdatedAt === localValueUpdatedAt && localValue !== incomingValue);
+          if (incomingValue && (localValue === null || (cloudIsNewer && localValue !== incomingValue))) {
+            window.localStorage.setItem(item.key, incomingValue);
             localUpdatedAt[item.key] = cloudUpdatedAt || Date.now();
             localUpdatedAtChanged = true;
           }
