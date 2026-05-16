@@ -1,9 +1,11 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import { CLOUD_STATE_DELETIONS_CHANGED_EVENT, CLOUD_STATE_DELETIONS_KEY } from "@/lib/cloudStateDeletions";
 
 const DEFAULT_INTERVAL_MS = 6000;
 const LOCAL_UPDATED_AT_KEY = "easyai-cloud-state-local-updated-at";
+const KEEPALIVE_BODY_LIMIT = 60_000;
 
 function readLocalUpdatedAt() {
   try {
@@ -51,12 +53,14 @@ function snapshotSignature(items = []) {
   return items.map((item) => `${item.key}:${getValueSignature(item.value)}`).join("|");
 }
 
-async function saveSnapshot(items = []) {
+async function saveSnapshot(items = [], options = {}) {
   if (items.length === 0) return;
+  const body = JSON.stringify({ items });
   await fetch("/api/cloud-state", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ items }),
+    body,
+    keepalive: Boolean(options.keepalive) && body.length <= KEEPALIVE_BODY_LIMIT,
   });
 }
 
@@ -81,6 +85,25 @@ export function useCloudLocalStorageSync(keys = [], options = {}) {
       const updatedAt = readLocalUpdatedAt();
       updatedAt[key] = Date.now();
       writeLocalUpdatedAt(updatedAt);
+    }
+
+    function getDeletionItem() {
+      if (!keys.includes(CLOUD_STATE_DELETIONS_KEY)) return null;
+      const value = window.localStorage.getItem(CLOUD_STATE_DELETIONS_KEY);
+      if (!value) return null;
+      markLocalValueIfNeeded(CLOUD_STATE_DELETIONS_KEY, value);
+      const updatedAt = readLocalUpdatedAt();
+      return {
+        key: CLOUD_STATE_DELETIONS_KEY,
+        value,
+        clientUpdatedAt: Number(updatedAt[CLOUD_STATE_DELETIONS_KEY] || Date.now()),
+      };
+    }
+
+    function syncDeletionMarkerNow(keepalive = false) {
+      const deletionItem = getDeletionItem();
+      if (!deletionItem) return;
+      void saveSnapshot([deletionItem], { keepalive }).catch(() => {});
     }
 
     function scheduleSyncSoon() {
@@ -134,14 +157,35 @@ export function useCloudLocalStorageSync(keys = [], options = {}) {
       }
     }
 
-    function syncNow() {
+    function syncNow(options = {}) {
       if (cancelled || !restoredRef.current) return;
+      if (options.keepalive || options.includeDeletionFirst) {
+        syncDeletionMarkerNow(Boolean(options.keepalive));
+      }
       keys.forEach((key) => markLocalValueIfNeeded(key, window.localStorage.getItem(key)));
       const items = readSnapshot(keys);
       const signature = snapshotSignature(items);
       if (!signature || signature === lastSignatureRef.current) return;
       lastSignatureRef.current = signature;
-      void saveSnapshot(items).catch(() => {});
+      void saveSnapshot(items, { keepalive: Boolean(options.keepalive) }).catch(() => {});
+    }
+
+    function handleDeletionMarkerChanged() {
+      if (!restoredRef.current) return;
+      syncDeletionMarkerNow(false);
+      scheduleSyncSoon();
+    }
+
+    function handlePageLeaving() {
+      syncNow({ keepalive: true, includeDeletionFirst: true });
+    }
+
+    function handleVisibilityChange() {
+      if (document.visibilityState === "hidden") {
+        handlePageLeaving();
+        return;
+      }
+      scheduleSyncSoon();
     }
 
     void restoreCloudState().then(() => {
@@ -150,16 +194,20 @@ export function useCloudLocalStorageSync(keys = [], options = {}) {
     });
 
     const timer = window.setInterval(syncNow, intervalMs);
-    window.addEventListener("beforeunload", syncNow);
-    window.addEventListener("visibilitychange", syncNow);
+    window.addEventListener("beforeunload", handlePageLeaving);
+    window.addEventListener("pagehide", handlePageLeaving);
+    window.addEventListener("visibilitychange", handleVisibilityChange);
     window.addEventListener("focus", scheduleSyncSoon);
+    window.addEventListener(CLOUD_STATE_DELETIONS_CHANGED_EVENT, handleDeletionMarkerChanged);
     return () => {
       cancelled = true;
       if (syncTimer) window.clearTimeout(syncTimer);
       window.clearInterval(timer);
-      window.removeEventListener("beforeunload", syncNow);
-      window.removeEventListener("visibilitychange", syncNow);
+      window.removeEventListener("beforeunload", handlePageLeaving);
+      window.removeEventListener("pagehide", handlePageLeaving);
+      window.removeEventListener("visibilitychange", handleVisibilityChange);
       window.removeEventListener("focus", scheduleSyncSoon);
+      window.removeEventListener(CLOUD_STATE_DELETIONS_CHANGED_EVENT, handleDeletionMarkerChanged);
     };
   }, [enabled, intervalMs, keys]);
 }

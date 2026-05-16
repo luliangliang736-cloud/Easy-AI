@@ -1,4 +1,5 @@
 export const CLOUD_STATE_DELETIONS_KEY = "easyai-cloud-state-deletions";
+export const CLOUD_STATE_DELETIONS_CHANGED_EVENT = "easyai-cloud-state-deletions-changed";
 
 const MAX_DELETION_RECORDS_PER_SCOPE = 1000;
 const MAX_DELETION_KEY_CHARS = 512;
@@ -81,6 +82,7 @@ export function recordCloudDeletions(records = {}) {
   }
   try {
     window.localStorage.setItem(CLOUD_STATE_DELETIONS_KEY, JSON.stringify(normalizeCloudStateDeletions(current)));
+    window.dispatchEvent(new CustomEvent(CLOUD_STATE_DELETIONS_CHANGED_EVENT));
   } catch {
     // Deletion records must never block the user's actual delete/copy/paste action.
   }
