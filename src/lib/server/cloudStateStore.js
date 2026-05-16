@@ -299,23 +299,41 @@ function mergeCanvasBoards(existingValue = "", incomingValue = "", deletions = {
     return JSON.stringify(filteredExisting.length > 0 ? filteredExisting : existing);
   }
 
-  const merged = mergeArrayById(
-    filterDeletedCanvasBoards(existing, deletions),
-    filterDeletedCanvasBoards(incoming, deletions),
-    (oldBoard, newBoard) => {
-    if (!oldBoard) return newBoard;
-    if (!newBoard) return oldBoard;
+  const existingBoards = filterDeletedCanvasBoards(existing, deletions);
+  const incomingBoards = filterDeletedCanvasBoards(incoming, deletions);
+  const byId = new Map();
+  for (const board of existingBoards) {
+    const id = getItemId(board);
+    if (id) byId.set(id, board);
+  }
+  for (const newBoard of incomingBoards) {
+    const id = getItemId(newBoard);
+    if (!id) continue;
+    const oldBoard = byId.get(id);
+    if (!oldBoard) {
+      byId.set(id, newBoard);
+      continue;
+    }
     const newer = getUpdatedAt(newBoard) >= getUpdatedAt(oldBoard) ? newBoard : oldBoard;
     const older = newer === newBoard ? oldBoard : newBoard;
-    return {
+    byId.set(id, {
       ...older,
       ...newer,
       images: filterDeletedCanvasItems(mergeArrayById(oldBoard.images || [], newBoard.images || []), deletions).slice(-100),
       texts: mergeArrayById(oldBoard.texts || [], newBoard.texts || []).slice(-100),
       shapes: mergeArrayById(oldBoard.shapes || [], newBoard.shapes || []).slice(-200),
       updatedAt: Math.max(getUpdatedAt(oldBoard), getUpdatedAt(newBoard), Date.now()),
-    };
-  });
+    });
+  }
+
+  // The array order is the project-list order chosen by the user. Incoming
+  // snapshots carry the latest explicit order, while existing-only boards are
+  // appended for multi-device merges.
+  const incomingOrder = incomingBoards.map(getItemId).filter(Boolean);
+  const existingOnlyOrder = existingBoards
+    .map(getItemId)
+    .filter((id) => id && !incomingOrder.includes(id));
+  const merged = [...incomingOrder, ...existingOnlyOrder].map((id) => byId.get(id)).filter(Boolean);
 
   return JSON.stringify(filterDeletedCanvasBoards(merged, deletions).slice(-30));
 }

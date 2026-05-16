@@ -210,19 +210,37 @@ function mergeCanvasBoardsForRestore(localValue = "", incomingValue = "") {
   if (localBoards.length === 0) return incomingValue;
   if (incomingBoards.length === 0) return localValue;
 
-  return JSON.stringify(mergeObjectsById(localBoards, incomingBoards, (existing, next) => {
-    if (!existing) return next;
-    if (!next) return existing;
-    const newer = getUpdatedAt(next) >= getUpdatedAt(existing) ? next : existing;
-    const older = newer === next ? existing : next;
-    return {
+  const byId = new Map();
+  for (const board of incomingBoards) {
+    const id = getItemId(board);
+    if (id) byId.set(id, board);
+  }
+  for (const board of localBoards) {
+    const id = getItemId(board);
+    if (!id) continue;
+    const incomingBoard = byId.get(id);
+    if (!incomingBoard) {
+      byId.set(id, board);
+      continue;
+    }
+    const newer = getUpdatedAt(board) >= getUpdatedAt(incomingBoard) ? board : incomingBoard;
+    const older = newer === board ? incomingBoard : board;
+    byId.set(id, {
       ...older,
       ...newer,
       images: mergeObjectsById(older.images || [], newer.images || []),
       texts: mergeObjectsById(older.texts || [], newer.texts || []),
       shapes: mergeObjectsById(older.shapes || [], newer.shapes || []),
-    };
-  }));
+    });
+  }
+
+  // Board order is user intent. Preserve the browser's saved local order during
+  // restore, and only append cloud boards that this browser has not seen yet.
+  const localOrder = localBoards.map(getItemId).filter(Boolean);
+  const incomingOnlyOrder = incomingBoards
+    .map(getItemId)
+    .filter((id) => id && !localOrder.includes(id));
+  return JSON.stringify([...localOrder, ...incomingOnlyOrder].map((id) => byId.get(id)).filter(Boolean));
 }
 
 function mergeCanvasImagesForRestore(localValue = "", incomingValue = "") {
