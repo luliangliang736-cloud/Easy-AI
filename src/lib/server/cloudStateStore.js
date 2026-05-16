@@ -16,9 +16,6 @@ export const CLOUD_STATE_KEYS = [
   "lovart-active-conversation",
   "lovart-canvas-boards",
   "lovart-active-canvas-board",
-  "lovart-canvas-images",
-  "lovart-canvas-texts",
-  "lovart-canvas-shapes",
   "lovart-canvas-ref-images",
   CLOUD_STATE_DELETIONS_KEY,
 ];
@@ -27,7 +24,6 @@ const allowedStateKeys = new Set(CLOUD_STATE_KEYS);
 const MERGEABLE_STATE_KEYS = new Set([
   "lovart-conversations",
   "lovart-canvas-boards",
-  "lovart-canvas-images",
   "lovart-canvas-ref-images",
   CLOUD_STATE_DELETIONS_KEY,
 ]);

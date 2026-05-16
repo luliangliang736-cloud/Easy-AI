@@ -12,7 +12,7 @@ import { useHistory } from "@/lib/useHistory";
 import { useTheme } from "@/lib/useTheme";
 import { useAuthSessionGuard } from "@/lib/useAuthSessionGuard";
 import { useCloudLocalStorageSync } from "@/lib/useCloudLocalStorageSync";
-import { CLOUD_STATE_DELETIONS_KEY, recordCloudDeletions } from "@/lib/cloudStateDeletions";
+import { CLOUD_STATE_DELETIONS_KEY, normalizeCloudStateDeletions, recordCloudDeletions } from "@/lib/cloudStateDeletions";
 import { MAX_GEN_COUNT } from "@/lib/genLimits";
 import { Layers, Loader2, Plus } from "lucide-react";
 
@@ -24,9 +24,6 @@ const CANVAS_CLOUD_STATE_KEYS = [
   "lovart-active-conversation",
   "lovart-canvas-boards",
   "lovart-active-canvas-board",
-  "lovart-canvas-images",
-  "lovart-canvas-texts",
-  "lovart-canvas-shapes",
 ];
 
 /**
@@ -558,6 +555,7 @@ const DEFAULT_COMPOSER_MODE = "agent";
 const DEFAULT_ENTRY_MODE = "agent";
 const AGENT_DEFAULT_MODEL = "gemini-3.1-flash-image-preview";
 const AGENT_DEFAULT_SERVICE_TIER = "priority";
+const MAX_REF_IMAGES = 14;
 
 function createConversation(overrides = {}) {
   const now = Date.now();
@@ -808,10 +806,13 @@ function restoreInterruptedMessages(messages) {
 }
 
 function sanitizeConversationsForStorage(conversations) {
-  return conversations.slice(0, 50).map((conversation) => ({
-    ...conversation,
-    messages: sanitizeMessagesForStorage(conversation.messages || []),
-  }));
+  return conversations
+    .map((conversation) => ({
+      ...conversation,
+      messages: sanitizeMessagesForStorage(conversation.messages || []),
+    }))
+    .filter((conversation) => (conversation.messages || []).length > 0)
+    .slice(0, 50);
 }
 
 function safeParseStorageArray(value) {
@@ -847,10 +848,50 @@ function sanitizeCanvasBoardsForStorage(boards) {
     ...board,
     title: board?.title || DEFAULT_CANVAS_BOARD_TITLE,
     images: sanitizeCanvasImagesForStorage(board?.images || []).slice(0, 100),
-    refImages: sanitizeStoredImageList(board?.refImages || []).slice(0, MAX_IMAGES),
+    refImages: sanitizeStoredImageList(board?.refImages || []).slice(0, MAX_REF_IMAGES),
     texts: Array.isArray(board?.texts) ? board.texts.slice(0, 100) : [],
     shapes: Array.isArray(board?.shapes) ? board.shapes.slice(0, 200) : [],
   }));
+}
+
+function persistCanvasBoardsToLocalStorage(boards, activeBoardId = "") {
+  if (typeof window === "undefined") return;
+  const boardsForStorage = sanitizeCanvasBoardsForStorage(boards);
+  if (boardsForStorage.length === 0) return;
+  const writeBoards = (nextBoards) => {
+    window.localStorage.setItem("lovart-canvas-boards", JSON.stringify(nextBoards));
+    if (activeBoardId) {
+      window.localStorage.setItem("lovart-active-canvas-board", activeBoardId);
+    }
+  };
+  const removeLegacySingleCanvasState = () => {
+    window.localStorage.removeItem("lovart-canvas-images");
+    window.localStorage.removeItem("lovart-canvas-texts");
+    window.localStorage.removeItem("lovart-canvas-shapes");
+    window.localStorage.removeItem(CANVAS_REF_IMAGES_STORAGE_KEY);
+  };
+  try {
+    removeLegacySingleCanvasState();
+    writeBoards(boardsForStorage);
+  } catch (error) {
+    try {
+      removeLegacySingleCanvasState();
+      writeBoards(boardsForStorage);
+    } catch (retryError) {
+      try {
+        // Last resort: keep the project list itself even if image/history payloads hit quota.
+        writeBoards(boardsForStorage.map((board) => ({
+          ...board,
+          images: [],
+          refImages: [],
+          texts: [],
+          shapes: [],
+        })));
+      } catch {
+        console.warn("[CanvasBoards] Failed to persist project list", retryError || error);
+      }
+    }
+  }
 }
 
 function collectMessageImageUrls(message) {
@@ -862,6 +903,64 @@ function collectMessageImageUrls(message) {
     ...(Array.isArray(message.tasks) ? message.tasks.map((task) => task?.url) : []),
   ];
   return urls.filter(Boolean);
+}
+
+function hasDeletedId(deletions = {}, scope = "", id = "") {
+  return Boolean(scope && id && deletions?.[scope]?.[String(id)]);
+}
+
+function hasDeletedUrl(deletions = {}, url = "") {
+  return Boolean(url && deletions?.imageUrls?.[String(url)]);
+}
+
+function filterDeletedCanvasImages(items = [], deletions = {}) {
+  if (!Array.isArray(items)) return [];
+  return items.filter((item) => {
+    const id = item?.id ? String(item.id) : "";
+    const url = item?.image_url || item?.url || "";
+    return !hasDeletedId(deletions, "canvasImageIds", id) && !hasDeletedUrl(deletions, url);
+  });
+}
+
+function filterDeletedCanvasBoardsForRestore(boards = [], deletions = {}) {
+  if (!Array.isArray(boards)) return [];
+  return boards
+    .filter((board) => !hasDeletedId(deletions, "canvasBoardIds", board?.id))
+    .map((board) => ({
+      ...board,
+      images: filterDeletedCanvasImages(board.images || [], deletions),
+      texts: Array.isArray(board.texts)
+        ? board.texts.filter((item) => !hasDeletedId(deletions, "canvasTextIds", item?.id))
+        : board.texts,
+      shapes: Array.isArray(board.shapes)
+        ? board.shapes.filter((item) => !hasDeletedId(deletions, "canvasShapeIds", item?.id))
+        : board.shapes,
+    }));
+}
+
+function filterDeletedMessagesForRestore(messages = [], deletions = {}) {
+  if (!Array.isArray(messages)) return [];
+  return messages
+    .filter((message) => !hasDeletedId(deletions, "messageIds", message?.id) && !hasDeletedId(deletions, "chatMessageIds", message?.id))
+    .map((message) => ({
+      ...message,
+      urls: Array.isArray(message.urls) ? message.urls.filter((url) => !hasDeletedUrl(deletions, url)) : message.urls,
+      images: Array.isArray(message.images) ? message.images.filter((url) => !hasDeletedUrl(deletions, url)) : message.images,
+      refImages: Array.isArray(message.refImages) ? message.refImages.filter((url) => !hasDeletedUrl(deletions, url)) : message.refImages,
+      tasks: Array.isArray(message.tasks)
+        ? message.tasks.filter((task) => !hasDeletedId(deletions, "taskIds", task?.id) && !hasDeletedUrl(deletions, task?.url))
+        : message.tasks,
+    }));
+}
+
+function filterDeletedConversationsForRestore(conversations = [], deletions = {}) {
+  if (!Array.isArray(conversations)) return [];
+  return conversations
+    .filter((conversation) => !hasDeletedId(deletions, "conversationIds", conversation?.id))
+    .map((conversation) => ({
+      ...conversation,
+      messages: filterDeletedMessagesForRestore(conversation.messages || [], deletions),
+    }));
 }
 
 function normalizeCanvasBoards(boards) {
@@ -1215,6 +1314,11 @@ function HomeInner() {
   useCloudLocalStorageSync(CANVAS_CLOUD_STATE_KEYS, { overwriteOnFirstRestore: true, intervalMs: 2000 });
   const activeCanvasBoard = canvasBoards.find((board) => board.id === activeCanvasBoardId) || canvasBoards[0];
   const activeCanvasBoardIdRef = useRef(activeCanvasBoardId);
+  const canvasBoardsRef = useRef(canvasBoards);
+  const canvasImagesRef = useRef(canvasImages);
+  const refImagesRef = useRef(refImages);
+  const canvasTextsRef = useRef(canvasTexts);
+  const canvasShapesRef = useRef(canvasShapes);
   const activeCanvasConversations = conversations.filter((conversation) =>
     conversationBelongsToCanvasBoard(conversation, activeCanvasBoardId, canvasBoards.length > 1)
   );
@@ -1262,6 +1366,14 @@ function HomeInner() {
   }, [activeCanvasBoardId]);
 
   useEffect(() => {
+    canvasBoardsRef.current = canvasBoards;
+    canvasImagesRef.current = canvasImages;
+    refImagesRef.current = refImages;
+    canvasTextsRef.current = canvasTexts;
+    canvasShapesRef.current = canvasShapes;
+  }, [canvasBoards, canvasImages, refImages, canvasTexts, canvasShapes]);
+
+  useEffect(() => {
     if (!activeCanvasBoardId) return;
     setCanvasBoardTaskNotices((prev) => {
       if (!prev[activeCanvasBoardId]) return prev;
@@ -1303,8 +1415,9 @@ function HomeInner() {
       const savedShapes = localStorage.getItem("lovart-canvas-shapes");
       const savedBoards = localStorage.getItem("lovart-canvas-boards");
       const savedActiveBoardId = localStorage.getItem("lovart-active-canvas-board");
+      const localDeletions = normalizeCloudStateDeletions(localStorage.getItem(CLOUD_STATE_DELETIONS_KEY));
       localStorage.removeItem(CANVAS_REF_IMAGES_STORAGE_KEY);
-      const parsedConversations = safeParseStorageArray(saved);
+      const parsedConversations = filterDeletedConversationsForRestore(safeParseStorageArray(saved), localDeletions);
       if (parsedConversations?.length > 0) {
         setConversations(parsedConversations.map((conversation) => ({
           ...conversation,
@@ -1317,35 +1430,17 @@ function HomeInner() {
         );
       }
 
-      const parsedImages = safeParseStorageArray(savedImages);
-      if (parsedImages) canvasHistory.setState(normalizeCanvasImageItems(parsedImages, "legacy-canvas"));
+      const parsedImages = filterDeletedCanvasImages(safeParseStorageArray(savedImages), localDeletions);
+      const parsedTexts = (safeParseStorageArray(savedTexts) || [])
+        .filter((item) => !hasDeletedId(localDeletions, "canvasTextIds", item?.id));
+      const parsedShapes = (safeParseStorageArray(savedShapes) || [])
+        .filter((item) => !hasDeletedId(localDeletions, "canvasShapeIds", item?.id));
 
-      const parsedTexts = safeParseStorageArray(savedTexts);
-      if (parsedTexts) canvasTextsHistory.setState(parsedTexts);
-
-      const parsedShapes = safeParseStorageArray(savedShapes);
-      if (parsedShapes) canvasShapesHistory.setState(parsedShapes);
-
-      const parsedBoards = normalizeCanvasBoards(safeParseStorageArray(savedBoards));
+      const parsedBoards = normalizeCanvasBoards(filterDeletedCanvasBoardsForRestore(safeParseStorageArray(savedBoards), localDeletions));
       if (parsedBoards.length > 0) {
         const activeBoardBeforeFallback = parsedBoards.find((board) => board.id === savedActiveBoardId) || parsedBoards[0];
-        const fallbackImages = normalizeCanvasImageItems(parsedImages || [], "legacy-board-fallback");
-        const fallbackImagesByBoard = fallbackImages.reduce((acc, image) => {
-          const imageBoardId = image.canvasBoardId || image.boardId || activeBoardBeforeFallback.id;
-          if (!imageBoardId) return acc;
-          if (!acc.has(imageBoardId)) acc.set(imageBoardId, []);
-          acc.get(imageBoardId).push({ ...image, canvasBoardId: imageBoardId });
-          return acc;
-        }, new Map());
-        const boardsWithFallback = parsedBoards.map((board) => {
-          if ((board.images || []).length > 0) return board;
-          const boardFallbackImages = fallbackImagesByBoard.get(board.id) || [];
-          return boardFallbackImages.length > 0
-            ? { ...board, images: boardFallbackImages, updatedAt: Date.now() }
-            : board;
-        });
-        const nextActiveBoard = boardsWithFallback.find((board) => board.id === activeBoardBeforeFallback.id) || boardsWithFallback[0];
-        setCanvasBoards(boardsWithFallback);
+        const nextActiveBoard = parsedBoards.find((board) => board.id === activeBoardBeforeFallback.id) || parsedBoards[0];
+        setCanvasBoards(parsedBoards);
         setActiveCanvasBoardId(nextActiveBoard.id);
         canvasHistory.setState(nextActiveBoard.images || []);
         setRefImages(nextActiveBoard.refImages || []);
@@ -1651,53 +1746,55 @@ function HomeInner() {
 
   useEffect(() => {
     if (!persistReady) return;
-    try {
-      const boardsForStorage = sanitizeCanvasBoardsForStorage(canvasBoards.map((board) => (
-        board.id === activeCanvasBoardId
-          ? {
-              ...board,
-              images: canvasImages,
-              refImages: Array.isArray(refImages) ? refImages.filter(Boolean) : [],
-              texts: canvasTexts,
-              shapes: canvasShapes,
-            }
-          : board
-      )));
-      if (boardsForStorage.length === 0) return;
-      localStorage.setItem("lovart-canvas-boards", JSON.stringify(boardsForStorage));
-      localStorage.setItem("lovart-active-canvas-board", activeCanvasBoardId || "");
-    } catch {
-      // 多画布同样遵循原有策略：写入失败时保留上一次可用数据。
-    }
+    persistCanvasBoardsToLocalStorage(canvasBoards.map((board) => (
+      board.id === activeCanvasBoardId
+        ? {
+            ...board,
+            images: canvasImages,
+            refImages: Array.isArray(refImages) ? refImages.filter(Boolean) : [],
+            texts: canvasTexts,
+            shapes: canvasShapes,
+          }
+        : board
+    )), activeCanvasBoardId || "");
   }, [activeCanvasBoardId, canvasBoards, canvasImages, refImages, canvasTexts, canvasShapes, persistReady]);
 
-  // Persist canvas images
   useEffect(() => {
-    if (!persistReady) return;
-    try {
-      localStorage.setItem("lovart-canvas-images", JSON.stringify(sanitizeCanvasImagesForStorage(canvasImages).slice(0, 100)));
-    } catch {
-      // 保留上一次可用画布，避免刷新后整页变空。
-    }
-  }, [canvasImages, persistReady]);
+    if (!persistReady) return undefined;
+    const flushCanvasBoards = () => {
+      const currentActiveBoardId = activeCanvasBoardIdRef.current;
+      persistCanvasBoardsToLocalStorage(canvasBoardsRef.current.map((board) => (
+        board.id === currentActiveBoardId
+          ? {
+              ...board,
+              images: canvasImagesRef.current,
+              refImages: Array.isArray(refImagesRef.current) ? refImagesRef.current.filter(Boolean) : [],
+              texts: canvasTextsRef.current,
+              shapes: canvasShapesRef.current,
+            }
+          : board
+      )), currentActiveBoardId || "");
+    };
+    window.addEventListener("beforeunload", flushCanvasBoards);
+    window.addEventListener("pagehide", flushCanvasBoards);
+    document.addEventListener("visibilitychange", flushCanvasBoards);
+    return () => {
+      window.removeEventListener("beforeunload", flushCanvasBoards);
+      window.removeEventListener("pagehide", flushCanvasBoards);
+      document.removeEventListener("visibilitychange", flushCanvasBoards);
+    };
+  }, [persistReady]);
 
   useEffect(() => {
     if (!persistReady) return;
     try {
-      localStorage.setItem("lovart-canvas-texts", JSON.stringify(canvasTexts.slice(0, 100)));
+      localStorage.removeItem("lovart-canvas-images");
+      localStorage.removeItem("lovart-canvas-texts");
+      localStorage.removeItem("lovart-canvas-shapes");
     } catch {
-      // 保留上一次可用文本数据。
+      // Legacy single-canvas snapshots are best-effort cleanup only.
     }
-  }, [canvasTexts, persistReady]);
-
-  useEffect(() => {
-    if (!persistReady) return;
-    try {
-      localStorage.setItem("lovart-canvas-shapes", JSON.stringify(canvasShapes.slice(0, 200)));
-    } catch {
-      // 保留上一次可用形状数据。
-    }
-  }, [canvasShapes, persistReady]);
+  }, [persistReady]);
 
   const handleAddCanvasText = useCallback((item) => {
     canvasTextsHistory.push((prev) => [...prev, item]);
@@ -1774,40 +1871,54 @@ function HomeInner() {
       ? items.filter(Boolean).map((item) => ({ ...item, canvasBoardId: item.canvasBoardId || boardId }))
       : [];
     if (!boardId || nextItems.length === 0) return;
+    let activeBoardImages = null;
     if (activeCanvasBoardIdRef.current === boardId) {
-      canvasHistory.push((prev) => [...prev, ...nextItems]);
-      return;
+      const existingIds = new Set((canvasImagesRef.current || []).map((item) => item?.id).filter(Boolean));
+      activeBoardImages = [
+        ...(canvasImagesRef.current || []),
+        ...nextItems.filter((item) => !item?.id || !existingIds.has(item.id)),
+      ];
+      canvasHistory.push(activeBoardImages);
     }
-    setCanvasBoards((prev) => prev.map((board) => (
-      board.id === boardId
-        ? {
-            ...board,
-            images: [...(board.images || []), ...nextItems],
-            updatedAt: Date.now(),
-          }
-        : board
-    )));
+    setCanvasBoards((prev) => {
+      const nextBoards = prev.map((board) => {
+        if (board.id !== boardId) return board;
+        const existingIds = new Set((board.images || []).map((item) => item?.id).filter(Boolean));
+        const mergedImages = activeBoardImages || [
+          ...(board.images || []),
+          ...nextItems.filter((item) => !item?.id || !existingIds.has(item.id)),
+        ];
+        return { ...board, images: mergedImages, updatedAt: Date.now() };
+      });
+      persistCanvasBoardsToLocalStorage(nextBoards, activeCanvasBoardIdRef.current || boardId);
+      return nextBoards;
+    });
   }, [canvasHistory]);
 
   const updateCanvasImageInBoard = useCallback((boardId, imageId, patch) => {
     if (!boardId || !imageId || !patch) return;
+    let activeBoardImages = null;
     if (activeCanvasBoardIdRef.current === boardId) {
-      canvasHistory.setState((prev) => prev.map((item) => (
+      activeBoardImages = (canvasImagesRef.current || []).map((item) => (
         item.id === imageId ? { ...item, ...patch } : item
-      )));
-      return;
+      ));
+      canvasHistory.setState(activeBoardImages);
     }
-    setCanvasBoards((prev) => prev.map((board) => (
-      board.id === boardId
-        ? {
-            ...board,
-            images: (board.images || []).map((item) => (
-              item.id === imageId ? { ...item, ...patch } : item
-            )),
-            updatedAt: Date.now(),
-          }
-        : board
-    )));
+    setCanvasBoards((prev) => {
+      const nextBoards = prev.map((board) => (
+        board.id === boardId
+          ? {
+              ...board,
+              images: activeBoardImages || (board.images || []).map((item) => (
+                item.id === imageId ? { ...item, ...patch } : item
+              )),
+              updatedAt: Date.now(),
+            }
+          : board
+      ));
+      persistCanvasBoardsToLocalStorage(nextBoards, activeCanvasBoardIdRef.current || boardId);
+      return nextBoards;
+    });
   }, [canvasHistory]);
 
   const markCanvasBoardTaskNotice = useCallback((boardId, status) => {
@@ -2607,12 +2718,23 @@ function HomeInner() {
     toast,
   ]);
 
-  const handlePauseGenerate = useCallback(() => {
+  const handlePauseGenerate = useCallback((targetAiMsgId = "") => {
+    const targetMessageId = String(targetAiMsgId || "");
     const currentTask = activeGenerationRef.current;
-    if (!currentTask) return;
+    const matchingGeneratingItem = targetMessageId
+      ? canvasGeneratingItems.find((item) => item.aiMsgId === targetMessageId)
+      : null;
+    const aiMsgId = targetMessageId || currentTask?.aiMsgId || matchingGeneratingItem?.aiMsgId || "";
+    const conversationId = currentTask?.aiMsgId === aiMsgId
+      ? currentTask.conversationId
+      : (conversations.find((conversation) =>
+          (conversation.messages || []).some((message) => message.id === aiMsgId)
+        )?.id || activeConversationId);
+    if (!aiMsgId || !conversationId) return;
 
-    const { conversationId, aiMsgId, controller } = currentTask;
-    currentTask.cancelled = true;
+    if (currentTask?.aiMsgId === aiMsgId) {
+      currentTask.cancelled = true;
+    }
 
     updateConversationMessages(conversationId, (prev) =>
       prev.map((m) => {
@@ -2639,25 +2761,32 @@ function HomeInner() {
     setCanvasGeneratingItems((prev) =>
       prev.filter((item) => item.aiMsgId !== aiMsgId)
     );
-    if (activeGenerationRef.current === currentTask) {
+    if (currentTask?.aiMsgId === aiMsgId && activeGenerationRef.current === currentTask) {
       activeGenerationRef.current = null;
     }
-    if (generationAbortRef.current === controller) {
+    if (currentTask?.aiMsgId === aiMsgId && generationAbortRef.current === currentTask.controller) {
       generationAbortRef.current = null;
     }
-    controller.abort();
+    if (currentTask?.aiMsgId === aiMsgId) {
+      currentTask.controller?.abort();
+    }
     toast("已暂停当前生成", "info", 1500);
-  }, [toast, updateConversationMessages]);
+  }, [activeConversationId, canvasGeneratingItems, conversations, toast, updateConversationMessages]);
 
   const handleDeleteImage = useCallback((id) => {
     const item = canvasImages.find((img) => img.id === id);
     const generatingItem = canvasGeneratingItems.find((img) => img.id === id);
+    const deletedUrl = item?.image_url || item?.url || generatingItem?.image_url || generatingItem?.url || "";
     setCanvasGeneratingItems((prev) => prev.filter((img) => img.id !== id));
     canvasHistory.push((prev) => prev.filter((img) => img.id !== id));
     setSelectedImage((prev) => (prev?.id === id ? null : prev));
+    if (deletedUrl) {
+      canvasSelectionUrlsRef.current = canvasSelectionUrlsRef.current.filter((url) => url !== deletedUrl);
+      setRefImages((prev) => prev.filter((url) => url !== deletedUrl));
+    }
     recordCloudDeletions({
       canvasImageIds: id,
-      imageUrls: item?.image_url || item?.url || generatingItem?.image_url || generatingItem?.url,
+      imageUrls: deletedUrl,
     });
     toast("已删除", "info", 1200);
   }, [canvasGeneratingItems, canvasHistory, canvasImages, toast]);
@@ -3060,7 +3189,6 @@ function HomeInner() {
   }, []);
 
   /** 框选多张画布图片时，批量同步到右侧参考图（与模型最大参考图数量对齐） */
-  const MAX_REF_IMAGES = 14;
   const handleSyncCanvasRefImages = useCallback((urls) => {
     const list = (urls || []).filter(Boolean);
     if (list.length < 2) return;
@@ -3091,12 +3219,10 @@ function HomeInner() {
         const dataUrl = e.target.result;
         const id = `drop-${Date.now()}-${i}`;
         const newImg = { id, image_url: dataUrl, prompt: file.name, canvasBoardId: activeCanvasBoardId };
-        canvasHistory.push((prev) => [...prev, newImg]);
+        appendCanvasImagesToBoard(activeCanvasBoardId, [newImg]);
         void uploadMediaSourceToCloudAsset(dataUrl, file.name, "canvas-upload")
           .then((url) => {
-            canvasHistory.push((prev) => prev.map((img) => (
-              img.id === id ? { ...img, image_url: url } : img
-            )));
+            updateCanvasImageInBoard(activeCanvasBoardId, id, { image_url: url });
           })
           .catch(() => {
             toast("图片已添加，但云端保存失败，换设备可能无法恢复", "warning", 2200);
@@ -3105,7 +3231,7 @@ function HomeInner() {
       reader.readAsDataURL(file);
     });
     toast(`已添加 ${files.length} 张图片到画布`, "success");
-  }, [activeCanvasBoardId, canvasHistory, toast]);
+  }, [activeCanvasBoardId, appendCanvasImagesToBoard, toast, updateCanvasImageInBoard]);
 
   const handleDropGeneratedImage = useCallback((item, dropX, dropY) => {
     if (!item?.url) return;
@@ -3117,9 +3243,9 @@ function HomeInner() {
       prompt: item.prompt || (mediaType === "video" ? "拖入视频" : "拖入图片"),
       canvasBoardId: activeCanvasBoardId,
     };
-    canvasHistory.push((prev) => [...prev, newImg]);
+    appendCanvasImagesToBoard(activeCanvasBoardId, [newImg]);
     toast("已添加到画布", "success", 1200);
-  }, [activeCanvasBoardId, canvasHistory, toast]);
+  }, [activeCanvasBoardId, appendCanvasImagesToBoard, toast]);
 
   /** 画布内复制后粘贴（Ctrl/Cmd+V），或与系统剪贴板图片合并 */
   const handlePasteCanvasImages = useCallback(
@@ -3132,14 +3258,12 @@ function HomeInner() {
         prompt: (it.prompt && String(it.prompt).trim()) || "粘贴",
         canvasBoardId: activeCanvasBoardId,
       }));
-      canvasHistory.push((prev) => [...prev, ...nextItems]);
+      appendCanvasImagesToBoard(activeCanvasBoardId, nextItems);
       nextItems.forEach((item) => {
         if (!/^data:image\//i.test(item.image_url || "")) return;
         void uploadMediaSourceToCloudAsset(item.image_url, item.prompt, "canvas-paste")
           .then((url) => {
-            canvasHistory.push((prev) => prev.map((img) => (
-              img.id === item.id ? { ...img, image_url: url } : img
-            )));
+            updateCanvasImageInBoard(activeCanvasBoardId, item.id, { image_url: url });
           })
           .catch(() => {
             toast("粘贴图片云端保存失败，换设备可能无法恢复", "warning", 2200);
@@ -3147,7 +3271,7 @@ function HomeInner() {
       });
       toast(`已粘贴 ${items.length} 张图片`, "success", 1500);
     },
-    [activeCanvasBoardId, canvasHistory, toast]
+    [activeCanvasBoardId, appendCanvasImagesToBoard, toast, updateCanvasImageInBoard]
   );
 
   const handleRetry = useCallback((msg) => {
@@ -3249,9 +3373,10 @@ function HomeInner() {
       return;
     }
     const nextBoard = createCanvasBoard({ title: `画布 ${canvasBoards.length + 1}` });
-    setCanvasBoards((prev) => [
-      nextBoard,
-      ...prev.map((board) => (
+    setCanvasBoards((prev) => {
+      const nextBoards = [
+        nextBoard,
+        ...prev.map((board) => (
         board.id === activeCanvasBoardId
           ? {
               ...board,
@@ -3262,8 +3387,11 @@ function HomeInner() {
               updatedAt: Date.now(),
             }
           : board
-      )),
-    ]);
+        )),
+      ];
+      persistCanvasBoardsToLocalStorage(nextBoards, nextBoard.id);
+      return nextBoards;
+    });
     setActiveCanvasBoardId(nextBoard.id);
     canvasHistory.setState([]);
     setRefImages([]);
@@ -3283,18 +3411,22 @@ function HomeInner() {
     const targetBoard = canvasBoards.find((board) => board.id === boardId);
     if (!targetBoard || targetBoard.id === activeCanvasBoardId) return;
 
-    setCanvasBoards((prev) => prev.map((board) => (
-      board.id === activeCanvasBoardId
-        ? {
-            ...board,
-            images: canvasImages,
-            refImages: Array.isArray(refImages) ? refImages.filter(Boolean) : [],
-            texts: canvasTexts,
-            shapes: canvasShapes,
-            updatedAt: Date.now(),
-          }
-        : board
-    )));
+    setCanvasBoards((prev) => {
+      const nextBoards = prev.map((board) => (
+        board.id === activeCanvasBoardId
+          ? {
+              ...board,
+              images: canvasImages,
+              refImages: Array.isArray(refImages) ? refImages.filter(Boolean) : [],
+              texts: canvasTexts,
+              shapes: canvasShapes,
+              updatedAt: Date.now(),
+            }
+          : board
+      ));
+      persistCanvasBoardsToLocalStorage(nextBoards, targetBoard.id);
+      return nextBoards;
+    });
     setActiveCanvasBoardId(targetBoard.id);
     canvasHistory.setState(targetBoard.images || []);
     setRefImages(targetBoard.refImages || []);
@@ -3326,10 +3458,14 @@ function HomeInner() {
     }
     const nextTitle = String(title || "").trim();
     if (!nextTitle) return;
-    setCanvasBoards((prev) => prev.map((board) => (
-      board.id === boardId ? { ...board, title: nextTitle, updatedAt: Date.now() } : board
-    )));
-  }, [canvasBoards, toast]);
+    setCanvasBoards((prev) => {
+      const nextBoards = prev.map((board) => (
+        board.id === boardId ? { ...board, title: nextTitle, updatedAt: Date.now() } : board
+      ));
+      persistCanvasBoardsToLocalStorage(nextBoards, activeCanvasBoardId);
+      return nextBoards;
+    });
+  }, [activeCanvasBoardId, canvasBoards, toast]);
 
   const handleDeleteCanvasBoard = useCallback((boardId) => {
     if (isNavigationBusy) {
@@ -3353,8 +3489,10 @@ function HomeInner() {
       if (prev.length <= 1) return prev;
 
       const remaining = prev.filter((board) => board.id !== boardId);
+      let nextActiveBoardId = activeCanvasBoardId;
       if (activeCanvasBoardId === boardId) {
         const nextBoard = remaining[0];
+        nextActiveBoardId = nextBoard.id;
         setActiveCanvasBoardId(nextBoard.id);
         canvasHistory.setState(nextBoard.images || []);
         setRefImages(nextBoard.refImages || []);
@@ -3364,6 +3502,7 @@ function HomeInner() {
         setSemanticSelection(null);
         canvasSelectionUrlsRef.current = [];
       }
+      persistCanvasBoardsToLocalStorage(remaining, nextActiveBoardId);
       return remaining;
     });
     toast("画布已删除", "info", 1200);
@@ -3484,9 +3623,10 @@ function HomeInner() {
       const adjustedToIndex = fromIndex < toIndex ? toIndex - 1 : toIndex;
       const insertIndex = adjustedToIndex + (insertAfter ? 1 : 0);
       next.splice(insertIndex, 0, moved);
+      persistCanvasBoardsToLocalStorage(next, activeCanvasBoardId);
       return next;
     });
-  }, [draggingProjectBoardId]);
+  }, [activeCanvasBoardId, draggingProjectBoardId]);
   useEffect(() => {
     if (!projectContextMenu) return undefined;
     const closeMenu = () => setProjectContextMenu(null);

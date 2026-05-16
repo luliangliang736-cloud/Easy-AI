@@ -186,6 +186,61 @@ function applyLocalDeletionsToStateValue(key, value = "", deletions = {}) {
   return value;
 }
 
+function getUpdatedAt(item) {
+  return Number(item?.updatedAt || item?.createdAt || 0);
+}
+
+function mergeObjectsById(localItems = [], incomingItems = [], prefer = null) {
+  const order = [];
+  const byId = new Map();
+  for (const item of [...incomingItems, ...localItems]) {
+    const id = getItemId(item);
+    if (!id) continue;
+    if (!byId.has(id)) order.push(id);
+    const existing = byId.get(id);
+    byId.set(id, prefer ? prefer(existing, item) : { ...(existing || {}), ...item });
+  }
+  return order.map((id) => byId.get(id)).filter(Boolean);
+}
+
+function mergeCanvasBoardsForRestore(localValue = "", incomingValue = "") {
+  const localBoards = safeJsonParse(localValue, []);
+  const incomingBoards = safeJsonParse(incomingValue, []);
+  if (!Array.isArray(localBoards) || !Array.isArray(incomingBoards)) return incomingValue;
+  if (localBoards.length === 0) return incomingValue;
+  if (incomingBoards.length === 0) return localValue;
+
+  return JSON.stringify(mergeObjectsById(localBoards, incomingBoards, (existing, next) => {
+    if (!existing) return next;
+    if (!next) return existing;
+    const newer = getUpdatedAt(next) >= getUpdatedAt(existing) ? next : existing;
+    const older = newer === next ? existing : next;
+    return {
+      ...older,
+      ...newer,
+      images: mergeObjectsById(older.images || [], newer.images || []),
+      texts: mergeObjectsById(older.texts || [], newer.texts || []),
+      shapes: mergeObjectsById(older.shapes || [], newer.shapes || []),
+    };
+  }));
+}
+
+function mergeCanvasImagesForRestore(localValue = "", incomingValue = "") {
+  const localImages = safeJsonParse(localValue, []);
+  const incomingImages = safeJsonParse(incomingValue, []);
+  if (!Array.isArray(localImages) || !Array.isArray(incomingImages)) return incomingValue;
+  if (localImages.length === 0) return incomingValue;
+  if (incomingImages.length === 0) return localValue;
+  return JSON.stringify(mergeObjectsById(localImages, incomingImages));
+}
+
+function resolveIncomingStateValue(key, localValue, incomingValue) {
+  if (!localValue) return incomingValue;
+  if (key === "lovart-canvas-boards") return mergeCanvasBoardsForRestore(localValue, incomingValue);
+  if (key === "lovart-canvas-images") return mergeCanvasImagesForRestore(localValue, incomingValue);
+  return incomingValue;
+}
+
 function readSnapshot(keys = []) {
   const now = Date.now();
   const updatedAt = readLocalUpdatedAt();
@@ -290,9 +345,10 @@ export function useCloudLocalStorageSync(keys = [], options = {}) {
 
         for (const item of items) {
           if (!keys.includes(item.key) || typeof item.value !== "string") continue;
-          const incomingValue = applyLocalDeletionsToStateValue(item.key, item.value, localDeletions);
+          let incomingValue = applyLocalDeletionsToStateValue(item.key, item.value, localDeletions);
           if (shouldSkipCloudStateItem({ key: item.key, value: incomingValue })) continue;
           const localValue = window.localStorage.getItem(item.key);
+          incomingValue = resolveIncomingStateValue(item.key, localValue, incomingValue);
           const cloudUpdatedAt = Number(item.clientUpdatedAt || 0);
           let localValueUpdatedAt = Number(localUpdatedAt[item.key] || 0);
           if (localValue && !localValueUpdatedAt) {

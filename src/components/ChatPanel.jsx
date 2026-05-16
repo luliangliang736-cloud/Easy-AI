@@ -779,6 +779,7 @@ export default function ChatPanel({
   const currentEntryModeLabel = "Agent";
   const isQuickEntryMode = false;
   const filteredConversations = conversations
+    .filter((conversation) => (conversation.messages || []).length > 0)
     .filter((conversation) => {
       const query = conversationSearch.trim().toLowerCase();
       if (!query) return true;
@@ -1419,7 +1420,7 @@ export default function ChatPanel({
               onDownload={onDownload}
               onImageClick={onImageClick}
               onPreview={setPreviewSrc}
-              onPauseGenerate={msg.status === "generating" ? onPauseGenerate : null}
+              onPauseGenerate={msg.status === "generating" ? () => onPauseGenerate?.(msg.id) : null}
               onDelete={onDeleteMessage}
             />
           ))}
