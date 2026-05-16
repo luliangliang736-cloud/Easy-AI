@@ -5,7 +5,10 @@ import { CLOUD_STATE_DELETIONS_CHANGED_EVENT, CLOUD_STATE_DELETIONS_KEY } from "
 
 const DEFAULT_INTERVAL_MS = 6000;
 const LOCAL_UPDATED_AT_KEY = "easyai-cloud-state-local-updated-at";
+const LOCAL_STATE_CHANGED_EVENT = "easyai-cloud-state-local-value-changed";
 const KEEPALIVE_BODY_LIMIT = 60_000;
+const MANAGED_KEYS_GLOBAL = "__easyaiCloudStateManagedKeys";
+const STORAGE_PATCHED_GLOBAL = "__easyaiCloudStateStoragePatched";
 
 function readLocalUpdatedAt() {
   try {
@@ -20,6 +23,34 @@ function writeLocalUpdatedAt(value) {
   try {
     window.localStorage.setItem(LOCAL_UPDATED_AT_KEY, JSON.stringify(value || {}));
   } catch {}
+}
+
+function markLocalUpdatedAt(key, timestamp = Date.now()) {
+  if (!key) return;
+  const updatedAt = readLocalUpdatedAt();
+  updatedAt[key] = timestamp;
+  writeLocalUpdatedAt(updatedAt);
+}
+
+function getManagedCloudStateKeys() {
+  window[MANAGED_KEYS_GLOBAL] = window[MANAGED_KEYS_GLOBAL] || new Set();
+  return window[MANAGED_KEYS_GLOBAL];
+}
+
+function installCloudStateStoragePatch() {
+  if (window[STORAGE_PATCHED_GLOBAL]) return;
+  window[STORAGE_PATCHED_GLOBAL] = true;
+  const originalSetItem = Storage.prototype.setItem;
+  Storage.prototype.setItem = function patchedSetItem(key, value) {
+    const result = originalSetItem.apply(this, arguments);
+    try {
+      if (this === window.localStorage && getManagedCloudStateKeys().has(String(key))) {
+        markLocalUpdatedAt(String(key));
+        window.dispatchEvent(new CustomEvent(LOCAL_STATE_CHANGED_EVENT, { detail: { key: String(key) } }));
+      }
+    } catch {}
+    return result;
+  };
 }
 
 function getValueSignature(value = "") {
@@ -76,15 +107,15 @@ export function useCloudLocalStorageSync(keys = [], options = {}) {
     let cancelled = false;
     const syncDelayMs = Math.min(1000, intervalMs);
     let syncTimer = 0;
+    installCloudStateStoragePatch();
+    keys.forEach((key) => getManagedCloudStateKeys().add(key));
 
     function markLocalValueIfNeeded(key, value) {
       if (!keys.includes(key) || typeof value !== "string" || !value) return;
       const signature = getValueSignature(value);
       if (keySignaturesRef.current[key] === signature) return;
       keySignaturesRef.current[key] = signature;
-      const updatedAt = readLocalUpdatedAt();
-      updatedAt[key] = Date.now();
-      writeLocalUpdatedAt(updatedAt);
+      markLocalUpdatedAt(key);
     }
 
     function getDeletionItem() {
@@ -176,6 +207,12 @@ export function useCloudLocalStorageSync(keys = [], options = {}) {
       scheduleSyncSoon();
     }
 
+    function handleLocalManagedStateChanged(event) {
+      if (!restoredRef.current) return;
+      if (event?.detail?.key && !keys.includes(event.detail.key)) return;
+      scheduleSyncSoon();
+    }
+
     function handlePageLeaving() {
       syncNow({ keepalive: true, includeDeletionFirst: true });
     }
@@ -199,6 +236,7 @@ export function useCloudLocalStorageSync(keys = [], options = {}) {
     window.addEventListener("visibilitychange", handleVisibilityChange);
     window.addEventListener("focus", scheduleSyncSoon);
     window.addEventListener(CLOUD_STATE_DELETIONS_CHANGED_EVENT, handleDeletionMarkerChanged);
+    window.addEventListener(LOCAL_STATE_CHANGED_EVENT, handleLocalManagedStateChanged);
     return () => {
       cancelled = true;
       if (syncTimer) window.clearTimeout(syncTimer);
@@ -208,6 +246,7 @@ export function useCloudLocalStorageSync(keys = [], options = {}) {
       window.removeEventListener("visibilitychange", handleVisibilityChange);
       window.removeEventListener("focus", scheduleSyncSoon);
       window.removeEventListener(CLOUD_STATE_DELETIONS_CHANGED_EVENT, handleDeletionMarkerChanged);
+      window.removeEventListener(LOCAL_STATE_CHANGED_EVENT, handleLocalManagedStateChanged);
     };
   }, [enabled, intervalMs, keys]);
 }
