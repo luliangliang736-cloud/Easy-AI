@@ -582,6 +582,7 @@ function createCanvasBoard(overrides = {}) {
     shapes: Array.isArray(overrides.shapes) ? overrides.shapes : [],
     createdAt: overrides.createdAt || now,
     updatedAt: overrides.updatedAt || now,
+    lastGeneratedAt: overrides.lastGeneratedAt || null,
   };
 }
 
@@ -596,6 +597,62 @@ function deriveConversationTitle(currentTitle, messages) {
     return normalized.length > 20 ? `${normalized.slice(0, 20)}...` : normalized;
   }
   return currentTitle || DEFAULT_CONVERSATION_TITLE;
+}
+
+function formatCanvasUpdatedAt(value) {
+  const timestamp = Number(value);
+  if (!Number.isFinite(timestamp) || timestamp <= 0) return "";
+  const now = Date.now();
+  const diffMs = Math.max(0, now - timestamp);
+  const minuteMs = 60 * 1000;
+  const hourMs = 60 * minuteMs;
+  const dayMs = 24 * hourMs;
+  const date = new Date(timestamp);
+  const pad = (num) => String(num).padStart(2, "0");
+  const timeText = `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+
+  if (diffMs < minuteMs) return "刚刚生图";
+  if (diffMs < hourMs) return `${Math.floor(diffMs / minuteMs)}分钟前`;
+  if (diffMs < dayMs && date.toDateString() === new Date(now).toDateString()) {
+    return `今天 ${timeText}`;
+  }
+  const yesterday = new Date(now - dayMs);
+  if (date.toDateString() === yesterday.toDateString()) {
+    return `昨天 ${timeText}`;
+  }
+  return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${timeText}`;
+}
+
+function areBoardListsEqual(left = [], right = []) {
+  if (left === right) return true;
+  try {
+    return JSON.stringify(left || []) === JSON.stringify(right || []);
+  } catch {
+    return false;
+  }
+}
+
+function updateCanvasBoardContentIfChanged(board, nextContent) {
+  if (!board) return board;
+  const images = Array.isArray(nextContent.images) ? nextContent.images : [];
+  const refImages = Array.isArray(nextContent.refImages) ? nextContent.refImages.filter(Boolean) : [];
+  const texts = Array.isArray(nextContent.texts) ? nextContent.texts : [];
+  const shapes = Array.isArray(nextContent.shapes) ? nextContent.shapes : [];
+  const unchanged =
+    areBoardListsEqual(board.images || [], images) &&
+    areBoardListsEqual(board.refImages || [], refImages) &&
+    areBoardListsEqual(board.texts || [], texts) &&
+    areBoardListsEqual(board.shapes || [], shapes);
+
+  if (unchanged) return board;
+  return {
+    ...board,
+    images,
+    refImages,
+    texts,
+    shapes,
+    updatedAt: Date.now(),
+  };
 }
 
 async function makeMessagePreviewImage(img) {
@@ -1615,14 +1672,12 @@ function HomeInner() {
     if (!persistReady || !activeCanvasBoardId) return;
     setCanvasBoards((prev) => prev.map((board) => (
       board.id === activeCanvasBoardId
-        ? {
-            ...board,
+        ? updateCanvasBoardContentIfChanged(board, {
             images: canvasImages,
-            refImages: Array.isArray(refImages) ? refImages.filter(Boolean) : [],
+            refImages,
             texts: canvasTexts,
             shapes: canvasShapes,
-            updatedAt: Date.now(),
-          }
+          })
         : board
     )));
   }, [activeCanvasBoardId, canvasImages, refImages, canvasTexts, canvasShapes, persistReady]);
@@ -1738,6 +1793,12 @@ function HomeInner() {
   const appendCanvasImagesToBoard = useCallback((boardId, items) => {
     const nextItems = Array.isArray(items) ? items.filter(Boolean) : [];
     if (!boardId || nextItems.length === 0) return;
+    const generatedAt = Date.now();
+    setCanvasBoards((prev) => prev.map((board) => (
+      board.id === boardId
+        ? { ...board, lastGeneratedAt: generatedAt, updatedAt: generatedAt }
+        : board
+    )));
     if (activeCanvasBoardIdRef.current === boardId) {
       canvasHistory.push((prev) => [...prev, ...nextItems]);
       return;
@@ -1747,7 +1808,8 @@ function HomeInner() {
         ? {
             ...board,
             images: [...(board.images || []), ...nextItems],
-            updatedAt: Date.now(),
+            lastGeneratedAt: generatedAt,
+            updatedAt: generatedAt,
           }
         : board
     )));
@@ -2650,7 +2712,12 @@ function HomeInner() {
     setRefImages(list);
     setCanvasBoards((prev) => prev.map((board) => (
       board.id === refImagesBoardId
-        ? { ...board, refImages: list, updatedAt: Date.now() }
+        ? updateCanvasBoardContentIfChanged(board, {
+            images: board.images || [],
+            refImages: list,
+            texts: board.texts || [],
+            shapes: board.shapes || [],
+          })
         : board
     )));
 
@@ -2661,11 +2728,12 @@ function HomeInner() {
           setRefImages((prev) => prev.map((existing) => (existing === item ? url : existing)));
           setCanvasBoards((prev) => prev.map((board) => (
             board.id === refImagesBoardId
-              ? {
-                  ...board,
+              ? updateCanvasBoardContentIfChanged(board, {
+                  images: board.images || [],
                   refImages: (board.refImages || []).map((existing) => (existing === item ? url : existing)),
-                  updatedAt: Date.now(),
-                }
+                  texts: board.texts || [],
+                  shapes: board.shapes || [],
+                })
               : board
           )));
         })
@@ -3215,14 +3283,12 @@ function HomeInner() {
       nextBoard,
       ...prev.map((board) => (
         board.id === activeCanvasBoardId
-          ? {
-              ...board,
+          ? updateCanvasBoardContentIfChanged(board, {
               images: canvasImages,
-              refImages: Array.isArray(refImages) ? refImages.filter(Boolean) : [],
+              refImages,
               texts: canvasTexts,
               shapes: canvasShapes,
-              updatedAt: Date.now(),
-            }
+            })
           : board
       )),
     ]);
@@ -3247,14 +3313,12 @@ function HomeInner() {
 
     setCanvasBoards((prev) => prev.map((board) => (
       board.id === activeCanvasBoardId
-        ? {
-            ...board,
+        ? updateCanvasBoardContentIfChanged(board, {
             images: canvasImages,
-            refImages: Array.isArray(refImages) ? refImages.filter(Boolean) : [],
+            refImages,
             texts: canvasTexts,
             shapes: canvasShapes,
-            updatedAt: Date.now(),
-          }
+          })
         : board
     )));
     setActiveCanvasBoardId(targetBoard.id);
@@ -3545,6 +3609,7 @@ function HomeInner() {
                   const taskNotice = canvasBoardTaskNotices[board.id] || null;
                   const showCompletedNotice = !generatingCount && taskNotice?.completed;
                   const showFailedNotice = !generatingCount && !showCompletedNotice && taskNotice?.failed;
+                  const lastGeneratedAtText = formatCanvasUpdatedAt(board.lastGeneratedAt);
                   const showDropBefore = projectDropIndicator?.boardId === board.id && projectDropIndicator.position === "before";
                   const showDropAfter = projectDropIndicator?.boardId === board.id && projectDropIndicator.position === "after";
                   return (
@@ -3616,9 +3681,18 @@ function HomeInner() {
                           onClick={() => handleSelectCanvasBoard(board.id)}
                           onDoubleClick={() => startProjectRename(board)}
                           title="双击重命名"
-                          className="min-w-0 flex-1 cursor-move truncate text-left text-sm font-medium"
+                          className="min-w-0 flex-1 cursor-move text-left"
                         >
-                          {board.title || "默认画布"}
+                          <span className="block truncate text-sm font-medium">
+                            {board.title || "默认画布"}
+                          </span>
+                          {lastGeneratedAtText && (
+                            <span className={`mt-0.5 block truncate text-[10px] font-normal ${
+                              theme === "light" ? "text-black/38" : "text-white/35"
+                            }`}>
+                              {lastGeneratedAtText}
+                            </span>
+                          )}
                         </button>
                       )}
                       {generatingCount > 0 && !isRenaming && (
