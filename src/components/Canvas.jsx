@@ -19,6 +19,7 @@ const MIN_TEXT_FONT = 10;
 const MAX_TEXT_FONT = 96;
 const MIN_SHAPE_PIXELS = 4;
 const CANVAS_IMAGE_MIME = "application/x-easy-ai-canvas-image";
+const CANVAS_CLIPBOARD_TEXT_PREFIX = "__EASY_AI_CANVAS_CLIPBOARD__:";
 const TEXT_COLOR_PRESETS = ["#ffffff", "#111827", "#9CFF3F", "#60A5FA", "#F97316", "#EF4444"];
 const SHAPE_COLOR_PRESETS = ["rgba(63, 202, 88, 0.18)", "rgba(255, 255, 255, 0.16)", "rgba(17, 24, 39, 0.14)", "rgba(96, 165, 250, 0.22)", "rgba(249, 115, 22, 0.22)", "rgba(239, 68, 68, 0.22)"];
 
@@ -233,6 +234,69 @@ function blobToDataUrl(blob) {
   });
 }
 
+function isImageLikeClipboardUrl(value = "") {
+  const text = String(value || "").trim();
+  if (!text) return false;
+  return (
+    /^data:image\//i.test(text) ||
+    /^blob:/i.test(text) ||
+    /^https?:\/\//i.test(text) ||
+    /^\/api\/(?:cloud-assets|generated-images)\//i.test(text)
+  );
+}
+
+function normalizeClipboardUrl(value = "") {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  return text.split(/\r?\n/).map((line) => line.trim()).find((line) => line && !line.startsWith("#")) || text;
+}
+
+function extractImageUrlFromHtml(value = "") {
+  const text = String(value || "");
+  const match = text.match(/<img[^>]+src=["']([^"']+)["']/i);
+  return match?.[1] ? match[1].trim() : "";
+}
+
+async function readSystemClipboardSignature() {
+  if (typeof navigator === "undefined" || !navigator.clipboard?.read) return "";
+  try {
+    const clipItems = await navigator.clipboard.read();
+    const parts = [];
+    for (const clipItem of clipItems) {
+      for (const type of [...clipItem.types].sort()) {
+        if (type.startsWith("image/")) {
+          const blob = await clipItem.getType(type);
+          parts.push(`${type}:${blob.size}`);
+        } else if (type === "text/plain" || type === "text/uri-list" || type === "text/html") {
+          const blob = await clipItem.getType(type);
+          const text = String(await blob.text()).slice(0, 2000);
+          parts.push(`${type}:${text}`);
+        }
+      }
+    }
+    return parts.join("|");
+  } catch {
+    return "";
+  }
+}
+
+function readPasteEventClipboardSignature(event) {
+  const clipboardData = event.clipboardData;
+  if (!clipboardData) return "";
+  const parts = [];
+  for (const item of Array.from(clipboardData.items || [])) {
+    if (item.type?.startsWith("image/")) {
+      const file = item.getAsFile();
+      parts.push(`${item.type}:${file?.size || ""}`);
+    }
+  }
+  for (const type of ["text/plain", "text/uri-list", "text/html"]) {
+    const text = clipboardData.getData(type);
+    if (text) parts.push(`${type}:${String(text).slice(0, 2000)}`);
+  }
+  return parts.sort().join("|");
+}
+
 /** 世界坐标 AABB 相交（含贴边） */
 function worldRectsOverlap(ax, ay, aw, ah, bx, by, bw, bh) {
   return !(ax + aw < bx || bx + bw < ax || ay + ah < by || by + bh < ay);
@@ -374,6 +438,7 @@ export default function Canvas({
   const spacePanHeldRef = useRef(false);
   /** 画布内 Ctrl/Cmd+C 复制后的数据（系统剪贴板失败时仍可粘贴） */
   const canvasClipboardRef = useRef(null);
+  const canvasClipboardFallbackRef = useRef({ active: false, previousSignature: "" });
   const focusedTextEditorIdRef = useRef(null);
   const textEditorOverlayRef = useRef(null);
 
@@ -893,15 +958,32 @@ export default function Canvas({
       .map((im) => ({ image_url: im.image_url, prompt: im.prompt || "" }));
     if (items.length === 0) return;
     canvasClipboardRef.current = { items };
+    const previousSignature = await readSystemClipboardSignature();
     try {
       const first = items[0];
       const res = await fetch(first.image_url);
       const blob = await res.blob();
       const type =
         blob.type && blob.type.startsWith("image/") ? blob.type : "image/png";
-      await navigator.clipboard.write([new ClipboardItem({ [type]: blob })]);
+      const marker = `${CANVAS_CLIPBOARD_TEXT_PREFIX}${Date.now()}`;
+      try {
+        await navigator.clipboard.write([
+          new ClipboardItem({
+            [type]: blob,
+            "text/plain": new Blob([marker], { type: "text/plain" }),
+          }),
+        ]);
+      } catch {
+        try {
+          await navigator.clipboard.write([new ClipboardItem({ [type]: blob })]);
+        } catch {
+          await navigator.clipboard.writeText(marker);
+        }
+      }
+      canvasClipboardFallbackRef.current = { active: false, previousSignature: "" };
       toast("已复制", "success", 1200);
     } catch {
+      canvasClipboardFallbackRef.current = { active: true, previousSignature };
       toast("已复制（可在画布内粘贴）", "info", 1500);
     }
   }, [toast]);
@@ -930,6 +1012,15 @@ export default function Canvas({
             const dataUrl = await blobToDataUrl(blob);
             return [{ image_url: dataUrl, prompt: "粘贴" }];
           }
+          for (const t of ["text/uri-list", "text/plain", "text/html"]) {
+            if (!clipItem.types.includes(t)) continue;
+            const blob = await clipItem.getType(t);
+            const text = String(await blob.text()).trim();
+            const url = t === "text/html" ? extractImageUrlFromHtml(text) : normalizeClipboardUrl(text);
+            if (isImageLikeClipboardUrl(url)) {
+              return [{ image_url: url, prompt: "粘贴" }];
+            }
+          }
         }
       } catch {
         /* ignore */
@@ -951,6 +1042,27 @@ export default function Canvas({
       const tag = el.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA") return true;
       return Boolean(el.isContentEditable);
+    };
+    const readImagesFromPasteEvent = (event) => {
+      const items = Array.from(event.clipboardData?.items || []);
+      const imageItems = items.filter((item) => item.type?.startsWith("image/"));
+      const files = imageItems
+        .map((item) => item.getAsFile())
+        .filter(Boolean);
+      if (files.length > 0) {
+        return Promise.all(files.map(async (file) => ({
+          image_url: await blobToDataUrl(file),
+          prompt: "粘贴",
+        })));
+      }
+      const url =
+        normalizeClipboardUrl(event.clipboardData?.getData("text/uri-list")) ||
+        extractImageUrlFromHtml(event.clipboardData?.getData("text/html")) ||
+        normalizeClipboardUrl(event.clipboardData?.getData("text/plain"));
+      if (isImageLikeClipboardUrl(url)) {
+        return Promise.resolve([{ image_url: url, prompt: "粘贴" }]);
+      }
+      return Promise.resolve([]);
     };
     const hasTextSelection = () => {
       const sel = window.getSelection?.();
@@ -976,15 +1088,51 @@ export default function Canvas({
         return;
       }
       if (mod && e.key.toLowerCase() === "v") {
-        e.preventDefault();
-        pasteCanvasImages();
         return;
       }
     };
+    const onPaste = (event) => {
+      if (typing()) return;
+      if (!onPasteImages) return;
+      const hasImage = Array.from(event.clipboardData?.items || [])
+        .some((item) => item.type?.startsWith("image/"));
+      const clipboardUrl =
+        normalizeClipboardUrl(event.clipboardData?.getData("text/uri-list")) ||
+        extractImageUrlFromHtml(event.clipboardData?.getData("text/html")) ||
+        normalizeClipboardUrl(event.clipboardData?.getData("text/plain"));
+      const fallbackState = canvasClipboardFallbackRef.current;
+      const currentSignature = readPasteEventClipboardSignature(event);
+      const shouldUseCanvasClipboard =
+        canvasClipboardRef.current?.items?.length &&
+        (
+          clipboardUrl.startsWith(CANVAS_CLIPBOARD_TEXT_PREFIX) ||
+          (
+            fallbackState?.active &&
+            fallbackState.previousSignature &&
+            currentSignature === fallbackState.previousSignature
+          )
+        );
+      if (shouldUseCanvasClipboard) {
+        event.preventDefault();
+        pasteCanvasImages();
+        return;
+      }
+      if (!hasImage && !isImageLikeClipboardUrl(clipboardUrl)) return;
+      event.preventDefault();
+      void readImagesFromPasteEvent(event).then((items) => {
+        if (!items.length) return;
+        onPasteImages(items);
+      });
+    };
     window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
+    window.addEventListener("paste", onPaste);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("paste", onPaste);
+    };
   }, [
     copyCanvasImages,
+    onPasteImages,
     pasteCanvasImages,
   ]);
 

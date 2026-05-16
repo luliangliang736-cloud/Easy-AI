@@ -1,0 +1,20 @@
+---
+description: Preserve canvas clipboard ordering behavior
+globs: src/components/Canvas.jsx
+alwaysApply: false
+---
+
+# Canvas Clipboard Order
+
+When changing copy/paste behavior in `src/components/Canvas.jsx`, preserve this invariant:
+
+- Paste must follow the user's last copy action, regardless of source.
+- If the last action copied a canvas image, paste the canvas image.
+- If the last action copied an external image, screenshot, or chat/dialog image URL, paste that latest external content.
+- Do not make canvas clipboard permanently override the system clipboard.
+- Do not make the system clipboard permanently override a later canvas copy if the browser failed to replace stale clipboard data.
+
+The current approach uses a lightweight canvas clipboard marker and a fallback signature only when a canvas copy fails to replace stale system clipboard content. Keep this behavior unless the whole clipboard design is intentionally reworked and tested against both sequences:
+
+1. Screenshot first, then copy canvas image, then paste: must paste the canvas image.
+2. Copy canvas image first, then screenshot, then paste: must paste the screenshot.
