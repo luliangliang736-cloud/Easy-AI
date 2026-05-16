@@ -14,6 +14,7 @@ import { useAuthSessionGuard } from "@/lib/useAuthSessionGuard";
 import { useCloudLocalStorageSync } from "@/lib/useCloudLocalStorageSync";
 import { CLOUD_STATE_DELETIONS_KEY, recordCloudDeletions } from "@/lib/cloudStateDeletions";
 import { MAX_GEN_COUNT } from "@/lib/genLimits";
+import { Layers, Plus } from "lucide-react";
 
 const FLOATING_ENTRY_DRAFT_KEY = "lovart-floating-entry-draft";
 const CANVAS_REF_IMAGES_STORAGE_KEY = "lovart-canvas-ref-images";
@@ -50,13 +51,6 @@ function errStr(e) {
   if (!e) return "未知错误";
   if (typeof e === "string") return e;
   return e.message || e.error || JSON.stringify(e);
-}
-
-function normalizeInspirationUrl(value = "") {
-  const raw = String(value || "").trim();
-  if (!raw) return "";
-  if (/^https?:\/\//i.test(raw)) return raw;
-  return `https://${raw}`;
 }
 
 function parseQuantityToken(tok) {
@@ -1172,10 +1166,13 @@ function HomeInner() {
   const [isTextEditing, setIsTextEditing] = useState(false);
   const [panelWidth, setPanelWidth] = useState(340);
   const [isInspirationMode, setIsInspirationMode] = useState(false);
-  const [inspirationUrl, setInspirationUrl] = useState("");
-  const [activeInspirationUrl, setActiveInspirationUrl] = useState("");
   const [inspirationPanelWidth, setInspirationPanelWidth] = useState(380);
-  const [isInspirationResizing, setIsInspirationResizing] = useState(false);
+  const [, setIsInspirationResizing] = useState(false);
+  const [projectRenamingBoardId, setProjectRenamingBoardId] = useState("");
+  const [projectRenamingTitle, setProjectRenamingTitle] = useState("");
+  const [draggingProjectBoardId, setDraggingProjectBoardId] = useState("");
+  const [projectDropIndicator, setProjectDropIndicator] = useState(null);
+  const [projectContextMenu, setProjectContextMenu] = useState(null);
   const [historySearch, setHistorySearch] = useState("");
   const canvasRef = useRef(null);
   const generationAbortRef = useRef(null);
@@ -1183,6 +1180,7 @@ function HomeInner() {
   const cloudAssetMigrationRef = useRef(new Map());
   const cloudAssetUploadRef = useRef(new Map());
   const inspirationResizeFrameRef = useRef(0);
+  const [persistReady, setPersistReady] = useState(false);
   // 标记 localStorage 已加载完毕，加载前禁止持久化 effect 写入（避免覆盖已保存的数据）
   const persistReadyRef = useRef(false);
   const activeConversation = conversations.find((conversation) => conversation.id === activeConversationId) || conversations[0];
@@ -1293,6 +1291,7 @@ function HomeInner() {
     } finally {
       // 无论成功或失败，标记加载完成，之后的持久化 effect 才允许写入
       persistReadyRef.current = true;
+      setPersistReady(true);
     }
   }, []);
 
@@ -1309,7 +1308,7 @@ function HomeInner() {
   }, []);
 
   useEffect(() => {
-    if (!persistReadyRef.current) return undefined;
+    if (!persistReady) return undefined;
     const localItems = canvasImages.filter((item) => isLocalGeneratedMediaUrl(item?.image_url));
     if (!localItems.length) return undefined;
     let cancelled = false;
@@ -1327,10 +1326,10 @@ function HomeInner() {
     return () => {
       cancelled = true;
     };
-  }, [canvasHistory, canvasImages, cloudifyLocalGeneratedUrl]);
+  }, [canvasHistory, canvasImages, cloudifyLocalGeneratedUrl, persistReady]);
 
   useEffect(() => {
-    if (!persistReadyRef.current) return undefined;
+    if (!persistReady) return undefined;
     const localUrls = new Set();
     canvasBoards.forEach((board) => {
       (board?.images || []).forEach((item) => {
@@ -1357,10 +1356,10 @@ function HomeInner() {
     return () => {
       cancelled = true;
     };
-  }, [canvasBoards, cloudifyLocalGeneratedUrl]);
+  }, [canvasBoards, cloudifyLocalGeneratedUrl, persistReady]);
 
   useEffect(() => {
-    if (!persistReadyRef.current) return undefined;
+    if (!persistReady) return undefined;
     const localUrls = new Set();
     conversations.forEach((conversation) => {
       (conversation?.messages || []).forEach((msg) => {
@@ -1400,16 +1399,16 @@ function HomeInner() {
     return () => {
       cancelled = true;
     };
-  }, [cloudifyLocalGeneratedUrl, conversations]);
+  }, [cloudifyLocalGeneratedUrl, conversations, persistReady]);
 
   useEffect(() => {
-    if (!persistReadyRef.current) return;
+    if (!persistReady) return;
     try {
       localStorage.removeItem(CANVAS_REF_IMAGES_STORAGE_KEY);
     } catch {
       // 参考图输入栏是临时状态，清理失败不影响画布生成。
     }
-  }, [refImages]);
+  }, [persistReady, refImages]);
 
   useEffect(() => {
     try {
@@ -1501,14 +1500,14 @@ function HomeInner() {
 
   // Persist conversations
   useEffect(() => {
-    if (!persistReadyRef.current) return;
+    if (!persistReady) return;
     try {
       localStorage.setItem("lovart-conversations", JSON.stringify(sanitizeConversationsForStorage(conversations)));
       localStorage.setItem("lovart-active-conversation", activeConversationId || "");
     } catch {
       // 写入失败多半是容量超限；保留上一次可用历史，不主动清空。
     }
-  }, [activeConversationId, conversations]);
+  }, [activeConversationId, conversations, persistReady]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1548,7 +1547,7 @@ function HomeInner() {
   }, [refImages]);
 
   useEffect(() => {
-    if (!persistReadyRef.current || !activeCanvasBoardId) return;
+    if (!persistReady || !activeCanvasBoardId) return;
     setCanvasBoards((prev) => prev.map((board) => (
       board.id === activeCanvasBoardId
         ? {
@@ -1560,45 +1559,45 @@ function HomeInner() {
           }
         : board
     )));
-  }, [activeCanvasBoardId, canvasImages, canvasTexts, canvasShapes]);
+  }, [activeCanvasBoardId, canvasImages, canvasTexts, canvasShapes, persistReady]);
 
   useEffect(() => {
-    if (!persistReadyRef.current) return;
+    if (!persistReady) return;
     try {
       localStorage.setItem("lovart-canvas-boards", JSON.stringify(sanitizeCanvasBoardsForStorage(canvasBoards)));
       localStorage.setItem("lovart-active-canvas-board", activeCanvasBoardId || "");
     } catch {
       // 多画布同样遵循原有策略：写入失败时保留上一次可用数据。
     }
-  }, [activeCanvasBoardId, canvasBoards]);
+  }, [activeCanvasBoardId, canvasBoards, persistReady]);
 
   // Persist canvas images
   useEffect(() => {
-    if (!persistReadyRef.current) return;
+    if (!persistReady) return;
     try {
       localStorage.setItem("lovart-canvas-images", JSON.stringify(sanitizeCanvasImagesForStorage(canvasImages).slice(0, 100)));
     } catch {
       // 保留上一次可用画布，避免刷新后整页变空。
     }
-  }, [canvasImages]);
+  }, [canvasImages, persistReady]);
 
   useEffect(() => {
-    if (!persistReadyRef.current) return;
+    if (!persistReady) return;
     try {
       localStorage.setItem("lovart-canvas-texts", JSON.stringify(canvasTexts.slice(0, 100)));
     } catch {
       // 保留上一次可用文本数据。
     }
-  }, [canvasTexts]);
+  }, [canvasTexts, persistReady]);
 
   useEffect(() => {
-    if (!persistReadyRef.current) return;
+    if (!persistReady) return;
     try {
       localStorage.setItem("lovart-canvas-shapes", JSON.stringify(canvasShapes.slice(0, 200)));
     } catch {
       // 保留上一次可用形状数据。
     }
-  }, [canvasShapes]);
+  }, [canvasShapes, persistReady]);
 
   const handleAddCanvasText = useCallback((item) => {
     canvasTextsHistory.push((prev) => [...prev, item]);
@@ -1753,13 +1752,6 @@ function HomeInner() {
       setShowParams(false);
     }
   }, []);
-
-  const handleOpenInspirationUrl = useCallback(() => {
-    const nextUrl = normalizeInspirationUrl(inspirationUrl);
-    if (!nextUrl) return;
-    setActiveInspirationUrl(nextUrl);
-    setInspirationUrl(nextUrl);
-  }, [inspirationUrl]);
 
   const handleInspirationResizeStart = useCallback((event) => {
     event.preventDefault();
@@ -3198,10 +3190,73 @@ function HomeInner() {
     toast("记录已删除", "info", 1200);
   }, [activeConversationId, isNavigationBusy, messages, toast, updateConversationMessages]);
 
+  const projectBoards = canvasBoards;
+  const startProjectRename = useCallback((board) => {
+    setProjectRenamingBoardId(board?.id || "");
+    setProjectRenamingTitle(board?.title || "默认画布");
+  }, []);
+  const cancelProjectRename = useCallback(() => {
+    setProjectRenamingBoardId("");
+    setProjectRenamingTitle("");
+  }, []);
+  const commitProjectRename = useCallback(() => {
+    if (!projectRenamingBoardId) return;
+    const nextTitle = projectRenamingTitle.trim();
+    if (nextTitle) {
+      handleRenameCanvasBoard(projectRenamingBoardId, nextTitle);
+    }
+    cancelProjectRename();
+  }, [cancelProjectRename, handleRenameCanvasBoard, projectRenamingBoardId, projectRenamingTitle]);
+  const handleProjectBoardDragStart = useCallback((event, boardId) => {
+    if (projectRenamingBoardId) {
+      event.preventDefault();
+      return;
+    }
+    setDraggingProjectBoardId(boardId);
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData("text/plain", boardId);
+  }, [projectRenamingBoardId]);
+  const handleProjectBoardDrop = useCallback((event, targetBoardId) => {
+    event.preventDefault();
+    const sourceBoardId = event.dataTransfer.getData("text/plain") || draggingProjectBoardId;
+    setDraggingProjectBoardId("");
+    setProjectDropIndicator(null);
+    if (!sourceBoardId || sourceBoardId === targetBoardId) return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    const insertAfter = event.clientY > rect.top + rect.height / 2;
+    setCanvasBoards((prev) => {
+      const fromIndex = prev.findIndex((board) => board.id === sourceBoardId);
+      const toIndex = prev.findIndex((board) => board.id === targetBoardId);
+      if (fromIndex < 0 || toIndex < 0) return prev;
+      const next = [...prev];
+      const [moved] = next.splice(fromIndex, 1);
+      const adjustedToIndex = fromIndex < toIndex ? toIndex - 1 : toIndex;
+      const insertIndex = adjustedToIndex + (insertAfter ? 1 : 0);
+      next.splice(insertIndex, 0, moved);
+      return next;
+    });
+  }, [draggingProjectBoardId]);
+  useEffect(() => {
+    if (!projectContextMenu) return undefined;
+    const closeMenu = () => setProjectContextMenu(null);
+    const handleKeyDown = (event) => {
+      if (event.key === "Escape") closeMenu();
+    };
+    window.addEventListener("pointerdown", closeMenu);
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("pointerdown", closeMenu);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [projectContextMenu]);
+  const contextProjectBoard = projectContextMenu
+    ? canvasBoards.find((board) => board.id === projectContextMenu.boardId)
+    : null;
+
   return (
     <div className="h-screen flex overflow-hidden">
       <div
-        className="absolute top-3 z-30 flex items-center gap-2 transition-[left]"
+        className="absolute top-0 z-30 flex h-12 items-center gap-2 transition-[left]"
         style={{ left: isInspirationMode ? inspirationPanelWidth + 12 : 12 }}
       >
         <Link
@@ -3210,7 +3265,7 @@ function HomeInner() {
           title="返回首页"
         >
           <BrandLogo
-            className="h-7"
+            className="h-6 w-auto"
             showText={false}
             wordmarkOffsetClassName={`translate-y-[2px] ${theme === "light" ? "invert" : ""}`}
           />
@@ -3218,7 +3273,7 @@ function HomeInner() {
         <button
           type="button"
           onClick={() => setIsInspirationMode((value) => !value)}
-          className={`inline-flex h-7 translate-y-[1px] items-center gap-1.5 rounded-xl px-3 text-sm transition-all ${
+          className={`inline-flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-sm font-medium leading-none transition-all ${
             isInspirationMode
               ? theme === "light"
                 ? "bg-black/10 text-black"
@@ -3228,7 +3283,7 @@ function HomeInner() {
                 : "text-white/50 hover:bg-white/[0.06] hover:text-white"
           }`}
         >
-          灵感模式
+          {activeCanvasBoard?.title || "项目层"}
         </button>
       </div>
       {isInspirationMode && (
@@ -3236,57 +3291,171 @@ function HomeInner() {
           className="relative hidden shrink-0 lg:block"
           style={{ width: inspirationPanelWidth }}
         >
-          <aside className={`flex h-full flex-col border-r px-4 py-4 ${theme === "light" ? "border-black/8 bg-white/65" : "border-white/8 bg-white/[0.025]"}`}>
-            <div className="mb-4 mt-10">
-              <div className={`mb-2 text-sm font-semibold ${theme === "light" ? "text-[#111]" : "text-white"}`}>灵感模式</div>
-              <p className={`text-xs leading-relaxed ${theme === "light" ? "text-black/45" : "text-white/40"}`}>
-                边找参考边设计
-              </p>
-            </div>
-
-            <div className={`rounded-2xl border p-3 ${theme === "light" ? "border-black/8 bg-white" : "border-white/8 bg-[#171719]"}`}>
-              <div className="flex gap-2">
-                <input
-                  value={inspirationUrl}
-                  onChange={(e) => setInspirationUrl(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") handleOpenInspirationUrl();
-                  }}
-                  placeholder="输入设计网站链接"
-                  className={`min-w-0 flex-1 rounded-xl px-3 py-2 text-xs outline-none ${theme === "light" ? "bg-black/[0.04] text-[#111] placeholder:text-black/30" : "bg-white/[0.06] text-white placeholder:text-white/30"}`}
-                />
-                <button
-                  type="button"
-                  onClick={handleOpenInspirationUrl}
-                  className={`rounded-xl px-3 py-2 text-xs font-medium transition-all ${
-                    theme === "light"
-                      ? "bg-black/10 text-black hover:bg-black/15"
-                      : "bg-white/12 text-white hover:bg-white/16"
-                  }`}
-                >
-                  打开
-                </button>
-              </div>
-            </div>
-
-            <div className={`mt-3 min-h-0 flex-1 overflow-hidden rounded-2xl border ${theme === "light" ? "border-black/8 bg-black/[0.03]" : "border-white/8 bg-black/30"}`}>
-              {activeInspirationUrl ? (
-                <iframe
-                  src={activeInspirationUrl}
-                  title="灵感网站预览"
-                  sandbox="allow-same-origin allow-scripts allow-popups allow-forms"
-                  className={`h-full w-full ${isInspirationResizing ? "pointer-events-none" : ""}`}
-                />
-              ) : (
-                <div className={`flex h-full items-center justify-center px-8 text-center text-xs leading-relaxed ${theme === "light" ? "text-black/35" : "text-white/30"}`}>
-                  输入一个设计网站链接后，这里会尝试预览。部分网站不允许嵌入，可用新窗口打开。
+          <aside className={`flex h-full flex-col border-r ${theme === "light" ? "border-black/8 bg-white/72" : "border-white/8 bg-white/[0.025]"}`}>
+            <div className={`flex h-12 shrink-0 items-center justify-between gap-3 border-b px-4 ${theme === "light" ? "border-black/8" : "border-white/8"}`}>
+              <div className="min-w-0">
+                <div className={`inline-flex items-center gap-1.5 text-sm font-semibold ${theme === "light" ? "text-[#111]" : "text-white"}`}>
+                  <Layers size={15} className={theme === "light" ? "text-black/55" : "text-white/55"} />
+                  项目列表
                 </div>
+              </div>
+              <button
+                type="button"
+                onClick={handleNewCanvasBoard}
+                className={`inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-xl transition-all ${
+                  theme === "light"
+                    ? "text-black/55 hover:bg-black/[0.05] hover:text-black"
+                    : "text-white/55 hover:bg-white/[0.06] hover:text-white"
+                }`}
+                title="新建画布"
+                aria-label="新建画布"
+              >
+                <Plus size={16} />
+              </button>
+            </div>
+
+            <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 pr-5 scrollbar-thin">
+              {projectBoards.length === 0 ? (
+                <div className={`flex h-full items-center justify-center px-8 text-center text-xs leading-relaxed ${theme === "light" ? "text-black/35" : "text-white/30"}`}>
+                  暂无项目
+                </div>
+              ) : (
+                projectBoards.map((board) => {
+                  const isActive = board.id === activeCanvasBoardId;
+                  const isRenaming = projectRenamingBoardId === board.id;
+                  const isDragging = draggingProjectBoardId === board.id;
+                  const showDropBefore = projectDropIndicator?.boardId === board.id && projectDropIndicator.position === "before";
+                  const showDropAfter = projectDropIndicator?.boardId === board.id && projectDropIndicator.position === "after";
+                  return (
+                    <div
+                      key={board.id}
+                      className="relative"
+                      draggable={!isRenaming}
+                      onDragStart={(event) => handleProjectBoardDragStart(event, board.id)}
+                      onDragOver={(event) => {
+                        if (!draggingProjectBoardId || draggingProjectBoardId === board.id) return;
+                        event.preventDefault();
+                        event.dataTransfer.dropEffect = "move";
+                        const rect = event.currentTarget.getBoundingClientRect();
+                        setProjectDropIndicator({
+                          boardId: board.id,
+                          position: event.clientY > rect.top + rect.height / 2 ? "after" : "before",
+                        });
+                      }}
+                      onDrop={(event) => handleProjectBoardDrop(event, board.id)}
+                      onDragEnd={() => {
+                        setDraggingProjectBoardId("");
+                        setProjectDropIndicator(null);
+                      }}
+                      onContextMenu={(event) => {
+                        event.preventDefault();
+                        setProjectContextMenu({
+                          boardId: board.id,
+                          x: event.clientX,
+                          y: event.clientY,
+                        });
+                      }}
+                    >
+                      {showDropBefore && (
+                        <div className="pointer-events-none absolute left-2 right-2 top-0 z-10 h-0.5 -translate-y-1 rounded-full bg-green-500" />
+                      )}
+                      <div className={`group mb-1.5 flex items-center gap-2 rounded-xl px-3 py-2.5 transition-all ${
+                        isDragging
+                          ? theme === "light"
+                            ? "bg-black/[0.06] opacity-60"
+                            : "bg-white/[0.08] opacity-60"
+                          : isActive
+                          ? theme === "light"
+                            ? "bg-green-500/12 text-[#111]"
+                            : "bg-green-400/12 text-white"
+                          : theme === "light"
+                            ? "text-[#111] hover:bg-black/[0.045]"
+                            : "text-white hover:bg-white/[0.06]"
+                      }`}
+                      >
+                      {isRenaming ? (
+                        <input
+                          value={projectRenamingTitle}
+                          onChange={(event) => setProjectRenamingTitle(event.target.value)}
+                          onBlur={commitProjectRename}
+                          onKeyDown={(event) => {
+                            if (event.key === "Enter") commitProjectRename();
+                            if (event.key === "Escape") cancelProjectRename();
+                          }}
+                          autoFocus
+                          className={`min-w-0 flex-1 rounded-lg px-2 py-1 text-sm font-medium outline-none ${
+                            theme === "light"
+                              ? "bg-white text-[#111] ring-1 ring-black/10"
+                              : "bg-black/40 text-white ring-1 ring-white/12"
+                          }`}
+                        />
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={() => handleSelectCanvasBoard(board.id)}
+                          onDoubleClick={() => startProjectRename(board)}
+                          title="双击重命名"
+                          className="min-w-0 flex-1 cursor-move truncate text-left text-sm font-medium"
+                        >
+                          {board.title || "默认画布"}
+                        </button>
+                      )}
+                      {isActive && !isRenaming && (
+                        <span className="shrink-0 rounded-md bg-green-500/15 px-1.5 py-0.5 text-[10px] text-green-600">
+                          当前
+                        </span>
+                      )}
+                      </div>
+                      {showDropAfter && (
+                        <div className="pointer-events-none absolute bottom-0 left-2 right-2 z-10 h-0.5 translate-y-0.5 rounded-full bg-green-500" />
+                      )}
+                    </div>
+                  );
+                })
               )}
             </div>
+            {contextProjectBoard && (
+              <div
+                className={`fixed z-50 w-32 overflow-hidden rounded-xl border py-1 shadow-xl ${
+                  theme === "light"
+                    ? "border-black/8 bg-white text-[#111]"
+                    : "border-white/10 bg-[#171719] text-white"
+                }`}
+                style={{ left: projectContextMenu.x, top: projectContextMenu.y }}
+                onPointerDown={(event) => event.stopPropagation()}
+              >
+                <button
+                  type="button"
+                  onClick={() => {
+                    setProjectContextMenu(null);
+                    startProjectRename(contextProjectBoard);
+                  }}
+                  className={`block w-full px-3 py-2 text-left text-sm transition-colors ${
+                    theme === "light" ? "hover:bg-black/[0.05]" : "hover:bg-white/[0.06]"
+                  }`}
+                >
+                  重命名
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setProjectContextMenu(null);
+                    handleDeleteCanvasBoard(contextProjectBoard.id);
+                  }}
+                  className={`block w-full px-3 py-2 text-left text-sm transition-colors ${
+                    theme === "light"
+                      ? "text-red-500 hover:bg-red-500/10"
+                      : "text-red-300 hover:bg-red-500/10"
+                  }`}
+                >
+                  删除
+                </button>
+              </div>
+            )}
           </aside>
           <button
             type="button"
-            aria-label="调整灵感面板宽度"
+            aria-label="调整项目层面板宽度"
             onPointerDown={handleInspirationResizeStart}
             className={`absolute right-0 top-0 h-full w-2 translate-x-1/2 cursor-col-resize transition-colors ${theme === "light" ? "hover:bg-black/10" : "hover:bg-white/12"}`}
           />

@@ -1,0 +1,24 @@
+---
+description: Preserve canvas project persistence and deletion semantics
+globs: src/app/canvas/page.js,src/lib/server/cloudStateStore.js,src/lib/useCloudLocalStorageSync.js
+alwaysApply: false
+---
+
+# Canvas Project Persistence
+
+Professional creation mode project/canvas data is durable user work. Preserve these invariants:
+
+- Every new canvas/project must persist across refreshes, returning from the home page, new browser sessions, and cloud sync.
+- Each canvas must keep its own images, text items, shapes, order, title, and active selection target unless the user explicitly changes them.
+- Every canvas must use the same professional creation behavior and settings. Switching projects must not change generation, editing, reference image, drag/drop, copy/paste, delete, history, or cloud sync rules.
+- OSS/cloud asset persistence must not cause canvas content to disappear. Canvas state should store durable asset URLs when available.
+- Never overwrite restored `lovart-canvas-boards` with the initial default board during page startup. Persistence writes must wait until restore is complete.
+- Multi-device/cloud merge fixes must not drop projects or project contents just because another client has an older snapshot.
+- Only explicit user deletion may remove a project, image, text item, shape, conversation, or history entry. Deletions should continue using deletion markers where applicable so old cloud state cannot revive deleted items.
+
+Before changing canvas project persistence, test at least:
+
+1. Create multiple projects, return home, re-enter professional mode: all projects remain.
+2. Rename and reorder projects, refresh: order and names remain.
+3. Add content to different projects, switch between them, refresh: each project keeps its own content.
+4. Delete one project or item, refresh/cloud sync: only that deleted data stays gone.

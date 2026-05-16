@@ -26,8 +26,6 @@ import {
   Sparkles,
   Trash2,
   Video,
-  Layers,
-  Pencil,
 } from "lucide-react";
 import { compressImage } from "@/lib/imageUtils";
 import { MAX_GEN_COUNT } from "@/lib/genLimits";
@@ -677,13 +675,6 @@ export default function ChatPanel({
   composerMode = "agent", onComposerModeChange,
   theme, onToggleTheme,
   width, onWidthChange,
-  canvasBoards = [],
-  activeCanvasBoardId,
-  activeCanvasBoard,
-  onNewCanvasBoard,
-  onSelectCanvasBoard,
-  onRenameCanvasBoard,
-  onDeleteCanvasBoard,
   canvasHistoryMessages = [],
   onSelectCanvasHistory,
   onClearCanvasHistory,
@@ -694,16 +685,12 @@ export default function ChatPanel({
   const fileInputRef = useRef(null);
   const conversationMenuRef = useRef(null);
   const canvasHistoryMenuRef = useRef(null);
-  const canvasBoardMenuRef = useRef(null);
   const [dragOver, setDragOver] = useState(false);
   const [previewSrc, setPreviewSrc] = useState(null);
   const [showConversationMenu, setShowConversationMenu] = useState(false);
   const [showCanvasHistoryMenu, setShowCanvasHistoryMenu] = useState(false);
-  const [showCanvasBoardMenu, setShowCanvasBoardMenu] = useState(false);
   const [showModelMenu, setShowModelMenu] = useState(false);
   const [conversationSearch, setConversationSearch] = useState("");
-  const [renamingBoardId, setRenamingBoardId] = useState("");
-  const [renamingBoardTitle, setRenamingBoardTitle] = useState("");
   const [gptAdvancedOpen, setGptAdvancedOpen] = useState(false);
 
   useEffect(() => {
@@ -711,7 +698,7 @@ export default function ChatPanel({
   }, [messages]);
 
   useEffect(() => {
-    if (!showConversationMenu && !showCanvasHistoryMenu && !showCanvasBoardMenu) {
+    if (!showConversationMenu && !showCanvasHistoryMenu) {
       return undefined;
     }
 
@@ -722,9 +709,6 @@ export default function ChatPanel({
       if (!canvasHistoryMenuRef.current?.contains(event.target)) {
         setShowCanvasHistoryMenu(false);
       }
-      if (!canvasBoardMenuRef.current?.contains(event.target)) {
-        setShowCanvasBoardMenu(false);
-      }
       if (!event.target.closest("[data-model-menu-root]")) {
         setShowModelMenu(false);
       }
@@ -732,7 +716,7 @@ export default function ChatPanel({
 
     window.addEventListener("pointerdown", handlePointerDown);
     return () => window.removeEventListener("pointerdown", handlePointerDown);
-  }, [showConversationMenu, showCanvasHistoryMenu, showCanvasBoardMenu]);
+  }, [showConversationMenu, showCanvasHistoryMenu]);
 
   const currentTier = MODEL_TIERS.find((t) => t.variants.some((v) => v.model === params.model)) || MODEL_TIERS[0];
   const isKlingVideoTier = currentTier.id === "kling-video";
@@ -816,7 +800,6 @@ export default function ChatPanel({
       )
     : canvasCompletedHistory;
   const reversedCanvasHistory = [...filteredCanvasHistory].reverse();
-  const sortedCanvasBoards = [...canvasBoards].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
   const formatConversationTime = useCallback((timestamp) => {
     if (!timestamp) return "";
     return new Date(timestamp).toLocaleString("zh-CN", {
@@ -825,24 +808,6 @@ export default function ChatPanel({
       hour: "2-digit",
       minute: "2-digit",
     });
-  }, []);
-
-  const startRenameCanvasBoard = useCallback((board) => {
-    setRenamingBoardId(board?.id || "");
-    setRenamingBoardTitle(board?.title || "默认画布");
-  }, []);
-
-  const commitRenameCanvasBoard = useCallback(() => {
-    if (!renamingBoardId) return;
-    const nextTitle = renamingBoardTitle.trim();
-    if (nextTitle) onRenameCanvasBoard?.(renamingBoardId, nextTitle);
-    setRenamingBoardId("");
-    setRenamingBoardTitle("");
-  }, [onRenameCanvasBoard, renamingBoardId, renamingBoardTitle]);
-
-  const cancelRenameCanvasBoard = useCallback(() => {
-    setRenamingBoardId("");
-    setRenamingBoardTitle("");
   }, []);
 
 
@@ -1164,7 +1129,6 @@ export default function ChatPanel({
                 onClick={() => {
                   setShowCanvasHistoryMenu((prev) => !prev);
                   setShowConversationMenu(false);
-                  setShowCanvasBoardMenu(false);
                 }}
                 className={`w-8 h-8 rounded-lg flex items-center justify-center transition-all ${
                   showCanvasHistoryMenu
@@ -1313,162 +1277,12 @@ export default function ChatPanel({
                 </div>
               )}
             </div>
-            <div className="relative" ref={canvasBoardMenuRef}>
-              <button
-                type="button"
-                onClick={() => {
-                  setShowCanvasBoardMenu((prev) => !prev);
-                  setShowCanvasHistoryMenu(false);
-                  setShowConversationMenu(false);
-                }}
-                className={`w-8 h-8 rounded-lg flex items-center justify-center transition-all ${
-                  showCanvasBoardMenu
-                    ? "text-green-600 bg-green-500/10"
-                    : "text-text-tertiary hover:text-text-primary hover:bg-bg-hover"
-                }`}
-                title={activeCanvasBoard?.title || "画布工作区"}
-                aria-label="画布工作区"
-              >
-                <Layers size={16} />
-              </button>
-
-              {showCanvasBoardMenu && (
-                <div className="absolute right-0 top-[calc(100%+8px)] flex h-[420px] w-[320px] flex-col overflow-hidden rounded-2xl border border-border-primary bg-bg-secondary/95 shadow-2xl backdrop-blur-xl z-30 animate-fade-in">
-                  <div className="flex items-center justify-between gap-2 border-b border-border-primary px-3 py-2">
-                    <div className="min-w-0">
-                      <div className="flex items-center gap-2">
-                        <Layers size={14} className="text-text-tertiary" />
-                        <span className="text-sm font-medium text-text-primary">画布工作区</span>
-                      </div>
-                      <div className="mt-0.5 truncate text-[11px] text-text-tertiary">
-                        当前：{activeCanvasBoard?.title || "默认画布"}
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowCanvasBoardMenu(false);
-                        onNewCanvasBoard?.();
-                      }}
-                      className="h-8 rounded-xl bg-accent px-3 text-xs font-medium text-white transition-all hover:bg-accent-hover"
-                    >
-                      新建
-                    </button>
-                  </div>
-
-                  <div className="min-h-0 flex-1 overflow-y-auto px-3 py-2 scrollbar-thin">
-                    {sortedCanvasBoards.length === 0 && (
-                      <div className="px-4 py-10 text-center text-[11px] text-text-tertiary">
-                        暂无画布
-                      </div>
-                    )}
-                    {sortedCanvasBoards.map((board) => {
-                      const isActive = board.id === activeCanvasBoardId;
-                      const isRenaming = renamingBoardId === board.id;
-                      const imageCount = board.images?.length || 0;
-                      const textCount = board.texts?.length || 0;
-                      const shapeCount = board.shapes?.length || 0;
-                      return (
-                        <div
-                          key={board.id}
-                          className={`mb-2 rounded-xl border p-2 transition-all ${
-                            isActive
-                              ? "border-green-500/30 bg-green-500/10"
-                              : "border-border-primary bg-bg-tertiary hover:bg-bg-hover"
-                          }`}
-                        >
-                          {isRenaming ? (
-                            <div className="space-y-2">
-                              <input
-                                value={renamingBoardTitle}
-                                onChange={(event) => setRenamingBoardTitle(event.target.value)}
-                                onKeyDown={(event) => {
-                                  if (event.key === "Enter") commitRenameCanvasBoard();
-                                  if (event.key === "Escape") cancelRenameCanvasBoard();
-                                }}
-                                autoFocus
-                                className="w-full rounded-lg border border-accent/35 bg-bg-secondary px-2.5 py-1.5 text-sm text-text-primary outline-none"
-                              />
-                              <div className="flex items-center gap-1.5">
-                                <button
-                                  type="button"
-                                  onClick={commitRenameCanvasBoard}
-                                  className="rounded-lg bg-accent px-2.5 py-1 text-[11px] font-medium text-white transition-all hover:bg-accent-hover"
-                                >
-                                  保存
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={cancelRenameCanvasBoard}
-                                  className="rounded-lg px-2.5 py-1 text-[11px] text-text-tertiary transition-all hover:bg-bg-hover hover:text-text-primary"
-                                >
-                                  取消
-                                </button>
-                              </div>
-                            </div>
-                          ) : (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setShowCanvasBoardMenu(false);
-                                onSelectCanvasBoard?.(board.id);
-                              }}
-                              className="w-full text-left"
-                            >
-                              <div className="flex items-start justify-between gap-2">
-                                <div className="min-w-0">
-                                  <div className={`truncate text-sm font-medium ${isActive ? "text-text-primary" : "text-text-secondary"}`}>
-                                    {board.title || "默认画布"}
-                                  </div>
-                                  <div className="mt-1 text-[11px] text-text-tertiary">
-                                    {imageCount} 图 · {textCount} 文案 · {shapeCount} 形状
-                                  </div>
-                                </div>
-                                {isActive && (
-                                  <span className="shrink-0 rounded-md bg-accent/15 px-1.5 py-0.5 text-[10px] text-accent">
-                                    当前
-                                  </span>
-                                )}
-                              </div>
-                              <div className="mt-1 text-[10px] text-text-tertiary">
-                                {formatConversationTime(board.updatedAt)}
-                              </div>
-                            </button>
-                          )}
-                          {board.title !== "默认画布" ? (
-                            <div className="mt-2 flex items-center gap-1.5">
-                              <button
-                                type="button"
-                                onClick={() => startRenameCanvasBoard(board)}
-                                className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] text-text-tertiary transition-all hover:bg-bg-hover hover:text-text-primary"
-                              >
-                                <Pencil size={11} />
-                                重命名
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => onDeleteCanvasBoard?.(board.id)}
-                                className="ml-auto inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] text-text-tertiary transition-all hover:bg-red-500/10 hover:text-red-400"
-                              >
-                                <Trash2 size={11} />
-                                删除
-                              </button>
-                            </div>
-                          ) : null}
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-            </div>
             <div className="relative" ref={conversationMenuRef}>
               <button
                 type="button"
                 onClick={() => {
                   setShowConversationMenu((prev) => !prev);
                   setShowCanvasHistoryMenu(false);
-                  setShowCanvasBoardMenu(false);
                 }}
                 className="w-8 h-8 rounded-lg flex items-center justify-center text-text-tertiary hover:text-text-primary hover:bg-bg-hover transition-all"
                 title={activeConversation?.title || "当前对话"}
