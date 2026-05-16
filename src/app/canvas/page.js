@@ -1035,19 +1035,21 @@ function areSameRefImageList(left = [], right = []) {
 
 function messageBelongsToCanvasBoard(message, boardId, hasMultipleBoards = false) {
   if (!message) return false;
+  if (!hasMultipleBoards) return true;
   if (message.canvasBoardId) return message.canvasBoardId === boardId;
   // Legacy messages were global. Keep them visible only before multiple project canvases are in use.
-  return !hasMultipleBoards;
+  return false;
 }
 
 function conversationBelongsToCanvasBoard(conversation, boardId, hasMultipleBoards = false) {
   if (!conversation) return false;
+  if (!hasMultipleBoards) return true;
   if (conversation.canvasBoardId) return conversation.canvasBoardId === boardId;
   const messages = conversation.messages || [];
   if (messages.some((message) => message.canvasBoardId)) {
     return messages.some((message) => message.canvasBoardId === boardId);
   }
-  return !hasMultipleBoards;
+  return false;
 }
 
 function normalizeTextEditBlocks(blocks = []) {
@@ -1630,7 +1632,9 @@ function HomeInner() {
   useEffect(() => {
     if (!persistReady) return;
     try {
-      localStorage.setItem("lovart-canvas-boards", JSON.stringify(sanitizeCanvasBoardsForStorage(canvasBoards)));
+      const boardsForStorage = sanitizeCanvasBoardsForStorage(canvasBoards);
+      if (boardsForStorage.length === 0) return;
+      localStorage.setItem("lovart-canvas-boards", JSON.stringify(boardsForStorage));
       localStorage.setItem("lovart-active-canvas-board", activeCanvasBoardId || "");
     } catch {
       // 多画布同样遵循原有策略：写入失败时保留上一次可用数据。
@@ -3293,6 +3297,10 @@ function HomeInner() {
       toast("生成过程中暂时不能删除画布", "info", 1500);
       return;
     }
+    if (canvasBoards.length <= 1) {
+      toast("默认画布不能删除", "info", 1500);
+      return;
+    }
     const boardToDelete = canvasBoards.find((board) => board.id === boardId);
     recordCloudDeletions({
       canvasBoardIds: boardId,
@@ -3303,18 +3311,7 @@ function HomeInner() {
     });
 
     setCanvasBoards((prev) => {
-      if (prev.length <= 1) {
-        const nextBoard = createCanvasBoard({ title: "默认画布" });
-        setActiveCanvasBoardId(nextBoard.id);
-        canvasHistory.setState([]);
-        setRefImages([]);
-        canvasTextsHistory.setState([]);
-        canvasShapesHistory.setState([]);
-        setSelectedImage(null);
-        setSemanticSelection(null);
-        canvasSelectionUrlsRef.current = [];
-        return [nextBoard];
-      }
+      if (prev.length <= 1) return prev;
 
       const remaining = prev.filter((board) => board.id !== boardId);
       if (activeCanvasBoardId === boardId) {
@@ -3463,6 +3460,7 @@ function HomeInner() {
   const contextProjectBoard = projectContextMenu
     ? canvasBoards.find((board) => board.id === projectContextMenu.boardId)
     : null;
+  const canDeleteContextProjectBoard = Boolean(contextProjectBoard) && canvasBoards.length > 1;
   const hasOtherBoardTaskNotice = Object.entries(canvasBoardTaskNotices).some(([boardId, notice]) => (
     boardId !== activeCanvasBoardId && (notice?.completed || notice?.failed)
   ));
@@ -3689,20 +3687,22 @@ function HomeInner() {
                 >
                   重命名
                 </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setProjectContextMenu(null);
-                    handleDeleteCanvasBoard(contextProjectBoard.id);
-                  }}
-                  className={`block w-full px-3 py-2 text-left text-sm transition-colors ${
-                    theme === "light"
-                      ? "text-red-500 hover:bg-red-500/10"
-                      : "text-red-300 hover:bg-red-500/10"
-                  }`}
-                >
-                  删除
-                </button>
+                {canDeleteContextProjectBoard && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setProjectContextMenu(null);
+                      handleDeleteCanvasBoard(contextProjectBoard.id);
+                    }}
+                    className={`block w-full px-3 py-2 text-left text-sm transition-colors ${
+                      theme === "light"
+                        ? "text-red-500 hover:bg-red-500/10"
+                        : "text-red-300 hover:bg-red-500/10"
+                    }`}
+                  >
+                    删除
+                  </button>
+                )}
               </div>
             )}
           </aside>

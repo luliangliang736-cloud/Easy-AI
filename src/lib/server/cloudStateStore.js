@@ -41,6 +41,12 @@ function safeJsonParse(value, fallback) {
   }
 }
 
+function isEmptyCanvasBoardsValue(key, value = "") {
+  if (key !== "lovart-canvas-boards") return false;
+  const parsed = safeJsonParse(value, null);
+  return Array.isArray(parsed) && parsed.length === 0;
+}
+
 function getItemId(item) {
   return item?.id ? String(item.id) : "";
 }
@@ -289,6 +295,14 @@ function mergeCanvasBoards(existingValue = "", incomingValue = "", deletions = {
   const incoming = safeJsonParse(incomingValue, []);
   if (!Array.isArray(existing) || !Array.isArray(incoming)) return incomingValue;
 
+  if (existing.length > 0 && incoming.length === 0) {
+    const filteredExisting = filterDeletedCanvasBoards(existing, deletions);
+    // The UI always creates a replacement board when the last board is deleted.
+    // If an empty list arrives, treat it as a stale/broken snapshot instead of
+    // letting it wipe every project in the cloud.
+    return JSON.stringify(filteredExisting.length > 0 ? filteredExisting : existing);
+  }
+
   const merged = mergeArrayById(
     filterDeletedCanvasBoards(existing, deletions),
     filterDeletedCanvasBoards(incoming, deletions),
@@ -339,7 +353,12 @@ export function normalizeCloudStateItems(items = []) {
       value: typeof item?.value === "string" ? item.value : "",
       clientUpdatedAt: Number(item?.clientUpdatedAt || Date.now()),
     }))
-    .filter((item) => allowedStateKeys.has(item.key) && item.value && item.value.length <= MAX_STATE_VALUE_CHARS);
+    .filter((item) => (
+      allowedStateKeys.has(item.key)
+      && item.value
+      && item.value.length <= MAX_STATE_VALUE_CHARS
+      && !isEmptyCanvasBoardsValue(item.key, item.value)
+    ));
 }
 
 export async function readUserCloudState(userEmail = "") {

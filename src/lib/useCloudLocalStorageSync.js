@@ -70,6 +70,18 @@ function safeJsonParse(value, fallback) {
   }
 }
 
+function isEmptyCanvasBoardsValue(key, value = "") {
+  if (key !== "lovart-canvas-boards") return false;
+  const parsed = safeJsonParse(value, null);
+  return Array.isArray(parsed) && parsed.length === 0;
+}
+
+function shouldSkipCloudStateItem(item) {
+  // A valid canvas workspace always has at least one board. Never sync an
+  // accidental empty board list, otherwise one stale tab can wipe every project.
+  return isEmptyCanvasBoardsValue(item?.key, item?.value);
+}
+
 function getItemId(item) {
   return item?.id ? String(item.id) : "";
 }
@@ -189,6 +201,7 @@ function readSnapshot(keys = []) {
       return { key, value, clientUpdatedAt: Number(updatedAt[key] || now) };
     })
     .filter(Boolean)
+    .filter((item) => !shouldSkipCloudStateItem(item))
     .map((item, index, items) => {
       if (index === items.length - 1 && changed) {
         writeLocalUpdatedAt(updatedAt);
@@ -278,6 +291,7 @@ export function useCloudLocalStorageSync(keys = [], options = {}) {
         for (const item of items) {
           if (!keys.includes(item.key) || typeof item.value !== "string") continue;
           const incomingValue = applyLocalDeletionsToStateValue(item.key, item.value, localDeletions);
+          if (shouldSkipCloudStateItem({ key: item.key, value: incomingValue })) continue;
           const localValue = window.localStorage.getItem(item.key);
           const cloudUpdatedAt = Number(item.clientUpdatedAt || 0);
           let localValueUpdatedAt = Number(localUpdatedAt[item.key] || 0);
