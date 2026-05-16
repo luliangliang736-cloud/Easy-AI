@@ -1324,8 +1324,18 @@ function HomeInner() {
 
       const parsedBoards = normalizeCanvasBoards(safeParseStorageArray(savedBoards));
       if (parsedBoards.length > 0) {
-        const nextActiveBoard = parsedBoards.find((board) => board.id === savedActiveBoardId) || parsedBoards[0];
-        setCanvasBoards(parsedBoards);
+        const activeBoardBeforeFallback = parsedBoards.find((board) => board.id === savedActiveBoardId) || parsedBoards[0];
+        const fallbackImages = normalizeCanvasImageItems(parsedImages || [], "legacy-board-fallback");
+        const shouldBackfillActiveBoardImages = (activeBoardBeforeFallback.images || []).length === 0 && fallbackImages.length > 0;
+        const boardsWithFallback = shouldBackfillActiveBoardImages
+          ? parsedBoards.map((board) => (
+              board.id === activeBoardBeforeFallback.id
+                ? { ...board, images: fallbackImages, updatedAt: Date.now() }
+                : board
+            ))
+          : parsedBoards;
+        const nextActiveBoard = boardsWithFallback.find((board) => board.id === activeBoardBeforeFallback.id) || boardsWithFallback[0];
+        setCanvasBoards(boardsWithFallback);
         setActiveCanvasBoardId(nextActiveBoard.id);
         canvasHistory.setState(nextActiveBoard.images || []);
         setRefImages(nextActiveBoard.refImages || []);
@@ -1632,14 +1642,24 @@ function HomeInner() {
   useEffect(() => {
     if (!persistReady) return;
     try {
-      const boardsForStorage = sanitizeCanvasBoardsForStorage(canvasBoards);
+      const boardsForStorage = sanitizeCanvasBoardsForStorage(canvasBoards.map((board) => (
+        board.id === activeCanvasBoardId
+          ? {
+              ...board,
+              images: canvasImages,
+              refImages: Array.isArray(refImages) ? refImages.filter(Boolean) : [],
+              texts: canvasTexts,
+              shapes: canvasShapes,
+            }
+          : board
+      )));
       if (boardsForStorage.length === 0) return;
       localStorage.setItem("lovart-canvas-boards", JSON.stringify(boardsForStorage));
       localStorage.setItem("lovart-active-canvas-board", activeCanvasBoardId || "");
     } catch {
       // 多画布同样遵循原有策略：写入失败时保留上一次可用数据。
     }
-  }, [activeCanvasBoardId, canvasBoards, persistReady]);
+  }, [activeCanvasBoardId, canvasBoards, canvasImages, refImages, canvasTexts, canvasShapes, persistReady]);
 
   // Persist canvas images
   useEffect(() => {
