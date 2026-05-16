@@ -582,7 +582,7 @@ function createCanvasBoard(overrides = {}) {
     shapes: Array.isArray(overrides.shapes) ? overrides.shapes : [],
     createdAt: overrides.createdAt || now,
     updatedAt: overrides.updatedAt || now,
-    lastGeneratedAt: overrides.lastGeneratedAt || null,
+    lastGeneratedAt: overrides.lastGeneratedAt || inferLastGeneratedAtFromImages(overrides.images) || null,
   };
 }
 
@@ -623,36 +623,21 @@ function formatCanvasUpdatedAt(value) {
   return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${timeText}`;
 }
 
-function areBoardListsEqual(left = [], right = []) {
-  if (left === right) return true;
-  try {
-    return JSON.stringify(left || []) === JSON.stringify(right || []);
-  } catch {
-    return false;
-  }
+function getGeneratedTimestampFromCanvasImage(item) {
+  const id = String(item?.id || "");
+  const match = id.match(/^ai(?:-[a-z]+)*-(\d{10,})/i);
+  if (!match) return 0;
+  const timestamp = Number(match[1]);
+  const lowerBound = new Date("2024-01-01").getTime();
+  const upperBound = Date.now() + 24 * 60 * 60 * 1000;
+  return Number.isFinite(timestamp) && timestamp >= lowerBound && timestamp <= upperBound
+    ? timestamp
+    : 0;
 }
 
-function updateCanvasBoardContentIfChanged(board, nextContent) {
-  if (!board) return board;
-  const images = Array.isArray(nextContent.images) ? nextContent.images : [];
-  const refImages = Array.isArray(nextContent.refImages) ? nextContent.refImages.filter(Boolean) : [];
-  const texts = Array.isArray(nextContent.texts) ? nextContent.texts : [];
-  const shapes = Array.isArray(nextContent.shapes) ? nextContent.shapes : [];
-  const unchanged =
-    areBoardListsEqual(board.images || [], images) &&
-    areBoardListsEqual(board.refImages || [], refImages) &&
-    areBoardListsEqual(board.texts || [], texts) &&
-    areBoardListsEqual(board.shapes || [], shapes);
-
-  if (unchanged) return board;
-  return {
-    ...board,
-    images,
-    refImages,
-    texts,
-    shapes,
-    updatedAt: Date.now(),
-  };
+function inferLastGeneratedAtFromImages(images = []) {
+  if (!Array.isArray(images)) return 0;
+  return images.reduce((latest, item) => Math.max(latest, getGeneratedTimestampFromCanvasImage(item)), 0);
 }
 
 async function makeMessagePreviewImage(img) {
@@ -1672,12 +1657,14 @@ function HomeInner() {
     if (!persistReady || !activeCanvasBoardId) return;
     setCanvasBoards((prev) => prev.map((board) => (
       board.id === activeCanvasBoardId
-        ? updateCanvasBoardContentIfChanged(board, {
+        ? {
+            ...board,
             images: canvasImages,
-            refImages,
+            refImages: Array.isArray(refImages) ? refImages.filter(Boolean) : [],
             texts: canvasTexts,
             shapes: canvasShapes,
-          })
+            updatedAt: Date.now(),
+          }
         : board
     )));
   }, [activeCanvasBoardId, canvasImages, refImages, canvasTexts, canvasShapes, persistReady]);
@@ -2712,12 +2699,7 @@ function HomeInner() {
     setRefImages(list);
     setCanvasBoards((prev) => prev.map((board) => (
       board.id === refImagesBoardId
-        ? updateCanvasBoardContentIfChanged(board, {
-            images: board.images || [],
-            refImages: list,
-            texts: board.texts || [],
-            shapes: board.shapes || [],
-          })
+        ? { ...board, refImages: list, updatedAt: Date.now() }
         : board
     )));
 
@@ -2728,12 +2710,11 @@ function HomeInner() {
           setRefImages((prev) => prev.map((existing) => (existing === item ? url : existing)));
           setCanvasBoards((prev) => prev.map((board) => (
             board.id === refImagesBoardId
-              ? updateCanvasBoardContentIfChanged(board, {
-                  images: board.images || [],
+              ? {
+                  ...board,
                   refImages: (board.refImages || []).map((existing) => (existing === item ? url : existing)),
-                  texts: board.texts || [],
-                  shapes: board.shapes || [],
-                })
+                  updatedAt: Date.now(),
+                }
               : board
           )));
         })
@@ -3283,12 +3264,14 @@ function HomeInner() {
       nextBoard,
       ...prev.map((board) => (
         board.id === activeCanvasBoardId
-          ? updateCanvasBoardContentIfChanged(board, {
+          ? {
+              ...board,
               images: canvasImages,
-              refImages,
+              refImages: Array.isArray(refImages) ? refImages.filter(Boolean) : [],
               texts: canvasTexts,
               shapes: canvasShapes,
-            })
+              updatedAt: Date.now(),
+            }
           : board
       )),
     ]);
@@ -3313,12 +3296,14 @@ function HomeInner() {
 
     setCanvasBoards((prev) => prev.map((board) => (
       board.id === activeCanvasBoardId
-        ? updateCanvasBoardContentIfChanged(board, {
+        ? {
+            ...board,
             images: canvasImages,
-            refImages,
+            refImages: Array.isArray(refImages) ? refImages.filter(Boolean) : [],
             texts: canvasTexts,
             shapes: canvasShapes,
-          })
+            updatedAt: Date.now(),
+          }
         : board
     )));
     setActiveCanvasBoardId(targetBoard.id);
