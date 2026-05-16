@@ -563,6 +563,7 @@ function createConversation(overrides = {}) {
   const now = Date.now();
   return {
     id: overrides.id || `conv-${now}-${Math.random().toString(36).slice(2, 8)}`,
+    canvasBoardId: overrides.canvasBoardId || null,
     title: overrides.title || DEFAULT_CONVERSATION_TITLE,
     messages: overrides.messages || [],
     createdAt: overrides.createdAt || now,
@@ -1029,6 +1030,23 @@ function areSameRefImageList(left = [], right = []) {
   return left.every((image, index) => getRefImageIdentity(image) === getRefImageIdentity(right[index]));
 }
 
+function messageBelongsToCanvasBoard(message, boardId, hasMultipleBoards = false) {
+  if (!message) return false;
+  if (message.canvasBoardId) return message.canvasBoardId === boardId;
+  // Legacy messages were global. Keep them visible only before multiple project canvases are in use.
+  return !hasMultipleBoards;
+}
+
+function conversationBelongsToCanvasBoard(conversation, boardId, hasMultipleBoards = false) {
+  if (!conversation) return false;
+  if (conversation.canvasBoardId) return conversation.canvasBoardId === boardId;
+  const messages = conversation.messages || [];
+  if (messages.some((message) => message.canvasBoardId)) {
+    return messages.some((message) => message.canvasBoardId === boardId);
+  }
+  return !hasMultipleBoards;
+}
+
 function normalizeTextEditBlocks(blocks = []) {
   return (Array.isArray(blocks) ? blocks : [])
     .filter((block) => block?.text)
@@ -1183,12 +1201,20 @@ function HomeInner() {
   const [persistReady, setPersistReady] = useState(false);
   // 标记 localStorage 已加载完毕，加载前禁止持久化 effect 写入（避免覆盖已保存的数据）
   const persistReadyRef = useRef(false);
-  const activeConversation = conversations.find((conversation) => conversation.id === activeConversationId) || conversations[0];
   useAuthSessionGuard();
   useCloudLocalStorageSync(CANVAS_CLOUD_STATE_KEYS, { overwriteOnFirstRestore: true, intervalMs: 2000 });
   const activeCanvasBoard = canvasBoards.find((board) => board.id === activeCanvasBoardId) || canvasBoards[0];
   const activeCanvasBoardIdRef = useRef(activeCanvasBoardId);
-  const messages = activeConversation?.messages || [];
+  const activeCanvasConversations = conversations.filter((conversation) =>
+    conversationBelongsToCanvasBoard(conversation, activeCanvasBoardId, canvasBoards.length > 1)
+  );
+  const activeConversation =
+    activeCanvasConversations.find((conversation) => conversation.id === activeConversationId) ||
+    activeCanvasConversations[0];
+  const allMessages = activeConversation?.messages || [];
+  const messages = allMessages.filter((message) =>
+    messageBelongsToCanvasBoard(message, activeCanvasBoardId, canvasBoards.length > 1)
+  );
   const isGenerating = activeGenerationCount > 0;
   const isBusy = isTextEditing;
   const isNavigationBusy = isGenerating || isTextEditing;
@@ -1216,6 +1242,9 @@ function HomeInner() {
       ...message,
       _conversationId: conversation.id,
     }))
+  );
+  const activeCanvasHistoryMessages = historyMessages.filter((message) =>
+    messageBelongsToCanvasBoard(message, activeCanvasBoardId, canvasBoards.length > 1)
   );
 
   useEffect(() => {
@@ -1434,10 +1463,18 @@ function HomeInner() {
   }, []);
 
   useEffect(() => {
-    if (!activeConversationId && conversations[0]?.id) {
-      setActiveConversationId(conversations[0].id);
+    if (!persistReady || !activeCanvasBoardId) return;
+    if (activeCanvasConversations.some((conversation) => conversation.id === activeConversationId)) {
+      return;
     }
-  }, [activeConversationId, conversations]);
+    if (activeCanvasConversations[0]?.id) {
+      setActiveConversationId(activeCanvasConversations[0].id);
+      return;
+    }
+    const nextConversation = createConversation({ canvasBoardId: activeCanvasBoardId });
+    setConversations((prev) => [nextConversation, ...prev]);
+    setActiveConversationId(nextConversation.id);
+  }, [activeCanvasBoardId, activeCanvasConversations, activeConversationId, persistReady]);
 
   useEffect(() => {
     if (!canvasGeneratingItems.length) return undefined;
@@ -1892,6 +1929,7 @@ function HomeInner() {
       };
       const userMsg = {
         id: userMsgId,
+        canvasBoardId: generationBoardId,
         role: "user",
         text: composerText,
         params: sharedParams,
@@ -1904,6 +1942,7 @@ function HomeInner() {
       };
       const aiMsg = {
         id: aiMsgId,
+        canvasBoardId: generationBoardId,
         role: "assistant",
         text: composerText,
         params: sharedParams,
@@ -2028,6 +2067,7 @@ function HomeInner() {
 
     const userMsg = {
       id: userMsgId,
+      canvasBoardId: generationBoardId,
       role: "user",
       text: displayText,
       params: genParams,
@@ -2047,6 +2087,7 @@ function HomeInner() {
     }));
     const aiMsg = {
       id: aiMsgId,
+      canvasBoardId: generationBoardId,
       role: "assistant",
       text: displayText,
       params: genParams,
@@ -2604,6 +2645,7 @@ function HomeInner() {
     };
     const userMsg = {
       id: userMsgId,
+      canvasBoardId: textEditBoardId,
       role: "user",
       text: displayText,
       params: sharedParams,
@@ -2613,6 +2655,7 @@ function HomeInner() {
     };
     const aiMsg = {
       id: aiMsgId,
+      canvasBoardId: textEditBoardId,
       role: "assistant",
       text: "本地文字替换结果",
       params: sharedParams,
@@ -3050,32 +3093,31 @@ function HomeInner() {
   }, [toast, setParamsClamped]);
 
   const handleClearHistory = useCallback(() => {
-    const messagesToDelete = conversations.flatMap((conversation) => conversation.messages || []);
+    const messagesToDelete = activeCanvasHistoryMessages;
     recordCloudDeletions({
       messageIds: messagesToDelete.map((message) => message.id),
       imageUrls: messagesToDelete.flatMap(collectMessageImageUrls),
     });
     setConversations((prev) => prev.map((conversation) => ({
       ...conversation,
-      title: DEFAULT_CONVERSATION_TITLE,
-      messages: [],
+      messages: (conversation.messages || []).filter((message) =>
+        !messageBelongsToCanvasBoard(message, activeCanvasBoardId, canvasBoards.length > 1)
+      ),
       updatedAt: Date.now(),
     })));
-    localStorage.removeItem("lovart-conversations");
-    localStorage.removeItem("lovart-active-conversation");
     toast("历史记录已清空", "info", 1500);
-  }, [conversations, toast]);
+  }, [activeCanvasBoardId, activeCanvasHistoryMessages, canvasBoards.length, toast]);
 
   const handleNewConversation = useCallback(() => {
     if (isNavigationBusy) {
       toast("生成过程中暂时不能切换对话", "info", 1500);
       return;
     }
-    const nextConversation = createConversation();
+    const nextConversation = createConversation({ canvasBoardId: activeCanvasBoardId });
     setConversations((prev) => [nextConversation, ...prev]);
     setActiveConversationId(nextConversation.id);
     resetComposer();
-  }, [isNavigationBusy, resetComposer, toast]);
+  }, [activeCanvasBoardId, isNavigationBusy, resetComposer, toast]);
 
   const handleNewCanvasBoard = useCallback(() => {
     if (isTextEditing) {
@@ -3205,7 +3247,7 @@ function HomeInner() {
 
     setConversations((prev) => {
       if (prev.length <= 1) {
-        const nextConversation = createConversation();
+        const nextConversation = createConversation({ canvasBoardId: activeCanvasBoardId });
         setActiveConversationId(nextConversation.id);
         resetComposer();
         return [nextConversation];
@@ -3213,14 +3255,23 @@ function HomeInner() {
 
       const remaining = prev.filter((conversation) => conversation.id !== conversationId);
       if (activeConversationId === conversationId) {
-        setActiveConversationId(remaining[0]?.id || "");
+        const nextCanvasConversation = remaining.find((conversation) =>
+          conversationBelongsToCanvasBoard(conversation, activeCanvasBoardId, canvasBoards.length > 1)
+        );
+        if (nextCanvasConversation) {
+          setActiveConversationId(nextCanvasConversation.id);
+        } else {
+          const nextConversation = createConversation({ canvasBoardId: activeCanvasBoardId });
+          setActiveConversationId(nextConversation.id);
+          return [nextConversation, ...remaining];
+        }
         resetComposer();
       }
       return remaining;
     });
 
     toast("对话已删除", "info", 1200);
-  }, [activeConversationId, conversations, isNavigationBusy, resetComposer, toast]);
+  }, [activeCanvasBoardId, activeConversationId, canvasBoards.length, conversations, isNavigationBusy, resetComposer, toast]);
 
   const handleDeleteMessage = useCallback((messageId) => {
     if (isNavigationBusy) {
@@ -3563,8 +3614,8 @@ function HomeInner() {
         </div>
       )}
       <ChatPanel
-        conversations={conversations}
-        activeConversationId={activeConversationId}
+        conversations={activeCanvasConversations}
+        activeConversationId={activeConversation?.id || ""}
         onSelectConversation={handleSelectConversation}
         onNewConversation={handleNewConversation}
         onDeleteConversation={handleDeleteConversation}
@@ -3603,7 +3654,7 @@ function HomeInner() {
         onSelectCanvasBoard={handleSelectCanvasBoard}
         onRenameCanvasBoard={handleRenameCanvasBoard}
         onDeleteCanvasBoard={handleDeleteCanvasBoard}
-        canvasHistoryMessages={historyMessages}
+        canvasHistoryMessages={activeCanvasHistoryMessages}
         onSelectCanvasHistory={handleSelectHistory}
         onClearCanvasHistory={handleClearHistory}
         canvasHistorySearch={historySearch}
