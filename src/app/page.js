@@ -59,6 +59,24 @@ const WA_QUALITY_CLIENT_TIMEOUT_MS = 18 * 1000;
 const GENERATION_RECOVERY_POLL_MS = 2000;
 const GENERATION_RECOVERY_MAX_ATTEMPTS = Math.ceil((12 * 60 * 1000) / GENERATION_RECOVERY_POLL_MS);
 const BATCH_WA_CONCURRENCY = 10;
+const ACCOUNT_LOCAL_STATE_PREFIXES = [
+  "lovart-",
+  "easyai-cloud-state",
+  "easyai-profile-",
+];
+
+function clearAccountLocalState() {
+  if (typeof window === "undefined") return;
+  try {
+    Object.keys(window.localStorage).forEach((key) => {
+      if (ACCOUNT_LOCAL_STATE_PREFIXES.some((prefix) => key.startsWith(prefix))) {
+        window.localStorage.removeItem(key);
+      }
+    });
+  } catch {
+    // Account switching must not get blocked by a browser storage error.
+  }
+}
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -1070,6 +1088,7 @@ export default function HomePage() {
     : detectOneClickEntryMode(floatingPrompt, floatingRefImages);
   const profileAvatarSrc = profileAvatar || DEFAULT_PROFILE_AVATAR_SRC;
   const handleAuthSessionUnauthorized = useCallback(() => {
+    clearAccountLocalState();
     setAuthUser(null);
     setIsProfileMenuOpen(false);
     setIsProfileAccountOpen(false);
@@ -1146,7 +1165,10 @@ export default function HomePage() {
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data?.error || "登录失败");
 
+      clearAccountLocalState();
       setAuthUser(data?.user || { email: loginEmail, username: loginEmail });
+      setProfileDisplayName("");
+      setProfileAvatar("");
       setLoginPassword("");
       setIsLoginModalOpen(false);
       const next = pendingAuthNext?.startsWith("/") ? pendingAuthNext : "/";
@@ -1163,7 +1185,10 @@ export default function HomePage() {
 
   const handleLogout = useCallback(async () => {
     await fetch("/api/auth/logout", { method: "POST" }).catch(() => {});
+    clearAccountLocalState();
     setAuthUser(null);
+    setProfileDisplayName("");
+    setProfileAvatar("");
     setLoginPassword("");
     setPendingAuthNext("/");
     setIsProfileMenuOpen(false);
