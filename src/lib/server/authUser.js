@@ -10,6 +10,11 @@ export async function getRequestUser(request) {
   const session = request.cookies.get(AUTH_COOKIE_NAME)?.value || "";
   const user = await verifySessionValue(session);
   if (!user?.email) return null;
-  const active = await isAuthSessionActive(user.email, user.sid);
-  return active.active ? user : null;
+  try {
+    const active = await isAuthSessionActive(user.email, user.sid);
+    return active.active ? user : null;
+  } catch (error) {
+    console.error("[Auth] Active session check failed; accepting signed session:", error);
+    return user;
+  }
 }
