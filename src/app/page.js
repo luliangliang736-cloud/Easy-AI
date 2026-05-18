@@ -1082,6 +1082,7 @@ export default function HomePage() {
   const bottomSummaryRef = useRef(null);
   const profileMenuRef = useRef(null);
   const profileAvatarInputRef = useRef(null);
+  const initialAuthCheckAbortRef = useRef(null);
   const { theme, toggleTheme } = useTheme("dark");
   const floatingEntryMode = floatingIsGenerating
     ? floatingRuntimeMode
@@ -1104,24 +1105,26 @@ export default function HomePage() {
   });
 
   useEffect(() => {
-    let cancelled = false;
-    fetch("/api/auth/me")
+    const controller = new AbortController();
+    initialAuthCheckAbortRef.current = controller;
+    fetch("/api/auth/me", { signal: controller.signal })
       .then(async (res) => {
         if (!res.ok) return null;
         return res.json();
       })
       .then((data) => {
-        if (cancelled) return;
+        if (controller.signal.aborted) return;
         setAuthUser(data?.user || null);
       })
-      .catch(() => {
-        if (!cancelled) setAuthUser(null);
+      .catch((err) => {
+        if (err?.name === "AbortError" || controller.signal.aborted) return;
+        setAuthUser(null);
       })
       .finally(() => {
-        if (!cancelled) setIsAuthLoading(false);
+        if (!controller.signal.aborted) setIsAuthLoading(false);
       });
     return () => {
-      cancelled = true;
+      controller.abort();
     };
   }, []);
 
@@ -1165,7 +1168,9 @@ export default function HomePage() {
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data?.error || "登录失败");
 
+      initialAuthCheckAbortRef.current?.abort();
       clearAccountLocalState();
+      setIsAuthLoading(false);
       setAuthUser(data?.user || { email: loginEmail, username: loginEmail });
       setProfileDisplayName("");
       setProfileAvatar("");
