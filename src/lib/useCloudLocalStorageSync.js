@@ -10,6 +10,7 @@ import {
 const DEFAULT_INTERVAL_MS = 6000;
 const LOCAL_UPDATED_AT_KEY = "easyai-cloud-state-local-updated-at";
 const LOCAL_STATE_CHANGED_EVENT = "easyai-cloud-state-local-value-changed";
+export const CLOUD_STATE_RESTORED_EVENT = "easyai-cloud-state-restored";
 const KEEPALIVE_BODY_LIMIT = 60_000;
 const MANAGED_KEYS_GLOBAL = "__easyaiCloudStateManagedKeys";
 const STORAGE_PATCHED_GLOBAL = "__easyaiCloudStateStoragePatched";
@@ -301,6 +302,7 @@ async function saveSnapshot(items = [], options = {}) {
 export function useCloudLocalStorageSync(keys = [], options = {}) {
   const enabled = options.enabled !== false;
   const intervalMs = Number(options.intervalMs || DEFAULT_INTERVAL_MS);
+  const overwriteOnFirstRestore = options.overwriteOnFirstRestore === true;
   const lastSignatureRef = useRef("");
   const restoredRef = useRef(false);
   const keySignaturesRef = useRef({});
@@ -312,6 +314,15 @@ export function useCloudLocalStorageSync(keys = [], options = {}) {
     let syncTimer = 0;
     installCloudStateStoragePatch();
     keys.forEach((key) => getManagedCloudStateKeys().add(key));
+    const initialLocalValues = keys.reduce((acc, key) => {
+      const value = window.localStorage.getItem(key);
+      if (value !== null) acc[key] = value;
+      return acc;
+    }, {});
+
+    function hadInitialLocalValue(key) {
+      return Object.prototype.hasOwnProperty.call(initialLocalValues, key);
+    }
 
     function markLocalValueIfNeeded(key, value) {
       if (!keys.includes(key) || typeof value !== "string" || !value) return;
@@ -360,13 +371,19 @@ export function useCloudLocalStorageSync(keys = [], options = {}) {
         const localUpdatedAt = readLocalUpdatedAt();
         const localDeletions = normalizeCloudStateDeletions(window.localStorage.getItem(CLOUD_STATE_DELETIONS_KEY));
         let localUpdatedAtChanged = false;
+        const restoredKeys = [];
 
         for (const item of items) {
           if (!keys.includes(item.key) || typeof item.value !== "string") continue;
           let incomingValue = applyLocalDeletionsToStateValue(item.key, item.value, localDeletions);
           if (shouldSkipCloudStateItem({ key: item.key, value: incomingValue })) continue;
           const localValue = window.localStorage.getItem(item.key);
-          incomingValue = resolveIncomingStateValue(item.key, localValue, incomingValue);
+          const preferIncomingOnFirstRestore = overwriteOnFirstRestore && !hadInitialLocalValue(item.key);
+          incomingValue = resolveIncomingStateValue(
+            item.key,
+            preferIncomingOnFirstRestore ? "" : localValue,
+            incomingValue
+          );
           const cloudUpdatedAt = Number(item.clientUpdatedAt || 0);
           let localValueUpdatedAt = Number(localUpdatedAt[item.key] || 0);
           if (localValue && !localValueUpdatedAt) {
@@ -376,14 +393,18 @@ export function useCloudLocalStorageSync(keys = [], options = {}) {
           }
           const cloudIsNewer = cloudUpdatedAt > localValueUpdatedAt
             || (cloudUpdatedAt === localValueUpdatedAt && localValue !== incomingValue);
-          if (incomingValue && (localValue === null || (cloudIsNewer && localValue !== incomingValue))) {
+          if (incomingValue && (localValue === null || preferIncomingOnFirstRestore || (cloudIsNewer && localValue !== incomingValue))) {
             window.localStorage.setItem(item.key, incomingValue);
             localUpdatedAt[item.key] = cloudUpdatedAt || Date.now();
             localUpdatedAtChanged = true;
+            restoredKeys.push(item.key);
           }
         }
         if (localUpdatedAtChanged) {
           writeLocalUpdatedAt(localUpdatedAt);
+        }
+        if (restoredKeys.length > 0) {
+          window.dispatchEvent(new CustomEvent(CLOUD_STATE_RESTORED_EVENT, { detail: { keys: restoredKeys } }));
         }
 
         // Restore localStorage only. Do not reload the page from this hook:
@@ -455,5 +476,5 @@ export function useCloudLocalStorageSync(keys = [], options = {}) {
       window.removeEventListener(CLOUD_STATE_DELETIONS_CHANGED_EVENT, handleDeletionMarkerChanged);
       window.removeEventListener(LOCAL_STATE_CHANGED_EVENT, handleLocalManagedStateChanged);
     };
-  }, [enabled, intervalMs, keys]);
+  }, [enabled, intervalMs, keys, overwriteOnFirstRestore]);
 }

@@ -11,7 +11,7 @@ import { compressImage } from "@/lib/imageUtils";
 import { useHistory } from "@/lib/useHistory";
 import { useTheme } from "@/lib/useTheme";
 import { useAuthSessionGuard } from "@/lib/useAuthSessionGuard";
-import { useCloudLocalStorageSync } from "@/lib/useCloudLocalStorageSync";
+import { CLOUD_STATE_RESTORED_EVENT, useCloudLocalStorageSync } from "@/lib/useCloudLocalStorageSync";
 import { CLOUD_STATE_DELETIONS_KEY, normalizeCloudStateDeletions, recordCloudDeletions } from "@/lib/cloudStateDeletions";
 import { MAX_GEN_COUNT } from "@/lib/genLimits";
 import { Layers, Loader2, Plus } from "lucide-react";
@@ -1319,6 +1319,9 @@ function HomeInner() {
   const refImagesRef = useRef(refImages);
   const canvasTextsRef = useRef(canvasTexts);
   const canvasShapesRef = useRef(canvasShapes);
+  const setCanvasImagesState = canvasHistory.setState;
+  const setCanvasTextsState = canvasTextsHistory.setState;
+  const setCanvasShapesState = canvasShapesHistory.setState;
   const activeCanvasConversations = conversations.filter((conversation) =>
     conversationBelongsToCanvasBoard(conversation, activeCanvasBoardId, canvasBoards.length > 1)
   );
@@ -1392,82 +1395,96 @@ function HomeInner() {
 
   // Load from localStorage
   useEffect(() => {
-    try {
-      const ver = localStorage.getItem("lovart-version");
-      if (ver !== STORAGE_VERSION) {
-        const legacyMessages = localStorage.getItem("lovart-messages");
-        localStorage.setItem("lovart-version", STORAGE_VERSION);
-        if (legacyMessages && !localStorage.getItem("lovart-conversations")) {
-          const parsedMessages = safeParseStorageArray(legacyMessages) || [];
-          const migratedConversation = createConversation({
-            title: deriveConversationTitle(DEFAULT_CONVERSATION_TITLE, parsedMessages),
-            messages: parsedMessages,
-          });
-          setConversations([migratedConversation]);
-          setActiveConversationId(migratedConversation.id);
-          localStorage.removeItem("lovart-messages");
+    const loadCanvasStateFromStorage = () => {
+      try {
+        const ver = localStorage.getItem("lovart-version");
+        if (ver !== STORAGE_VERSION) {
+          const legacyMessages = localStorage.getItem("lovart-messages");
+          localStorage.setItem("lovart-version", STORAGE_VERSION);
+          if (legacyMessages && !localStorage.getItem("lovart-conversations")) {
+            const parsedMessages = safeParseStorageArray(legacyMessages) || [];
+            const migratedConversation = createConversation({
+              title: deriveConversationTitle(DEFAULT_CONVERSATION_TITLE, parsedMessages),
+              messages: parsedMessages,
+            });
+            setConversations([migratedConversation]);
+            setActiveConversationId(migratedConversation.id);
+            localStorage.removeItem("lovart-messages");
+          }
         }
-      }
-      const saved = localStorage.getItem("lovart-conversations");
-      const savedActiveConversationId = localStorage.getItem("lovart-active-conversation");
-      const savedImages = localStorage.getItem("lovart-canvas-images");
-      const savedTexts = localStorage.getItem("lovart-canvas-texts");
-      const savedShapes = localStorage.getItem("lovart-canvas-shapes");
-      const savedBoards = localStorage.getItem("lovart-canvas-boards");
-      const savedActiveBoardId = localStorage.getItem("lovart-active-canvas-board");
-      const localDeletions = normalizeCloudStateDeletions(localStorage.getItem(CLOUD_STATE_DELETIONS_KEY));
-      localStorage.removeItem(CANVAS_REF_IMAGES_STORAGE_KEY);
-      const parsedConversations = filterDeletedConversationsForRestore(safeParseStorageArray(saved), localDeletions);
-      if (parsedConversations?.length > 0) {
-        setConversations(parsedConversations.map((conversation) => ({
-          ...conversation,
-          messages: restoreInterruptedMessages(conversation.messages || []),
-        })));
-        setActiveConversationId(
-          parsedConversations.some((conversation) => conversation.id === savedActiveConversationId)
-            ? savedActiveConversationId
-            : parsedConversations[0].id
-        );
-      }
+        const saved = localStorage.getItem("lovart-conversations");
+        const savedActiveConversationId = localStorage.getItem("lovart-active-conversation");
+        const savedImages = localStorage.getItem("lovart-canvas-images");
+        const savedTexts = localStorage.getItem("lovart-canvas-texts");
+        const savedShapes = localStorage.getItem("lovart-canvas-shapes");
+        const savedBoards = localStorage.getItem("lovart-canvas-boards");
+        const savedActiveBoardId = localStorage.getItem("lovart-active-canvas-board");
+        const localDeletions = normalizeCloudStateDeletions(localStorage.getItem(CLOUD_STATE_DELETIONS_KEY));
+        localStorage.removeItem(CANVAS_REF_IMAGES_STORAGE_KEY);
+        const parsedConversations = filterDeletedConversationsForRestore(safeParseStorageArray(saved), localDeletions);
+        if (parsedConversations?.length > 0) {
+          setConversations(parsedConversations.map((conversation) => ({
+            ...conversation,
+            messages: restoreInterruptedMessages(conversation.messages || []),
+          })));
+          setActiveConversationId(
+            parsedConversations.some((conversation) => conversation.id === savedActiveConversationId)
+              ? savedActiveConversationId
+              : parsedConversations[0].id
+          );
+        }
 
-      const parsedImages = filterDeletedCanvasImages(safeParseStorageArray(savedImages), localDeletions);
-      const parsedTexts = (safeParseStorageArray(savedTexts) || [])
-        .filter((item) => !hasDeletedId(localDeletions, "canvasTextIds", item?.id));
-      const parsedShapes = (safeParseStorageArray(savedShapes) || [])
-        .filter((item) => !hasDeletedId(localDeletions, "canvasShapeIds", item?.id));
+        const parsedImages = filterDeletedCanvasImages(safeParseStorageArray(savedImages), localDeletions);
+        const parsedTexts = (safeParseStorageArray(savedTexts) || [])
+          .filter((item) => !hasDeletedId(localDeletions, "canvasTextIds", item?.id));
+        const parsedShapes = (safeParseStorageArray(savedShapes) || [])
+          .filter((item) => !hasDeletedId(localDeletions, "canvasShapeIds", item?.id));
 
-      const parsedBoards = normalizeCanvasBoards(filterDeletedCanvasBoardsForRestore(safeParseStorageArray(savedBoards), localDeletions));
-      if (parsedBoards.length > 0) {
-        const activeBoardBeforeFallback = parsedBoards.find((board) => board.id === savedActiveBoardId) || parsedBoards[0];
-        const nextActiveBoard = parsedBoards.find((board) => board.id === activeBoardBeforeFallback.id) || parsedBoards[0];
-        setCanvasBoards(parsedBoards);
-        setActiveCanvasBoardId(nextActiveBoard.id);
-        canvasHistory.setState(nextActiveBoard.images || []);
-        setRefImages(nextActiveBoard.refImages || []);
-        canvasTextsHistory.setState(nextActiveBoard.texts || []);
-        canvasShapesHistory.setState(nextActiveBoard.shapes || []);
-      } else {
-        const migratedBoard = createCanvasBoard({
-          id: initialCanvasBoardRef.current.id,
-          title: "默认画布",
-          images: normalizeCanvasImageItems(parsedImages || [], "legacy-board"),
-          refImages: [],
-          texts: parsedTexts || [],
-          shapes: parsedShapes || [],
-          createdAt: initialCanvasBoardRef.current.createdAt,
-          updatedAt: Date.now(),
-        });
-        setCanvasBoards([migratedBoard]);
-        setActiveCanvasBoardId(migratedBoard.id);
+        const parsedBoards = normalizeCanvasBoards(filterDeletedCanvasBoardsForRestore(safeParseStorageArray(savedBoards), localDeletions));
+        if (parsedBoards.length > 0) {
+          const activeBoardBeforeFallback = parsedBoards.find((board) => board.id === savedActiveBoardId) || parsedBoards[0];
+          const nextActiveBoard = parsedBoards.find((board) => board.id === activeBoardBeforeFallback.id) || parsedBoards[0];
+          setCanvasBoards(parsedBoards);
+          setActiveCanvasBoardId(nextActiveBoard.id);
+          setCanvasImagesState(nextActiveBoard.images || []);
+          setRefImages(nextActiveBoard.refImages || []);
+          setCanvasTextsState(nextActiveBoard.texts || []);
+          setCanvasShapesState(nextActiveBoard.shapes || []);
+        } else {
+          const migratedBoard = createCanvasBoard({
+            id: initialCanvasBoardRef.current.id,
+            title: "默认画布",
+            images: normalizeCanvasImageItems(parsedImages || [], "legacy-board"),
+            refImages: [],
+            texts: parsedTexts || [],
+            shapes: parsedShapes || [],
+            createdAt: initialCanvasBoardRef.current.createdAt,
+            updatedAt: Date.now(),
+          });
+          setCanvasBoards([migratedBoard]);
+          setActiveCanvasBoardId(migratedBoard.id);
+        }
+      } catch {
+        // 读取失败时保留旧数据，避免一次异常把历史记录清空。
+      } finally {
+        // 无论成功或失败，标记加载完成，之后的持久化 effect 才允许写入
+        persistReadyRef.current = true;
+        setPersistReady(true);
       }
-    } catch {
-      // 读取失败时保留旧数据，避免一次异常把历史记录清空。
-    } finally {
-      // 无论成功或失败，标记加载完成，之后的持久化 effect 才允许写入
-      persistReadyRef.current = true;
-      setPersistReady(true);
-    }
-  }, []);
+    };
+
+    const handleCloudStateRestored = (event) => {
+      const restoredKeys = Array.isArray(event?.detail?.keys) ? event.detail.keys : [];
+      if (!restoredKeys.some((key) => CANVAS_CLOUD_STATE_KEYS.includes(key))) return;
+      loadCanvasStateFromStorage();
+    };
+
+    loadCanvasStateFromStorage();
+    window.addEventListener(CLOUD_STATE_RESTORED_EVENT, handleCloudStateRestored);
+    return () => {
+      window.removeEventListener(CLOUD_STATE_RESTORED_EVENT, handleCloudStateRestored);
+    };
+  }, [setCanvasImagesState, setCanvasShapesState, setCanvasTextsState]);
 
   const cloudifyLocalGeneratedUrl = useCallback((url, filename = "image", scope = "canvas-migration") => {
     if (!isLocalGeneratedMediaUrl(url)) return Promise.resolve(url);
