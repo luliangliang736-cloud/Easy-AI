@@ -1447,7 +1447,7 @@ function HomeInner() {
   // 标记 localStorage 已加载完毕，加载前禁止持久化 effect 写入（避免覆盖已保存的数据）
   const persistReadyRef = useRef(false);
   useAuthSessionGuard();
-  useCloudLocalStorageSync(CANVAS_CLOUD_STATE_KEYS, { overwriteOnFirstRestore: true, intervalMs: 2000 });
+  useCloudLocalStorageSync(CANVAS_CLOUD_STATE_KEYS, { overwriteOnFirstRestore: true, intervalMs: 6000 });
   const activeCanvasBoard = canvasBoards.find((board) => board.id === activeCanvasBoardId) || canvasBoards[0];
   const activeCanvasBoardIdRef = useRef(activeCanvasBoardId);
   const canvasBoardsRef = useRef(canvasBoards);

@@ -2139,6 +2139,7 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
 
     const pollFeishuTask = async () => {
       if (stopped || floatingIsGenerating || feishuWaTaskPollingRef.current) return;
+      if (document.visibilityState === "hidden") return;
       feishuWaTaskPollingRef.current = true;
       try {
         const res = await fetch("/api/feishu-wa-tasks?action=claim&clientId=floating", { cache: "no-store" });
@@ -2514,7 +2515,13 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
           const nextSlideIndex = heroCarouselItems.length > 1
             ? (heroSlideIndex + 1) % heroCarouselItems.length
             : heroSlideIndex;
+          const prevSlideIndex = heroCarouselItems.length > 1
+            ? (heroSlideIndex - 1 + heroCarouselItems.length) % heroCarouselItems.length
+            : heroSlideIndex;
           const shouldWarmNextVideo = index === nextSlideIndex;
+          // Only keep active + adjacent slides rendered; hide the rest to avoid
+          // simultaneous multi-track video decoding and wasted GPU/memory.
+          const isNearby = isActive || index === nextSlideIndex || index === prevSlideIndex;
           const sharedClassName = `absolute inset-0 h-full w-full object-cover transition-opacity duration-1000 ease-out ${
             isActive ? "opacity-100" : "opacity-0"
           }`;
@@ -2527,6 +2534,7 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
               }}
               src={item.src}
               aria-label={item.label}
+              style={isNearby ? undefined : { display: "none" }}
               className={sharedClassName}
               autoPlay={isActive}
               muted
@@ -2539,6 +2547,7 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
               key={item.src}
               src={item.src}
               alt={item.label}
+              style={isNearby ? undefined : { display: "none" }}
               className={sharedClassName}
               loading={index === 0 ? "eager" : "lazy"}
               decoding="async"
