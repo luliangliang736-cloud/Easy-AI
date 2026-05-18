@@ -870,19 +870,65 @@ function normalizeDefaultCanvasBoardId(boardId = "", defaultBoardIds = new Set()
   return id && defaultBoardIds.has(id) ? DEFAULT_CANVAS_BOARD_ID : id;
 }
 
-function normalizeConversationsForDefaultBoard(conversations = [], defaultBoardIds = new Set()) {
+function collectConversationUrls(conversation = {}) {
+  const urls = new Set();
+  (conversation.messages || []).forEach((message) => {
+    [...(message.urls || []), ...(message.images || [])].forEach((url) => {
+      if (url) urls.add(url);
+    });
+    (message.tasks || []).forEach((task) => {
+      if (task?.url) urls.add(task.url);
+    });
+  });
+  return urls;
+}
+
+function buildCanvasBoardUrlIndex(boards = []) {
+  return (Array.isArray(boards) ? boards : []).map((board) => ({
+    id: board?.id,
+    urls: new Set((board?.images || []).map((item) => item?.image_url || item?.url).filter(Boolean)),
+  })).filter((entry) => entry.id);
+}
+
+function inferConversationBoardId(conversation = {}, boards = [], defaultBoardIds = new Set()) {
+  const boardIds = new Set((boards || []).map((board) => board?.id).filter(Boolean));
+  const normalizedConversationBoardId = normalizeDefaultCanvasBoardId(conversation.canvasBoardId, defaultBoardIds);
+  if (normalizedConversationBoardId && boardIds.has(normalizedConversationBoardId)) return normalizedConversationBoardId;
+
+  const messageBoardIds = [...new Set((conversation.messages || [])
+    .map((message) => normalizeDefaultCanvasBoardId(message?.canvasBoardId, defaultBoardIds))
+    .filter(Boolean))];
+  const visibleMessageBoardId = messageBoardIds.find((boardId) => boardIds.has(boardId));
+  if (visibleMessageBoardId) return visibleMessageBoardId;
+
+  const conversationUrls = collectConversationUrls(conversation);
+  if (conversationUrls.size === 0) return normalizedConversationBoardId || conversation.canvasBoardId || null;
+  let bestMatch = null;
+  buildCanvasBoardUrlIndex(boards).forEach((board) => {
+    let overlap = 0;
+    conversationUrls.forEach((url) => {
+      if (board.urls.has(url)) overlap += 1;
+    });
+    if (overlap > 0 && (!bestMatch || overlap > bestMatch.overlap)) {
+      bestMatch = { id: board.id, overlap };
+    }
+  });
+  return bestMatch?.id || normalizedConversationBoardId || conversation.canvasBoardId || null;
+}
+
+function normalizeConversationsForCanvasBoards(conversations = [], boards = [], defaultBoardIds = new Set()) {
   if (!Array.isArray(conversations)) return [];
   return conversations.map((conversation) => ({
     ...conversation,
-    canvasBoardId: normalizeDefaultCanvasBoardId(conversation.canvasBoardId, defaultBoardIds) || conversation.canvasBoardId,
+    canvasBoardId: inferConversationBoardId(conversation, boards, defaultBoardIds),
     messages: Array.isArray(conversation.messages)
       ? conversation.messages.map((message) => ({
         ...message,
-        canvasBoardId: normalizeDefaultCanvasBoardId(message.canvasBoardId, defaultBoardIds) || message.canvasBoardId,
+        canvasBoardId: inferConversationBoardId(conversation, boards, defaultBoardIds) || normalizeDefaultCanvasBoardId(message.canvasBoardId, defaultBoardIds) || message.canvasBoardId,
         tasks: Array.isArray(message.tasks)
           ? message.tasks.map((task) => ({
             ...task,
-            canvasBoardId: normalizeDefaultCanvasBoardId(task.canvasBoardId, defaultBoardIds) || task.canvasBoardId,
+            canvasBoardId: inferConversationBoardId(conversation, boards, defaultBoardIds) || normalizeDefaultCanvasBoardId(task.canvasBoardId, defaultBoardIds) || task.canvasBoardId,
           }))
           : message.tasks,
       }))
@@ -1513,8 +1559,10 @@ function HomeInner() {
         localStorage.removeItem(CANVAS_REF_IMAGES_STORAGE_KEY);
         const rawBoards = filterDeletedCanvasBoardsForRestore(safeParseStorageArray(savedBoards), localDeletions);
         const defaultBoardIds = getDefaultCanvasBoardIds(rawBoards);
-        const parsedConversations = normalizeConversationsForDefaultBoard(
+        const parsedBoards = normalizeCanvasBoards(rawBoards);
+        const parsedConversations = normalizeConversationsForCanvasBoards(
           filterDeletedConversationsForRestore(safeParseStorageArray(saved), localDeletions),
+          parsedBoards,
           defaultBoardIds
         );
         if (parsedConversations?.length > 0) {
@@ -1535,7 +1583,6 @@ function HomeInner() {
         const parsedShapes = (safeParseStorageArray(savedShapes) || [])
           .filter((item) => !hasDeletedId(localDeletions, "canvasShapeIds", item?.id));
 
-        const parsedBoards = normalizeCanvasBoards(rawBoards);
         if (parsedBoards.length > 0) {
           const normalizedSavedActiveBoardId = normalizeDefaultCanvasBoardId(savedActiveBoardId, defaultBoardIds) || savedActiveBoardId;
           const activeBoardBeforeFallback = parsedBoards.find((board) => board.id === normalizedSavedActiveBoardId) || parsedBoards[0];

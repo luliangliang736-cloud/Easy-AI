@@ -298,11 +298,56 @@ function mergeCanvasImagesForRestore(localValue = "", incomingValue = "") {
   return JSON.stringify(mergeObjectsById(localImages, incomingImages));
 }
 
+function mergeMessagesForRestore(localMessages = [], incomingMessages = []) {
+  return mergeObjectsById(localMessages, incomingMessages, (existing, incoming) => {
+    if (!existing) return incoming;
+    if (!incoming) return existing;
+    const newer = getUpdatedAt(incoming) >= getUpdatedAt(existing) ? incoming : existing;
+    const older = newer === incoming ? existing : incoming;
+    return {
+      ...older,
+      ...newer,
+      urls: mergeUniqueArrays(older.urls || [], newer.urls || [], 100),
+      images: mergeUniqueArrays(older.images || [], newer.images || [], 100),
+      refImages: mergeUniqueArrays(older.refImages || [], newer.refImages || [], 100),
+      tasks: mergeObjectsById(older.tasks || [], newer.tasks || []),
+    };
+  });
+}
+
+function mergeConversationsForRestore(localValue = "", incomingValue = "") {
+  const localConversations = safeJsonParse(localValue, []);
+  const incomingConversations = safeJsonParse(incomingValue, []);
+  if (!Array.isArray(localConversations) || !Array.isArray(incomingConversations)) return incomingValue;
+  if (localConversations.length === 0) return incomingValue;
+  if (incomingConversations.length === 0) return localValue;
+  return JSON.stringify(mergeObjectsById(localConversations, incomingConversations, (existing, incoming) => {
+    if (!existing) return incoming;
+    if (!incoming) return existing;
+    const newer = getUpdatedAt(incoming) >= getUpdatedAt(existing) ? incoming : existing;
+    const older = newer === incoming ? existing : incoming;
+    return {
+      ...older,
+      ...newer,
+      messages: mergeMessagesForRestore(older.messages || [], newer.messages || []),
+      updatedAt: Math.max(getUpdatedAt(older), getUpdatedAt(newer), Date.now()),
+    };
+  }).slice(-50));
+}
+
 function resolveIncomingStateValue(key, localValue, incomingValue) {
   if (!localValue) return incomingValue;
   if (key === "lovart-canvas-boards") return mergeCanvasBoardsForRestore(localValue, incomingValue);
   if (key === "lovart-canvas-images") return mergeCanvasImagesForRestore(localValue, incomingValue);
+  if (key === "lovart-conversations") return mergeConversationsForRestore(localValue, incomingValue);
   return incomingValue;
+}
+
+function shouldWriteMergedRestoreValue(key, localValue, incomingValue) {
+  return ["lovart-canvas-boards", "lovart-conversations"].includes(key)
+    && typeof localValue === "string"
+    && typeof incomingValue === "string"
+    && localValue !== incomingValue;
 }
 
 function readSnapshot(keys = []) {
@@ -438,7 +483,8 @@ export function useCloudLocalStorageSync(keys = [], options = {}) {
           }
           const cloudIsNewer = cloudUpdatedAt > localValueUpdatedAt
             || (cloudUpdatedAt === localValueUpdatedAt && localValue !== incomingValue);
-          if (incomingValue && (localValue === null || preferIncomingOnFirstRestore || (cloudIsNewer && localValue !== incomingValue))) {
+          const shouldWriteMergedValue = shouldWriteMergedRestoreValue(item.key, localValue, incomingValue);
+          if (incomingValue && (localValue === null || preferIncomingOnFirstRestore || shouldWriteMergedValue || (cloudIsNewer && localValue !== incomingValue))) {
             window.localStorage.setItem(item.key, incomingValue);
             localUpdatedAt[item.key] = cloudUpdatedAt || Date.now();
             localUpdatedAtChanged = true;
