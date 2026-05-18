@@ -6,6 +6,8 @@ import {
 } from "@/lib/cloudStateDeletions";
 
 const MAX_STATE_VALUE_CHARS = Number(process.env.CLOUD_STATE_MAX_VALUE_CHARS || 1_500_000);
+const DEFAULT_CANVAS_BOARD_ID = "default-canvas-board";
+const DEFAULT_CANVAS_BOARD_LABEL = "默认画布";
 
 export const CLOUD_STATE_KEYS = [
   "lovart-floating-entry-home-history",
@@ -49,6 +51,10 @@ function getItemId(item) {
 
 function getUpdatedAt(item) {
   return Number(item?.updatedAt || item?.createdAt || 0);
+}
+
+function isDefaultCanvasBoard(board) {
+  return board?.id === DEFAULT_CANVAS_BOARD_ID || String(board?.title || "").trim() === DEFAULT_CANVAS_BOARD_LABEL;
 }
 
 function isCloudAssetUrl(url = "") {
@@ -153,7 +159,7 @@ function applyDeletionsToStateValue(key, value = "", deletions = {}) {
   }
   if (key === "lovart-canvas-boards") {
     const parsed = safeJsonParse(value, []);
-    return Array.isArray(parsed) ? JSON.stringify(filterDeletedCanvasBoards(parsed, deletions)) : value;
+    return Array.isArray(parsed) ? JSON.stringify(collapseDefaultCanvasBoards(filterDeletedCanvasBoards(parsed, deletions))) : value;
   }
   if (key === "lovart-canvas-images") {
     const parsed = safeJsonParse(value, []);
@@ -206,6 +212,45 @@ function mergeArrayById(existing = [], incoming = [], prefer = preferCanvasItem)
   }
 
   return order.map((id) => byId.get(id)).filter(Boolean);
+}
+
+function mergeUniqueArrays(existing = [], incoming = [], limit = 100) {
+  return [...new Set([...(existing || []), ...(incoming || [])].filter(Boolean))].slice(-limit);
+}
+
+function collapseDefaultCanvasBoards(boards = []) {
+  if (!Array.isArray(boards) || boards.length === 0) return [];
+  const result = [];
+  let defaultBoard = null;
+
+  for (const rawBoard of boards) {
+    const defaultBoardCandidate = isDefaultCanvasBoard(rawBoard);
+    const board = {
+      ...rawBoard,
+      id: defaultBoardCandidate ? DEFAULT_CANVAS_BOARD_ID : rawBoard?.id,
+      title: defaultBoardCandidate ? DEFAULT_CANVAS_BOARD_LABEL : rawBoard?.title,
+    };
+
+    if (!defaultBoardCandidate) {
+      result.push(board);
+      continue;
+    }
+
+    if (!defaultBoard) {
+      defaultBoard = board;
+      result.push(defaultBoard);
+      continue;
+    }
+
+    defaultBoard.images = mergeArrayById(defaultBoard.images || [], board.images || []);
+    defaultBoard.refImages = mergeUniqueArrays(defaultBoard.refImages || [], board.refImages || [], 14);
+    defaultBoard.texts = mergeArrayById(defaultBoard.texts || [], board.texts || []);
+    defaultBoard.shapes = mergeArrayById(defaultBoard.shapes || [], board.shapes || []);
+    defaultBoard.createdAt = Math.min(getUpdatedAt(defaultBoard) || Date.now(), getUpdatedAt(board) || Date.now());
+    defaultBoard.updatedAt = Math.max(getUpdatedAt(defaultBoard), getUpdatedAt(board), Date.now());
+  }
+
+  return result;
 }
 
 function getMessageStatusRank(status = "") {
@@ -299,8 +344,8 @@ function mergeCanvasBoards(existingValue = "", incomingValue = "", deletions = {
     return JSON.stringify(filteredExisting.length > 0 ? filteredExisting : existing);
   }
 
-  const existingBoards = filterDeletedCanvasBoards(existing, deletions);
-  const incomingBoards = filterDeletedCanvasBoards(incoming, deletions);
+  const existingBoards = collapseDefaultCanvasBoards(filterDeletedCanvasBoards(existing, deletions));
+  const incomingBoards = collapseDefaultCanvasBoards(filterDeletedCanvasBoards(incoming, deletions));
   const byId = new Map();
   for (const board of existingBoards) {
     const id = getItemId(board);

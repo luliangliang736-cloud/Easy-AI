@@ -14,6 +14,8 @@ export const CLOUD_STATE_RESTORED_EVENT = "easyai-cloud-state-restored";
 const KEEPALIVE_BODY_LIMIT = 60_000;
 const MANAGED_KEYS_GLOBAL = "__easyaiCloudStateManagedKeys";
 const STORAGE_PATCHED_GLOBAL = "__easyaiCloudStateStoragePatched";
+const DEFAULT_CANVAS_BOARD_ID = "default-canvas-board";
+const DEFAULT_CANVAS_BOARD_LABEL = "默认画布";
 
 function readLocalUpdatedAt() {
   try {
@@ -154,7 +156,7 @@ function applyLocalDeletionsToStateValue(key, value = "", deletions = {}) {
   if (!value || key === CLOUD_STATE_DELETIONS_KEY) return value;
   if (key === "lovart-canvas-boards") {
     const parsed = safeJsonParse(value, []);
-    return Array.isArray(parsed) ? JSON.stringify(filterDeletedCanvasBoards(parsed, deletions)) : value;
+    return Array.isArray(parsed) ? JSON.stringify(collapseDefaultCanvasBoards(filterDeletedCanvasBoards(parsed, deletions))) : value;
   }
   if (key === "lovart-canvas-images") {
     const parsed = safeJsonParse(value, []);
@@ -191,6 +193,10 @@ function getUpdatedAt(item) {
   return Number(item?.updatedAt || item?.createdAt || 0);
 }
 
+function isDefaultCanvasBoard(board) {
+  return board?.id === DEFAULT_CANVAS_BOARD_ID || String(board?.title || "").trim() === DEFAULT_CANVAS_BOARD_LABEL;
+}
+
 function mergeObjectsById(localItems = [], incomingItems = [], prefer = null) {
   const order = [];
   const byId = new Map();
@@ -204,9 +210,48 @@ function mergeObjectsById(localItems = [], incomingItems = [], prefer = null) {
   return order.map((id) => byId.get(id)).filter(Boolean);
 }
 
+function mergeUniqueArrays(left = [], right = [], limit = 100) {
+  return [...new Set([...(left || []), ...(right || [])].filter(Boolean))].slice(-limit);
+}
+
+function collapseDefaultCanvasBoards(boards = []) {
+  if (!Array.isArray(boards) || boards.length === 0) return [];
+  const result = [];
+  let defaultBoard = null;
+
+  for (const rawBoard of boards) {
+    const defaultBoardCandidate = isDefaultCanvasBoard(rawBoard);
+    const board = {
+      ...rawBoard,
+      id: defaultBoardCandidate ? DEFAULT_CANVAS_BOARD_ID : rawBoard?.id,
+      title: defaultBoardCandidate ? DEFAULT_CANVAS_BOARD_LABEL : rawBoard?.title,
+    };
+
+    if (!defaultBoardCandidate) {
+      result.push(board);
+      continue;
+    }
+
+    if (!defaultBoard) {
+      defaultBoard = board;
+      result.push(defaultBoard);
+      continue;
+    }
+
+    defaultBoard.images = mergeObjectsById(defaultBoard.images || [], board.images || []);
+    defaultBoard.refImages = mergeUniqueArrays(defaultBoard.refImages || [], board.refImages || [], 14);
+    defaultBoard.texts = mergeObjectsById(defaultBoard.texts || [], board.texts || []);
+    defaultBoard.shapes = mergeObjectsById(defaultBoard.shapes || [], board.shapes || []);
+    defaultBoard.createdAt = Math.min(getUpdatedAt(defaultBoard) || Date.now(), getUpdatedAt(board) || Date.now());
+    defaultBoard.updatedAt = Math.max(getUpdatedAt(defaultBoard), getUpdatedAt(board), Date.now());
+  }
+
+  return result;
+}
+
 function mergeCanvasBoardsForRestore(localValue = "", incomingValue = "") {
-  const localBoards = safeJsonParse(localValue, []);
-  const incomingBoards = safeJsonParse(incomingValue, []);
+  const localBoards = collapseDefaultCanvasBoards(safeJsonParse(localValue, []));
+  const incomingBoards = collapseDefaultCanvasBoards(safeJsonParse(incomingValue, []));
   if (!Array.isArray(localBoards) || !Array.isArray(incomingBoards)) return incomingValue;
   if (localBoards.length === 0) return incomingValue;
   if (incomingBoards.length === 0) return localValue;
