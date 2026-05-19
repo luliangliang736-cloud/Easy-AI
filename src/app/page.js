@@ -940,13 +940,13 @@ function getHomeAssetSrc(relativePath) {
 }
 
 const BUSINESS_SHOWCASE_COVERS = [
-  { src: getHomeAssetSrc("business-showcase/cover-1.jpg"), alt: "业务展示封面 1" },
-  { src: getHomeAssetSrc("business-showcase/cover-2.jpg"), alt: "业务展示封面 2" },
+  { src: getHomeAssetSrc("business-showcase/cover-1.webp"), alt: "业务展示封面 1" },
+  { src: getHomeAssetSrc("business-showcase/cover-2.webp"), alt: "业务展示封面 2" },
 ];
 
 const EFFECT_SHOWCASE_CARDS = [
   {
-    src: getHomeAssetSrc("effect-showcase-card-3.jpg"),
+    src: getHomeAssetSrc("effect-showcase-card-3.webp"),
     alt: "效果展示卡片 3",
     left: 10,
     top: 63,
@@ -960,7 +960,7 @@ const EFFECT_SHOWCASE_CARDS = [
     zIndex: 1,
   },
   {
-    src: getHomeAssetSrc("effect-showcase-card-2.jpg"),
+    src: getHomeAssetSrc("effect-showcase-card-2.webp"),
     alt: "效果展示卡片 2",
     left: 27,
     top: 52,
@@ -972,7 +972,7 @@ const EFFECT_SHOWCASE_CARDS = [
     zIndex: 2,
   },
   {
-    src: getHomeAssetSrc("effect-showcase-card-4.jpg"),
+    src: getHomeAssetSrc("effect-showcase-card-4.webp"),
     alt: "效果展示卡片 4",
     left: 50,
     top: 45,
@@ -984,7 +984,7 @@ const EFFECT_SHOWCASE_CARDS = [
     zIndex: 5,
   },
   {
-    src: getHomeAssetSrc("effect-showcase-card-1.jpg"),
+    src: getHomeAssetSrc("effect-showcase-card-1.webp"),
     alt: "效果展示卡片 1",
     left: 73,
     top: 52,
@@ -996,7 +996,7 @@ const EFFECT_SHOWCASE_CARDS = [
     zIndex: 2,
   },
   {
-    src: getHomeAssetSrc("effect-showcase-card-5.jpg"),
+    src: getHomeAssetSrc("effect-showcase-card-5.webp"),
     alt: "效果展示卡片 5",
     left: 90,
     top: 63,
@@ -1011,7 +1011,7 @@ const EFFECT_SHOWCASE_CARDS = [
   },
 ];
 
-const HERO_CAROUSEL_FILES = ["1.mp4", "2.jpg", "3.mp4", "4.mp4", "5.jpg", "6.mp4", "7.jpg"];
+const HERO_CAROUSEL_FILES = ["1.mp4", "2.webp", "3.mp4", "4.mp4", "5.webp", "6.mp4", "7.webp"];
 const HERO_CAROUSEL_PUBLIC_BASE_URL = String(
   process.env.NEXT_PUBLIC_HOME_HERO_ASSET_BASE_URL
     || (HOME_ASSET_PUBLIC_BASE_URL ? `${HOME_ASSET_PUBLIC_BASE_URL}/home-hero-carousel` : ""),
@@ -1035,9 +1035,9 @@ const HERO_CAROUSEL_FALLBACK_ITEMS = HERO_CAROUSEL_FILES.map((filename, index) =
   name: filename,
 }));
 const DEFAULT_PROFILE_AVATAR_SRC = getHomeAssetSrc("internal-user-avatar.png");
-const HOME_SCROLL_PERSON_SRC = getHomeAssetSrc("home-scroll-person-3.jpg");
+const HOME_SCROLL_PERSON_SRC = getHomeAssetSrc("home-scroll-person-3.webp");
 const HOME_BOTTOM_SUMMARY_SRC = getHomeAssetSrc("home-bottom-summary.mp4");
-const FOOTER_BOTTOM_SRC = getHomeAssetSrc("footer-bottom.jpg");
+const FOOTER_BOTTOM_SRC = getHomeAssetSrc("footer-bottom.webp");
 const HERO_CAROUSEL_INTERVAL_MS = 3000;
 
 export default function HomePage() {

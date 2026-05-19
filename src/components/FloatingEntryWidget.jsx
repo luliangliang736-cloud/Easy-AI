@@ -2232,7 +2232,7 @@ export default function FloatingEntryWidget({
             title="点击语音对话，双击打开输入面板"
           >
             <Image
-              src="/images/floating-avatar-v2.png"
+              src="/images/floating-avatar-v2.webp"
               alt=""
               width={132}
               height={132}

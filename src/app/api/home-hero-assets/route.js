@@ -7,7 +7,7 @@ export const runtime = "nodejs";
 const HERO_ASSET_DIR = path.resolve(process.cwd(), "public", "images", "home-hero-carousel");
 const HERO_ASSET_LIST_CACHE = "public, max-age=60, stale-while-revalidate=300";
 const HERO_MEDIA_CACHE = "public, max-age=31536000, immutable";
-const DEFAULT_HERO_ASSET_FILES = ["1.mp4", "2.jpg", "3.mp4", "4.mp4", "5.jpg", "6.mp4", "7.jpg"];
+const DEFAULT_HERO_ASSET_FILES = ["1.mp4", "2.webp", "3.mp4", "4.mp4", "5.webp", "6.mp4", "7.webp"];
 const MEDIA_TYPES = {
   ".gif": { contentType: "image/gif", type: "image" },
   ".jpg": { contentType: "image/jpeg", type: "image" },
