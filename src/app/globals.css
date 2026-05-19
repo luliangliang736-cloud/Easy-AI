@@ -76,7 +76,7 @@ body {
 .login-input:-webkit-autofill:hover,
 .login-input:-webkit-autofill:focus {
   -webkit-text-fill-color: var(--text-primary);
-  box-shadow: 0 0 0 1000px var(--bg-elevated) inset;
+  box-shadow: 0 0 0 1000px var(--bg-secondary) inset;
   transition: background-color 999999s ease-out;
 }
 

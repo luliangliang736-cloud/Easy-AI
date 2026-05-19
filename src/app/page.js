@@ -2468,6 +2468,7 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
                 onChange={(event) => setLoginEmail(event.target.value)}
                 placeholder="请输入公司邮箱"
                 required
+                style={{ colorScheme: theme === "light" ? "light" : "dark" }}
                 className={`login-input w-full bg-transparent text-sm outline-none ${
                   theme === "light" ? "text-black/80 placeholder:text-black/30" : "text-white/90 placeholder:text-white/30"
                 }`}
@@ -2485,6 +2486,7 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
                 onChange={(event) => setLoginPassword(event.target.value)}
                 placeholder="请输入统一内测密码"
                 required
+                style={{ colorScheme: theme === "light" ? "light" : "dark" }}
                 className={`login-input w-full bg-transparent text-sm outline-none ${
                   theme === "light" ? "text-black/80 placeholder:text-black/30" : "text-white/90 placeholder:text-white/30"
                 }`}
