@@ -2469,7 +2469,7 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
                 placeholder="请输入公司邮箱"
                 required
                 className={`login-input w-full bg-transparent text-sm outline-none ${
-                  theme === "light" ? "placeholder:text-black/30" : "placeholder:text-white/30"
+                  theme === "light" ? "text-black/80 placeholder:text-black/30" : "text-white/90 placeholder:text-white/30"
                 }`}
               />
             </div>
@@ -2486,7 +2486,7 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
                 placeholder="请输入统一内测密码"
                 required
                 className={`login-input w-full bg-transparent text-sm outline-none ${
-                  theme === "light" ? "placeholder:text-black/30" : "placeholder:text-white/30"
+                  theme === "light" ? "text-black/80 placeholder:text-black/30" : "text-white/90 placeholder:text-white/30"
                 }`}
               />
             </div>
