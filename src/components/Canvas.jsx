@@ -323,64 +323,6 @@ function getUpscalePreviewSize(meta, targetLongSide) {
   return `${Math.round(targetLongSide * aspect)}×${targetLongSide}`;
 }
 
-function ContextMenu({ x, y, img, isLocked, onClose, onAction }) {
-  const menuRef = useRef(null);
-
-  useEffect(() => {
-    const handle = (e) => {
-      if (menuRef.current && !menuRef.current.contains(e.target)) onClose();
-    };
-    window.addEventListener("pointerdown", handle);
-    return () => window.removeEventListener("pointerdown", handle);
-  }, [onClose]);
-
-  useEffect(() => {
-    if (!menuRef.current) return;
-    const rect = menuRef.current.getBoundingClientRect();
-    const vw = window.innerWidth;
-    const vh = window.innerHeight;
-    if (rect.right > vw) menuRef.current.style.left = `${x - rect.width}px`;
-    if (rect.bottom > vh) menuRef.current.style.top = `${y - rect.height}px`;
-  }, [x, y]);
-
-  const isVideo = img?.media_type === "video" || img?.mediaType === "video";
-  const items = [
-    { id: "copy", label: "复制", icon: Copy },
-    ...(!isVideo ? [{ id: "sendToChat", label: "发送到对话", icon: MessageSquare }] : []),
-    { id: "export", label: "导出", icon: FileDown },
-    { id: "divider" },
-    { id: "lock", label: isLocked ? "解锁" : "锁定", icon: isLocked ? Unlock : Lock },
-    { id: "divider2" },
-    { id: "delete", label: "删除", icon: Trash2, danger: true },
-  ];
-
-  return (
-    <div
-      ref={menuRef}
-      className="fixed z-50 bg-bg-secondary border border-border-primary rounded-xl shadow-2xl shadow-black/60 py-1.5 min-w-[160px] animate-fade-in"
-      style={{ left: x, top: y }}
-    >
-      {items.map((item) =>
-        item.id.startsWith("divider") ? (
-          <div key={item.id} className="my-1 border-t border-border-primary" />
-        ) : (
-          <button
-            key={item.id}
-            className={`w-full flex items-center gap-2.5 px-3 py-2 text-left text-[12px] transition-colors ${
-              item.danger
-                ? "text-red-400 hover:bg-red-500/10"
-                : "text-text-secondary hover:bg-bg-hover hover:text-text-primary"
-            }`}
-            onClick={() => { onAction(item.id, img); onClose(); }}
-          >
-            <item.icon size={14} />
-            {item.label}
-          </button>
-        )
-      )}
-    </div>
-  );
-}
 
 export default function Canvas({
   images, selectedImage, onSelectImage, onDeleteImage,
@@ -415,7 +357,7 @@ export default function Canvas({
   const [action, setAction] = useState(null);
   const actionRef = useRef(null);
   const [, forceRender] = useReducer((c) => c + 1, 0);
-  const [contextMenu, setContextMenu] = useState(null);
+
   const [upscaleMenuFor, setUpscaleMenuFor] = useState(null);
   const lockedRef = useRef(new Set());
   const [fileDragOver, setFileDragOver] = useState(false);
@@ -559,7 +501,6 @@ export default function Canvas({
       const tag = document.activeElement?.tagName;
       const typing = tag === "INPUT" || tag === "TEXTAREA";
       if (e.key === "Escape") {
-        setContextMenu(null);
         if (typing) {
           setEditingTextId(null);
           return;
@@ -1232,7 +1173,6 @@ export default function Canvas({
     if (e.button !== 1) return;
     e.preventDefault();
     e.stopPropagation();
-    setContextMenu(null);
     setAction("pan");
     try {
       e.currentTarget.setPointerCapture(e.pointerId);
@@ -1244,7 +1184,6 @@ export default function Canvas({
   const handlePointerDown = useCallback((e) => {
     if (e.button === 1) return;
     if (e.target.closest("[data-toolbar]")) return;
-    setContextMenu(null);
     setUpscaleMenuFor(null);
     const target = e.target;
     if (target.closest?.("[data-text-editor]")) return;
@@ -1252,7 +1191,6 @@ export default function Canvas({
 
     if (spacePanHeldRef.current && e.button === 0) {
       e.preventDefault();
-      setContextMenu(null);
       setAction("pan");
       e.currentTarget.setPointerCapture(e.pointerId);
       return;
@@ -1710,17 +1648,6 @@ export default function Canvas({
     try { e.currentTarget.releasePointerCapture(e.pointerId); } catch {}
   }, [onUpdateImage, onSelectImage, onAddShape, onToolChange, onSyncCanvasRefImages, images, renderImages, defaultShapeFill]);
 
-  const handleContextMenu = useCallback((e) => {
-    e.preventDefault();
-    const imgEl = e.target.closest("[data-canvas-item]");
-    if (!imgEl) return;
-    const id = imgEl.dataset.canvasItem;
-    const img = images.find((i) => i.id === id);
-    if (!img) return;
-    onSelectImage(img);
-    setContextMenu({ x: e.clientX, y: e.clientY, img });
-  }, [images, onSelectImage]);
-
   const handleContextAction = useCallback(async (actionId, img) => {
     switch (actionId) {
       case "copy":
@@ -1936,7 +1863,7 @@ export default function Canvas({
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
       onPointerLeave={() => setSemanticPickCursorPos(null)}
-      onContextMenu={handleContextMenu}
+
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
@@ -2768,17 +2695,7 @@ export default function Canvas({
         />
       </div>
 
-      {/* Context menu */}
-      {contextMenu && (
-        <ContextMenu
-          x={contextMenu.x}
-          y={contextMenu.y}
-          img={contextMenu.img}
-          isLocked={lockedRef.current.has(contextMenu.img.id)}
-          onClose={() => setContextMenu(null)}
-          onAction={handleContextAction}
-        />
-      )}
+
     </div>
   );
 }
