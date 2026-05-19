@@ -148,13 +148,11 @@ export async function GET(request) {
       });
     }
 
-    const entries = await readdir(HERO_ASSET_DIR, { withFileTypes: true });
-    const mediaEntries = entries
-      .filter((entry) => entry.isFile() && getMediaMeta(entry.name))
-      .map((entry) => ({ name: entry.name, meta: getMediaMeta(entry.name) }))
-      .sort((a, b) => a.name.localeCompare(b.name, "zh-Hans-CN", { numeric: true }));
-    const items = await Promise.all(mediaEntries.map(async ({ name, meta }, index) => {
-      const assetStat = await stat(path.resolve(HERO_ASSET_DIR, name));
+    const assetNames = getConfiguredAssetNames();
+    const items = await Promise.all(assetNames.map(async (name, index) => {
+      const meta = getMediaMeta(name);
+      const filePath = path.resolve(HERO_ASSET_DIR, name);
+      const assetStat = await stat(filePath);
       const version = `${assetStat.size}-${Math.floor(assetStat.mtimeMs)}`;
       return {
         type: meta.type,
