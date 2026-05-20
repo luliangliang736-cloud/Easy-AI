@@ -7,7 +7,7 @@ import {
   Sparkles, ArrowRight, Wand2, Image as ImageIcon,
   Layers, Zap, Crown, Rocket, PenTool, Factory, Library, Megaphone, PanelTop, ShieldCheck, Coins,
   Palette, RefreshCw, Download, MousePointer2, Sun, Moon, Bot, LayoutGrid, Clock3, Palette as PaletteIcon, Users,
-  Mail, LockKeyhole, LogIn, LogOut,
+  Mail, LockKeyhole, LogIn, LogOut, Play, Maximize2,
 } from "lucide-react";
 import { useTheme } from "@/lib/useTheme";
 import { compressImage } from "@/lib/imageUtils";
@@ -2580,14 +2580,78 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
         <p className={`text-text-secondary mx-auto leading-relaxed ${heroPreset.description}`}>
           Easy AI 将海报生成、品牌资产、IP 角色、专业画布和出图质检整合成一套高质量出图设计工作流，帮助团队高效产出稳定、可交付、低成本的设计内容
         </p>
-        <div className={`flex items-center justify-center ${heroPreset.actions}`}>
+        <div className={`flex flex-wrap items-center justify-center ${heroPreset.actions}`}>
           <Link
             href="/chat"
             className={`rounded-full bg-[#3FCA58] text-white font-medium flex items-center gap-2.5 transition-all animate-[hero-button-breathe_2.4s_ease-in-out_infinite] hover:bg-[#3FCA58]/90 hover:scale-[1.04] hover:[animation-play-state:paused] active:scale-[0.98] ${heroPreset.primaryButton}`}
           >
-            开启一键创作模式
+            一键创作模式
             <ArrowRight size={16} />
           </Link>
+          <Link
+            href="/canvas"
+            className={`rounded-full font-medium flex items-center gap-2.5 transition-all hover:scale-[1.04] active:scale-[0.98] ${heroPreset.secondaryButton} ${
+              theme === "light"
+                ? "bg-black/[0.07] text-black/75 hover:bg-black/[0.12] hover:text-black"
+                : "bg-white/[0.12] text-white/80 hover:bg-white/[0.18] hover:text-white"
+            }`}
+          >
+            专业创作模式
+            <ArrowRight size={16} />
+          </Link>
+        </div>
+      </section>
+
+      {/* Mode demos */}
+      <section className={`relative z-10 px-6 lg:px-12 max-w-5xl mx-auto pt-4 pb-32 lg:pb-40 transition-all duration-700 delay-150 ${mounted ? "opacity-100 translate-y-0" : "opacity-0 translate-y-8"}`}>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          {/* 一键创作模式 demo */}
+          <div className={`rounded-2xl border overflow-hidden ${theme === "light" ? "border-black/[0.06] bg-white shadow-[0_10px_30px_rgba(15,23,42,0.04)]" : "border-white/[0.06] bg-bg-secondary"}`}>
+            <div className={`relative aspect-video ${theme === "light" ? "bg-slate-50" : "bg-bg-tertiary"}`}>
+              <video src="/images/demo-one-click.mp4?v=3" className="absolute inset-0 w-full h-full object-cover" autoPlay loop muted playsInline />
+              <button
+                type="button"
+                className="absolute bottom-2 right-2 z-10 flex h-7 w-7 items-center justify-center rounded-lg bg-black/40 text-white/80 backdrop-blur-sm transition-all hover:bg-black/60 hover:text-white"
+                title="全屏"
+                onClick={(e) => { e.currentTarget.closest("div").querySelector("video")?.requestFullscreen?.(); }}
+              >
+                <Maximize2 size={13} />
+              </button>
+            </div>
+            <div className="px-5 py-4">
+              <div className="flex items-center gap-2 mb-1.5">
+                <span className="inline-block h-2 w-2 rounded-full bg-[#3FCA58]" />
+                <span className="text-xs font-semibold text-[#3FCA58]">一键创作模式</span>
+              </div>
+              <p className={`text-xs leading-relaxed ${theme === "light" ? "text-black/50" : "text-white/45"}`}>
+                面向未来 AI 出图，输入需求AI自动完成可交付商业内容
+              </p>
+            </div>
+          </div>
+
+          {/* 专业创作模式 demo */}
+          <div className={`rounded-2xl border overflow-hidden ${theme === "light" ? "border-black/[0.06] bg-white shadow-[0_10px_30px_rgba(15,23,42,0.04)]" : "border-white/[0.06] bg-bg-secondary"}`}>
+            <div className={`relative aspect-video ${theme === "light" ? "bg-slate-50" : "bg-bg-tertiary"}`}>
+              <video src="/images/demo-professional.mp4?v=2" className="absolute inset-0 w-full h-full object-cover" autoPlay loop muted playsInline />
+              <button
+                type="button"
+                className="absolute bottom-2 right-2 z-10 flex h-7 w-7 items-center justify-center rounded-lg bg-black/40 text-white/80 backdrop-blur-sm transition-all hover:bg-black/60 hover:text-white"
+                title="全屏"
+                onClick={(e) => { e.currentTarget.closest("div").querySelector("video")?.requestFullscreen?.(); }}
+              >
+                <Maximize2 size={13} />
+              </button>
+            </div>
+            <div className="px-5 py-4">
+              <div className="flex items-center gap-2 mb-1.5">
+                <span className={`inline-block h-2 w-2 rounded-full ${theme === "light" ? "bg-black/40" : "bg-white/40"}`} />
+                <span className={`text-xs font-semibold ${theme === "light" ? "text-black/60" : "text-white/60"}`}>专业创作模式</span>
+              </div>
+              <p className={`text-xs leading-relaxed ${theme === "light" ? "text-black/50" : "text-white/45"}`}>
+                面向当下真实生产环境，AI 快速辅助提效
+              </p>
+            </div>
+          </div>
         </div>
       </section>
 
