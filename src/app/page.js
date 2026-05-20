@@ -2608,7 +2608,7 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
           {/* 一键创作模式 demo */}
           <div className={`rounded-2xl border overflow-hidden ${theme === "light" ? "border-black/[0.06] bg-white shadow-[0_10px_30px_rgba(15,23,42,0.04)]" : "border-white/[0.06] bg-bg-secondary"}`}>
             <div className={`relative aspect-video ${theme === "light" ? "bg-slate-50" : "bg-bg-tertiary"}`}>
-              <video src="https://easyai-assets-lqb.oss-cn-beijing.aliyuncs.com/home-demos/demo-one-click.mp4" className="absolute inset-0 w-full h-full object-cover" autoPlay loop muted playsInline />
+              <video src="https://easyai-hero.oss-cn-beijing.aliyuncs.com/home-demos/demo-one-click.mp4" className="absolute inset-0 w-full h-full object-cover" autoPlay loop muted playsInline />
               <button
                 type="button"
                 className="absolute bottom-2 right-2 z-10 flex h-7 w-7 items-center justify-center rounded-lg bg-black/40 text-white/80 backdrop-blur-sm transition-all hover:bg-black/60 hover:text-white"
@@ -2632,7 +2632,7 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
           {/* 专业创作模式 demo */}
           <div className={`rounded-2xl border overflow-hidden ${theme === "light" ? "border-black/[0.06] bg-white shadow-[0_10px_30px_rgba(15,23,42,0.04)]" : "border-white/[0.06] bg-bg-secondary"}`}>
             <div className={`relative aspect-video ${theme === "light" ? "bg-slate-50" : "bg-bg-tertiary"}`}>
-              <video src="https://easyai-assets-lqb.oss-cn-beijing.aliyuncs.com/home-demos/demo-professional.mp4" className="absolute inset-0 w-full h-full object-cover" autoPlay loop muted playsInline />
+              <video src="https://easyai-hero.oss-cn-beijing.aliyuncs.com/home-demos/demo-professional.mp4" className="absolute inset-0 w-full h-full object-cover" autoPlay loop muted playsInline />
               <button
                 type="button"
                 className="absolute bottom-2 right-2 z-10 flex h-7 w-7 items-center justify-center rounded-lg bg-black/40 text-white/80 backdrop-blur-sm transition-all hover:bg-black/60 hover:text-white"
