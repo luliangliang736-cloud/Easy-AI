@@ -932,27 +932,42 @@ export default function Canvas({
     const marker = `${CANVAS_CLIPBOARD_TEXT_PREFIX}${Date.now()}`;
     try { await navigator.clipboard.writeText(marker); } catch { /* ignore */ }
     canvasClipboardFallbackRef.current = { active: false, previousSignature: "" };
-    // 再尝试升级为 blob + marker（方便跨应用粘贴），失败则保留上面写入的 marker
-    try {
-      const first = items[0];
-      const res = await fetch(first.image_url);
-      const blob = await res.blob();
-      const type =
-        blob.type && blob.type.startsWith("image/") ? blob.type : "image/png";
-      try {
-        await navigator.clipboard.write([
-          new ClipboardItem({
-            [type]: blob,
-            "text/plain": new Blob([marker], { type: "text/plain" }),
-          }),
-        ]);
-      } catch {
-        try {
-          await navigator.clipboard.write([new ClipboardItem({ [type]: blob })]);
-        } catch { /* keep marker */ }
-      }
-    } catch { /* keep marker */ }
+    // 立即 toast，不等 blob 下载，避免用户感知卡顿
     toast("已复制", "success", 1200);
+    // 后台静默：下载 blob → 缓存 dataURL（粘贴时直接用内存数据，无需重新请求 OSS）+ 升级系统剪贴板
+    const capturedItems = items;
+    (async () => {
+      try {
+        const first = capturedItems[0];
+        const res = await fetch(first.image_url);
+        const blob = await res.blob();
+        const type = blob.type?.startsWith("image/") ? blob.type : "image/png";
+        // 缓存 dataURL，供粘贴路径使用（如果 canvasClipboard 未被新复制覆盖）
+        try {
+          const dataUrl = await blobToDataUrl(blob);
+          if (canvasClipboardRef.current?.items === capturedItems) {
+            canvasClipboardRef.current = {
+              items: capturedItems.map((it) =>
+                it === first ? { ...it, image_url: dataUrl } : it
+              ),
+            };
+          }
+        } catch { /* keep OSS url */ }
+        // 升级系统剪贴板为 blob + marker（方便跨应用粘贴）
+        try {
+          await navigator.clipboard.write([
+            new ClipboardItem({
+              [type]: blob,
+              "text/plain": new Blob([marker], { type: "text/plain" }),
+            }),
+          ]);
+        } catch {
+          try {
+            await navigator.clipboard.write([new ClipboardItem({ [type]: blob })]);
+          } catch { /* keep marker */ }
+        }
+      } catch { /* keep marker, keep OSS URL */ }
+    })();
   }, [toast]);
 
   // ⚠️ 粘贴逻辑保护：canvasClipboardRef 存放最近一次画布复制的图，pasteCanvasImages 直接读取它
@@ -2149,26 +2164,36 @@ export default function Canvas({
                       onClick={async (e) => {
                         e.stopPropagation();
                         if (!img.image_url || img.isGeneratingPlaceholder) return;
-                        // 先把 canvasClipboard 和 marker 写入，保证粘贴路径可靠
-                        canvasClipboardRef.current = { items: [{ image_url: img.image_url, prompt: img.prompt || "" }] };
+                        const toolbarItem = { image_url: img.image_url, prompt: img.prompt || "" };
+                        const toolbarItems = [toolbarItem];
+                        canvasClipboardRef.current = { items: toolbarItems };
                         canvasClipboardFallbackRef.current = { active: false, previousSignature: "" };
                         const marker = `${CANVAS_CLIPBOARD_TEXT_PREFIX}${Date.now()}`;
                         try { await navigator.clipboard.writeText(marker); } catch { /* ignore */ }
-                        // 再尝试升级为 blob，方便跨应用粘贴
-                        try {
-                          const res = await fetch(img.image_url);
-                          const blob = await res.blob();
-                          const type = blob.type?.startsWith("image/") ? blob.type : "image/png";
-                          try {
-                            await navigator.clipboard.write([new ClipboardItem({
-                              [type]: blob,
-                              "text/plain": new Blob([marker], { type: "text/plain" }),
-                            })]);
-                          } catch {
-                            try { await navigator.clipboard.write([new ClipboardItem({ [type]: blob })]); } catch { /* keep marker */ }
-                          }
-                        } catch { /* keep marker from above */ }
+                        // 立即 toast，不等 blob 下载
                         toast("已复制", "success", 1200);
+                        // 后台静默：下载 blob → 缓存 dataURL + 升级系统剪贴板
+                        (async () => {
+                          try {
+                            const res = await fetch(img.image_url);
+                            const blob = await res.blob();
+                            const type = blob.type?.startsWith("image/") ? blob.type : "image/png";
+                            try {
+                              const dataUrl = await blobToDataUrl(blob);
+                              if (canvasClipboardRef.current?.items === toolbarItems) {
+                                canvasClipboardRef.current = { items: [{ ...toolbarItem, image_url: dataUrl }] };
+                              }
+                            } catch { /* keep OSS url */ }
+                            try {
+                              await navigator.clipboard.write([new ClipboardItem({
+                                [type]: blob,
+                                "text/plain": new Blob([marker], { type: "text/plain" }),
+                              })]);
+                            } catch {
+                              try { await navigator.clipboard.write([new ClipboardItem({ [type]: blob })]); } catch { /* keep marker */ }
+                            }
+                          } catch { /* keep marker, keep OSS URL */ }
+                        })();
                       }}
                       className="inline-flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-[11px] text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors whitespace-nowrap"
                       title="复制 (Ctrl+C)"
