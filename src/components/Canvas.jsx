@@ -257,6 +257,34 @@ function extractImageUrlFromHtml(value = "") {
   return match?.[1] ? match[1].trim() : "";
 }
 
+// ============================================================
+// ⚠️  画布复制粘贴保护区 — 请勿随意修改以下逻辑 ⚠️
+//
+// 【设计原理】
+// 画布图片（OSS 私有域）无法被 navigator.clipboard.write 直接写入 blob（CORS/403）。
+// 依赖"签名匹配"的 fallback 机制在不同浏览器下行为不一致
+//   — navigator.clipboard.read() 与 event.clipboardData 读取同一剪贴板内容时，
+//   HTML 内容可能被不同程度 sanitize，导致签名不匹配，粘贴到错误图片。
+//
+// 【当前正确策略（经过多次调试稳定后的版本）】
+//   复制时：① 先写 CANVAS_CLIPBOARD_TEXT_PREFIX marker 到系统剪贴板（text/plain，不依赖 CORS）
+//           ② 再尝试升级写入 blob + marker（方便跨应用粘贴）；失败则保留 ① 的 marker
+//   粘贴时：检查 clipboardUrl 是否以 CANVAS_CLIPBOARD_TEXT_PREFIX 开头
+//           → 是：使用 canvasClipboardRef 内的画布图（内部粘贴路径）
+//           → 否：按普通剪贴板图片处理（外部图片粘贴路径）
+//
+// 【禁止事项】
+//   ✗ 不要删除或替换"先写 marker"步骤
+//   ✗ 不要把 canvasClipboardFallbackRef.active 改回 true（签名匹配不可靠，已废弃）
+//   ✗ 不要在 copyCanvasImages / pasteCanvasImages / onPaste 里加未经验证的 async 副作用
+//   ✗ 不要把 readSystemClipboardSignature 改为主路径（它只用作辅助保留，未来可移除）
+//
+// 【各场景验证清单（改动后必须全部重测）】
+//   1. 浏览器复制图 → Ctrl+V 粘到画布 → Ctrl+C 复制画布图 → Ctrl+V → 应粘贴画布图
+//   2. Ctrl+C 复制画布图A → 工具栏复制画布图B → Ctrl+V → 应粘贴图B
+//   3. Ctrl+C 复制画布图 → 浏览器复制外部图 → Ctrl+V → 应粘贴外部图
+//   4. 外部图 → Ctrl+V 直接粘贴到画布 → 应正常粘贴（不受画布 clipboard 干扰）
+// ============================================================
 async function readSystemClipboardSignature() {
   if (typeof navigator === "undefined" || !navigator.clipboard?.read) return "";
   try {
@@ -421,8 +449,8 @@ export default function Canvas({
           w: INITIAL_IMG_WIDTH,
         };
       } else {
-        const col = i % 4;
-        const row = Math.floor(i / 4);
+        const col = i % 8;
+        const row = Math.floor(i / 8);
         positionsRef.current[img.id] = {
           x: col * (INITIAL_IMG_WIDTH + 40) + 100,
           y: row * (INITIAL_IMG_WIDTH + 60) + 100,
@@ -878,6 +906,7 @@ export default function Canvas({
     },
   ];
 
+  // ⚠️ 复制逻辑保护：策略说明见文件顶部"画布复制粘贴保护区"注释，不要修改核心步骤顺序
   const copyCanvasImages = useCallback(async () => {
     const currentMultiIds = multiSelectedImageIdsRef.current || [];
     const currentSelectedId = selectedImageIdRef.current || "";
@@ -899,14 +928,17 @@ export default function Canvas({
       .map((im) => ({ image_url: im.image_url, prompt: im.prompt || "" }));
     if (items.length === 0) return;
     canvasClipboardRef.current = { items };
-    const previousSignature = await readSystemClipboardSignature();
+    // 先写 marker 文字（不依赖 fetch/CORS），确保粘贴判断可靠
+    const marker = `${CANVAS_CLIPBOARD_TEXT_PREFIX}${Date.now()}`;
+    try { await navigator.clipboard.writeText(marker); } catch { /* ignore */ }
+    canvasClipboardFallbackRef.current = { active: false, previousSignature: "" };
+    // 再尝试升级为 blob + marker（方便跨应用粘贴），失败则保留上面写入的 marker
     try {
       const first = items[0];
       const res = await fetch(first.image_url);
       const blob = await res.blob();
       const type =
         blob.type && blob.type.startsWith("image/") ? blob.type : "image/png";
-      const marker = `${CANVAS_CLIPBOARD_TEXT_PREFIX}${Date.now()}`;
       try {
         await navigator.clipboard.write([
           new ClipboardItem({
@@ -917,18 +949,13 @@ export default function Canvas({
       } catch {
         try {
           await navigator.clipboard.write([new ClipboardItem({ [type]: blob })]);
-        } catch {
-          await navigator.clipboard.writeText(marker);
-        }
+        } catch { /* keep marker */ }
       }
-      canvasClipboardFallbackRef.current = { active: false, previousSignature: "" };
-      toast("已复制", "success", 1200);
-    } catch {
-      canvasClipboardFallbackRef.current = { active: true, previousSignature };
-      toast("已复制（可在画布内粘贴）", "info", 1500);
-    }
+    } catch { /* keep marker */ }
+    toast("已复制", "success", 1200);
   }, [toast]);
 
+  // ⚠️ 粘贴逻辑保护：canvasClipboardRef 存放最近一次画布复制的图，pasteCanvasImages 直接读取它
   const pasteCanvasImages = useCallback(async () => {
     if (!onPasteImages) return;
     if (canvasClipboardRef.current?.items?.length) {
@@ -1032,6 +1059,7 @@ export default function Canvas({
         return;
       }
     };
+    // ⚠️ 粘贴判断保护：shouldUseCanvasClipboard 的主判断是 marker 前缀，不要修改判断优先级
     const onPaste = (event) => {
       if (typing()) return;
       if (!onPasteImages) return;
@@ -1043,6 +1071,8 @@ export default function Canvas({
         normalizeClipboardUrl(event.clipboardData?.getData("text/plain"));
       const fallbackState = canvasClipboardFallbackRef.current;
       const currentSignature = readPasteEventClipboardSignature(event);
+      // 主判断：clipboardUrl 含 marker 前缀 → 画布内部粘贴
+      // 备用判断：fallback 签名匹配（active 正常为 false，仅极端情况触发）
       const shouldUseCanvasClipboard =
         canvasClipboardRef.current?.items?.length &&
         (
@@ -2113,6 +2143,39 @@ export default function Canvas({
                       );
                     })}
                     <div className="h-5 w-px bg-border-primary" />
+                    <button
+                      type="button"
+                      onPointerDown={(e) => e.stopPropagation()}
+                      onClick={async (e) => {
+                        e.stopPropagation();
+                        if (!img.image_url || img.isGeneratingPlaceholder) return;
+                        // 先把 canvasClipboard 和 marker 写入，保证粘贴路径可靠
+                        canvasClipboardRef.current = { items: [{ image_url: img.image_url, prompt: img.prompt || "" }] };
+                        canvasClipboardFallbackRef.current = { active: false, previousSignature: "" };
+                        const marker = `${CANVAS_CLIPBOARD_TEXT_PREFIX}${Date.now()}`;
+                        try { await navigator.clipboard.writeText(marker); } catch { /* ignore */ }
+                        // 再尝试升级为 blob，方便跨应用粘贴
+                        try {
+                          const res = await fetch(img.image_url);
+                          const blob = await res.blob();
+                          const type = blob.type?.startsWith("image/") ? blob.type : "image/png";
+                          try {
+                            await navigator.clipboard.write([new ClipboardItem({
+                              [type]: blob,
+                              "text/plain": new Blob([marker], { type: "text/plain" }),
+                            })]);
+                          } catch {
+                            try { await navigator.clipboard.write([new ClipboardItem({ [type]: blob })]); } catch { /* keep marker */ }
+                          }
+                        } catch { /* keep marker from above */ }
+                        toast("已复制", "success", 1200);
+                      }}
+                      className="inline-flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-[11px] text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors whitespace-nowrap"
+                      title="复制 (Ctrl+C)"
+                    >
+                      <Copy size={12} />
+                      <span>复制</span>
+                    </button>
                     <button
                       type="button"
                       onPointerDown={(e) => e.stopPropagation()}
