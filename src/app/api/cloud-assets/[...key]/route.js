@@ -25,7 +25,15 @@ export async function GET(request, { params }) {
       return NextResponse.json({ error: "无权访问该素材" }, { status: 403 });
     }
 
-    return NextResponse.redirect(getCloudAssetSignedUrl(key), 302);
+    const signedUrl = getCloudAssetSignedUrl(key);
+    return NextResponse.redirect(signedUrl, {
+      status: 302,
+      headers: {
+        // 浏览器缓存跳转5分钟：同一图片在5分钟内不再走服务器，直接命中签名URL和图片字节缓存
+        // 签名URL有效期3600s，远大于此缓存时间，无过期风险
+        "Cache-Control": "private, max-age=300",
+      },
+    });
   } catch (error) {
     console.error("[CloudAssets] Read failed:", error);
     return NextResponse.json({ error: "读取云端素材失败" }, { status: 500 });
