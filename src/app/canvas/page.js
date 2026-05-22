@@ -990,7 +990,7 @@ function sanitizeCanvasBoardsForStorage(boards) {
   return collapseDefaultCanvasBoards(boards).slice(0, 30).map((board) => ({
     ...board,
     title: isDefaultCanvasBoard(board) ? DEFAULT_CANVAS_BOARD_LABEL : (board?.title || DEFAULT_CANVAS_BOARD_TITLE),
-    images: sanitizeCanvasImagesForStorage(board?.images || []).slice(-60),
+    images: sanitizeCanvasImagesForStorage(board?.images || []).slice(-100),
     refImages: sanitizeStoredImageList(board?.refImages || []).slice(0, MAX_REF_IMAGES),
     texts: Array.isArray(board?.texts) ? board.texts.slice(0, 100) : [],
     shapes: Array.isArray(board?.shapes) ? board.shapes.slice(0, 200) : [],

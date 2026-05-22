@@ -271,12 +271,22 @@ function mergeCanvasBoardsForRestore(localValue = "", incomingValue = "") {
     }
     const newer = getUpdatedAt(board) >= getUpdatedAt(incomingBoard) ? board : incomingBoard;
     const older = newer === board ? incomingBoard : board;
+    // ⚠️ 保护注释 - 禁止修改此合并策略：
+    // 图片坐标（x/y）是用户在画布上手动排列的结果，必须以本地（newer）为准。
+    // mergeObjectsById 循环顺序是 [...incomingItems, ...localItems]，
+    // 若用默认展开（{ ...existing, ...item }），localItems（older/DB旧数据）最后展开
+    // 会覆盖 newer/本地 的 x/y，导致刷新后图片位置回退到旧快照，视觉上乱序。
+    // 使用 prefer 函数确保本地字段（existing）始终优先于 DB 旧字段（item）。
+    const preferLocal = (existing, item) => {
+      if (!existing) return item;
+      return { ...item, ...existing }; // 本地字段覆盖DB旧字段，保留用户排列的 x/y
+    };
     byId.set(id, {
       ...older,
       ...newer,
-      images: mergeObjectsById(older.images || [], newer.images || []),
-      texts: mergeObjectsById(older.texts || [], newer.texts || []),
-      shapes: mergeObjectsById(older.shapes || [], newer.shapes || []),
+      images: mergeObjectsById(older.images || [], newer.images || [], preferLocal),
+      texts: mergeObjectsById(older.texts || [], newer.texts || [], preferLocal),
+      shapes: mergeObjectsById(older.shapes || [], newer.shapes || [], preferLocal),
     });
   }
 
