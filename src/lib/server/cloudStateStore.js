@@ -533,12 +533,17 @@ export async function upsertUserCloudState(userEmail = "", rawItems = []) {
         );
         const existing = existingResult.rows[0];
         if (existing?.state_value) {
+          const prevStateValue = stateValue;
           stateValue = mergeCloudStateValue(item.key, existing.state_value, stateValue, combinedDeletions);
-          // A merge can produce a value that is newer than either browser's local snapshot.
-          // Bump the timestamp so both tabs/devices restore the merged server copy.
-          clientUpdatedAt = Math.max(Number(existing.client_updated_at || 0), item.clientUpdatedAt, Date.now());
+          // 只有合并后内容真正变化时才把时间戳推到 Date.now()。
+          // 如果新设备只是把从数据库恢复的旧数据原封不动传回来（内容未变），
+          // 不推高时间戳，防止旧快照覆盖原始设备上的新数据。
+          const mergedContentChanged = stateValue !== existing.state_value;
+          clientUpdatedAt = mergedContentChanged
+            ? Math.max(Number(existing.client_updated_at || 0), item.clientUpdatedAt, Date.now())
+            : Math.max(Number(existing.client_updated_at || 0), item.clientUpdatedAt);
           if (!stateValue || stateValue.length > MAX_STATE_VALUE_CHARS) {
-            stateValue = item.value;
+            stateValue = prevStateValue;
             clientUpdatedAt = item.clientUpdatedAt;
           }
         }
