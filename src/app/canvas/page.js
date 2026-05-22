@@ -773,7 +773,9 @@ function normalizeResultMessage(message) {
 }
 
 function sanitizeMessagesForStorage(messages) {
-  return messages.slice(0, 200).map((msg) => {
+  // 只保留最近 40 条消息。localStorage 对话数据总量（50会话×200条）很容易超过
+  // 5MB 配额，写入失败后所有新数据都无法持久化，导致刷新后全部回退到旧快照。
+  return messages.slice(-40).map((msg) => {
     const normalized = normalizeResultMessage(msg);
     return {
       ...normalized,
@@ -810,13 +812,16 @@ function restoreInterruptedMessages(messages) {
 }
 
 function sanitizeConversationsForStorage(conversations) {
+  // 只保留最近 15 个会话，每会话最多 40 条消息（见 sanitizeMessagesForStorage）。
+  // 历史上曾设置 50×200=10000 条上限，但实际产出数据轻易超过 5MB localStorage 配额，
+  // 导致写入静默失败、新数据无法持久化、刷新后回退到旧快照。云端数据库已单独保存完整历史。
   return conversations
+    .slice(-15)
     .map((conversation) => ({
       ...conversation,
       messages: sanitizeMessagesForStorage(conversation.messages || []),
     }))
-    .filter((conversation) => (conversation.messages || []).length > 0)
-    .slice(0, 50);
+    .filter((conversation) => (conversation.messages || []).length > 0);
 }
 
 function safeParseStorageArray(value) {
@@ -985,7 +990,7 @@ function sanitizeCanvasBoardsForStorage(boards) {
   return collapseDefaultCanvasBoards(boards).slice(0, 30).map((board) => ({
     ...board,
     title: isDefaultCanvasBoard(board) ? DEFAULT_CANVAS_BOARD_LABEL : (board?.title || DEFAULT_CANVAS_BOARD_TITLE),
-    images: sanitizeCanvasImagesForStorage(board?.images || []).slice(0, 100),
+    images: sanitizeCanvasImagesForStorage(board?.images || []).slice(-60),
     refImages: sanitizeStoredImageList(board?.refImages || []).slice(0, MAX_REF_IMAGES),
     texts: Array.isArray(board?.texts) ? board.texts.slice(0, 100) : [],
     shapes: Array.isArray(board?.shapes) ? board.shapes.slice(0, 200) : [],
@@ -1850,11 +1855,23 @@ function HomeInner() {
   // Persist conversations
   useEffect(() => {
     if (!persistReady) return;
-    try {
-      localStorage.setItem("lovart-conversations", JSON.stringify(sanitizeConversationsForStorage(conversations)));
+    const tryWrite = (convs) => {
+      localStorage.setItem("lovart-conversations", JSON.stringify(convs));
       localStorage.setItem("lovart-active-conversation", activeConversationId || "");
+    };
+    try {
+      tryWrite(sanitizeConversationsForStorage(conversations));
     } catch {
-      // 写入失败多半是容量超限；保留上一次可用历史，不主动清空。
+      try {
+        // 第一次失败：进一步裁剪到 5 个会话 × 最近 20 条消息
+        const minimal = conversations.slice(-5).map((c) => ({
+          ...c,
+          messages: sanitizeMessagesForStorage((c.messages || []).slice(-20)),
+        })).filter((c) => c.messages.length > 0);
+        tryWrite(minimal);
+      } catch {
+        // 空间严重不足时静默放弃，保留已有旧值，绝不写入空数据
+      }
     }
   }, [activeConversationId, conversations, persistReady]);
 
