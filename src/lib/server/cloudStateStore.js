@@ -535,16 +535,27 @@ export async function upsertUserCloudState(userEmail = "", rawItems = []) {
         if (existing?.state_value) {
           const prevStateValue = stateValue;
           stateValue = mergeCloudStateValue(item.key, existing.state_value, stateValue, combinedDeletions);
-          // 只有合并后内容真正变化时才把时间戳推到 Date.now()。
-          // 如果新设备只是把从数据库恢复的旧数据原封不动传回来（内容未变），
-          // 不推高时间戳，防止旧快照覆盖原始设备上的新数据。
+          // ⚠️ 保护注释 - 禁止修改此时间戳逻辑，改动会导致跨设备数据互相覆盖：
+          //
+          // 规则一：只有合并后内容真正变化时才把时间戳推到 Date.now()。
+          //   如果新设备只是把从数据库恢复的旧数据原封不动传回来（内容未变），
+          //   不推高时间戳，防止旧快照的高时间戳覆盖原始设备上的新数据。
+          //
+          // 规则二：合并结果超限时回退到客户端裁剪后的原始值（prevStateValue），
+          //   但时间戳必须使用 Date.now()，不能用 item.clientUpdatedAt。
+          //   原因：其他设备可能已把 DB 时间戳推高（如 Device B 恢复旧数据后同步），
+          //   若用 item.clientUpdatedAt（生图时刻，可能早于 DB 时间戳），
+          //   SQL 的 WHERE client_updated_at <= EXCLUDED.client_updated_at 会判为 FALSE，
+          //   导致 DB 拒绝更新，设备永远只能恢复到旧快照，形成死循环。
           const mergedContentChanged = stateValue !== existing.state_value;
           clientUpdatedAt = mergedContentChanged
             ? Math.max(Number(existing.client_updated_at || 0), item.clientUpdatedAt, Date.now())
             : Math.max(Number(existing.client_updated_at || 0), item.clientUpdatedAt);
           if (!stateValue || stateValue.length > MAX_STATE_VALUE_CHARS) {
+            // 合并结果超限，退回到客户端已裁剪的数据；
+            // 时间戳必须取 Date.now() 确保 SQL WHERE 能通过，否则 DB 拒绝写入。
             stateValue = prevStateValue;
-            clientUpdatedAt = item.clientUpdatedAt;
+            clientUpdatedAt = Math.max(Number(existing.client_updated_at || 0), item.clientUpdatedAt, Date.now());
           }
         }
       }
