@@ -404,6 +404,49 @@ function mergeCloudStateValue(key, existingValue = "", incomingValue = "", delet
   return incomingValue;
 }
 
+// 超限时裁剪画布数据（保留最新），避免整条静默丢弃导致新设备无法同步
+function trimValueToSizeLimit(key, value = "") {
+  if (!value || value.length <= MAX_STATE_VALUE_CHARS) return value;
+  // 画布看板：裁剪每个 board 的 images 直到总量达标
+  if (key === "lovart-canvas-boards") {
+    try {
+      const boards = JSON.parse(value);
+      if (!Array.isArray(boards)) return "";
+      let trimmed = boards;
+      let step = 10;
+      while (JSON.stringify(trimmed).length > MAX_STATE_VALUE_CHARS && trimmed.some((b) => (b.images || []).length > 0)) {
+        trimmed = trimmed.map((b) => ({
+          ...b,
+          images: Array.isArray(b.images) ? b.images.slice(step) : b.images,
+        }));
+        step = Math.floor(step * 1.5);
+      }
+      const result = JSON.stringify(trimmed);
+      return result.length <= MAX_STATE_VALUE_CHARS ? result : "";
+    } catch { return ""; }
+  }
+  // 对话记录：裁剪每个会话的 messages 直到达标
+  if (key === "lovart-conversations") {
+    try {
+      const convs = JSON.parse(value);
+      if (!Array.isArray(convs)) return "";
+      let trimmed = convs;
+      let keepMessages = 100;
+      while (JSON.stringify(trimmed).length > MAX_STATE_VALUE_CHARS && keepMessages > 10) {
+        keepMessages = Math.floor(keepMessages * 0.6);
+        trimmed = trimmed.map((c) => ({
+          ...c,
+          messages: Array.isArray(c.messages) ? c.messages.slice(-keepMessages) : c.messages,
+        }));
+      }
+      const result = JSON.stringify(trimmed);
+      return result.length <= MAX_STATE_VALUE_CHARS ? result : "";
+    } catch { return ""; }
+  }
+  // 其它 key 超限则丢弃（数据结构简单，一般不会超限）
+  return "";
+}
+
 export function normalizeCloudStateItems(items = []) {
   if (!Array.isArray(items)) return [];
   return items
@@ -411,6 +454,10 @@ export function normalizeCloudStateItems(items = []) {
       key: String(item?.key || "").trim(),
       value: typeof item?.value === "string" ? item.value : "",
       clientUpdatedAt: Number(item?.clientUpdatedAt || Date.now()),
+    }))
+    .map((item) => ({
+      ...item,
+      value: trimValueToSizeLimit(item.key, item.value),
     }))
     .filter((item) => (
       allowedStateKeys.has(item.key)
