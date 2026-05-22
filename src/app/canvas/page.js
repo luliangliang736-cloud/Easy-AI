@@ -1019,16 +1019,23 @@ function persistCanvasBoardsToLocalStorage(boards, activeBoardId = "") {
       writeBoards(boardsForStorage);
     } catch (retryError) {
       try {
-        // Last resort: keep the project list itself even if image/history payloads hit quota.
-        writeBoards(boardsForStorage.map((board) => ({
+        // ⚠️ 保护注释 - 禁止修改此回退策略：
+        // 历史上此处曾有"最终回退：写入空图片列表以保留项目结构"的逻辑，
+        // 但那会把 lovart-canvas-boards 写成 [{images:[]}]，之后同步会把
+        // 空数据上传到数据库，用户刷新后所有图片永久丢失。
+        // 正确做法：裁剪最旧的一半图片后重试。若仍失败，静默放弃本次写入，
+        // 保留 localStorage 中已有的旧值，绝对不能写入空图片数据！
+        const trimmedBoards = boardsForStorage.map((board) => ({
           ...board,
-          images: [],
-          refImages: [],
-          texts: [],
-          shapes: [],
-        })));
+          images: Array.isArray(board.images) ? board.images.slice(Math.ceil(board.images.length / 2)) : [],
+          texts: Array.isArray(board.texts) ? board.texts.slice(Math.ceil(board.texts.length / 2)) : [],
+          shapes: Array.isArray(board.shapes) ? board.shapes.slice(Math.ceil(board.shapes.length / 2)) : [],
+        }));
+        writeBoards(trimmedBoards);
       } catch {
-        console.warn("[CanvasBoards] Failed to persist project list", retryError || error);
+        // 全部尝试失败时，静默放弃，保留 localStorage 中已有的旧值。
+        // 绝对不写入空数据——那会触发云端同步把空数据覆盖数据库，导致图片永久丢失。
+        console.warn("[CanvasBoards] localStorage 写入失败（可能配额超限），保留已有存储值，跳过本次持久化。", retryError || error);
       }
     }
   }

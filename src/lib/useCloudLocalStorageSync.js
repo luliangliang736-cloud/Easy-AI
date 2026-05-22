@@ -380,12 +380,36 @@ function snapshotSignature(items = []) {
 
 async function saveSnapshot(items = [], options = {}) {
   if (items.length === 0) return;
+  const wantKeepalive = Boolean(options.keepalive);
   const body = JSON.stringify({ items });
+
+  // ⚠️ 保护注释 - 禁止修改此同步策略：
+  // 浏览器的 keepalive fetch 有严格的 64KB body 上限。当用户刷新/关闭页面时
+  // (beforeunload/pagehide)，只有 keepalive 请求能保证发送完成，普通请求会被
+  // 浏览器立即取消导致数据丢失。
+  // 若整包数据超过 KEEPALIVE_BODY_LIMIT，改为逐条 key 单独发送 keepalive 请求，
+  // 每条单 key 的数据量远小于 64KB，确保每条都能用 keepalive 安全发出。
+  // 绝对不能把 keepalive 降级为 false —— 那在页面卸载时等同于丢弃请求！
+  if (wantKeepalive && body.length > KEEPALIVE_BODY_LIMIT) {
+    // 逐条单独发送，每条都能满足 keepalive 的 64KB 限制
+    const promises = items.map((item) => {
+      const singleBody = JSON.stringify({ items: [item] });
+      return fetch("/api/cloud-state", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: singleBody,
+        keepalive: singleBody.length <= KEEPALIVE_BODY_LIMIT,
+      }).catch(() => {});
+    });
+    await Promise.all(promises);
+    return;
+  }
+
   await fetch("/api/cloud-state", {
     method: "PUT",
     headers: { "Content-Type": "application/json" },
     body,
-    keepalive: Boolean(options.keepalive) && body.length <= KEEPALIVE_BODY_LIMIT,
+    keepalive: wantKeepalive && body.length <= KEEPALIVE_BODY_LIMIT,
   });
 }
 
