@@ -978,11 +978,24 @@ function collapseDefaultCanvasBoards(boards = []) {
   return result;
 }
 
+// ⚠️ 保护注释 - 禁止移除此排序逻辑：
+// 画布自动布局完全依赖数组索引 i（col = i % 8, row = i / 8），位置不写入 image 对象，
+// 每次刷新都从索引重新计算。历史 merge bug 导致 localStorage 里图片顺序与生成时序不符，
+// 视觉上表现为"乱序"。此处按 id 内嵌的13位时间戳排序，确保存储顺序 = 时间顺序，
+// 一次刷新即恢复正确布局，且不影响画布任何其它逻辑。
+function extractCanvasImageTimestamp(item) {
+  if (item?.createdAt) return Number(item.createdAt);
+  // 所有 canvas image id 格式均为 prefix-${13位ms时间戳}-... （如 ai-、drop-、paste-、chat-drop-）
+  const m = String(item?.id || "").match(/(\d{13,})/);
+  return m ? Number(m[1]) : 0;
+}
+
 function sanitizeCanvasImagesForStorage(items) {
   if (!Array.isArray(items)) return [];
   // base64 图片/视频太大，只保留可重新访问的远程或站内生成图链接。
   return normalizeCanvasImageItems(items, "stored-canvas")
-    .filter((item) => item && isPersistableMediaUrl(item.image_url));
+    .filter((item) => item && isPersistableMediaUrl(item.image_url))
+    .sort((a, b) => extractCanvasImageTimestamp(a) - extractCanvasImageTimestamp(b));
 }
 
 function sanitizeCanvasBoardsForStorage(boards) {
@@ -1117,7 +1130,11 @@ function filterDeletedConversationsForRestore(conversations = [], deletions = {}
 
 function normalizeCanvasBoards(boards) {
   if (!Array.isArray(boards) || boards.length === 0) return [];
-  return collapseDefaultCanvasBoards(boards);
+  // 加载时按时间戳排序图片，确保 positionsRef 自动布局（col = i % 8）与生成时序一致。
+  return collapseDefaultCanvasBoards(boards).map((board) => ({
+    ...board,
+    images: [...(board.images || [])].sort((a, b) => extractCanvasImageTimestamp(a) - extractCanvasImageTimestamp(b)),
+  }));
 }
 
 async function parseApiResponse(res) {
