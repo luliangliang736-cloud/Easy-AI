@@ -812,11 +812,11 @@ function restoreInterruptedMessages(messages) {
 }
 
 function sanitizeConversationsForStorage(conversations) {
-  // 只保留最近 15 个会话，每会话最多 40 条消息（见 sanitizeMessagesForStorage）。
+  // 只保留最近 10 个会话，每会话最多 40 条消息（见 sanitizeMessagesForStorage）。
   // 历史上曾设置 50×200=10000 条上限，但实际产出数据轻易超过 5MB localStorage 配额，
   // 导致写入静默失败、新数据无法持久化、刷新后回退到旧快照。云端数据库已单独保存完整历史。
   return conversations
-    .slice(-15)
+    .slice(-10)
     .map((conversation) => ({
       ...conversation,
       messages: sanitizeMessagesForStorage(conversation.messages || []),
@@ -1003,7 +1003,7 @@ function sanitizeCanvasBoardsForStorage(boards) {
   return collapseDefaultCanvasBoards(boards).slice(0, 30).map((board) => ({
     ...board,
     title: isDefaultCanvasBoard(board) ? DEFAULT_CANVAS_BOARD_LABEL : (board?.title || DEFAULT_CANVAS_BOARD_TITLE),
-    images: sanitizeCanvasImagesForStorage(board?.images || []).slice(-100),
+    images: sanitizeCanvasImagesForStorage(board?.images || []).slice(-500),
     refImages: sanitizeStoredImageList(board?.refImages || []).slice(0, MAX_REF_IMAGES),
     texts: Array.isArray(board?.texts) ? board.texts.slice(0, 100) : [],
     shapes: Array.isArray(board?.shapes) ? board.shapes.slice(0, 200) : [],

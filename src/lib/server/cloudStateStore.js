@@ -364,7 +364,7 @@ function mergeCanvasBoards(existingValue = "", incomingValue = "", deletions = {
     byId.set(id, {
       ...older,
       ...newer,
-      images: filterDeletedCanvasItems(mergeArrayById(oldBoard.images || [], newBoard.images || []), deletions).slice(-100),
+      images: filterDeletedCanvasItems(mergeArrayById(oldBoard.images || [], newBoard.images || []), deletions).slice(-500),
       texts: mergeArrayById(oldBoard.texts || [], newBoard.texts || []).slice(-100),
       shapes: mergeArrayById(oldBoard.shapes || [], newBoard.shapes || []).slice(-200),
       updatedAt: Math.max(getUpdatedAt(oldBoard), getUpdatedAt(newBoard), Date.now()),
