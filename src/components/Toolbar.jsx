@@ -9,6 +9,7 @@ import {
   Minus,
   Plus,
   Palette,
+  LayoutGrid,
 } from "lucide-react";
 
 const TOOLS = [
@@ -27,6 +28,7 @@ export default function Toolbar({
   onShapeModeChange,
   canvasColor,
   onToggleCanvasColorPicker,
+  onAutoAlign,
 }) {
   return (
     <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-20 flex items-center gap-1 px-2 py-1.5 rounded-2xl bg-bg-secondary/90 backdrop-blur-xl border border-border-primary shadow-2xl shadow-black/40">
@@ -94,6 +96,20 @@ export default function Toolbar({
           />
         </span>
       </button>
+
+      {onAutoAlign && (
+        <>
+          <div className="w-px h-6 bg-border-primary mx-1" />
+          <button
+            type="button"
+            onClick={onAutoAlign}
+            className="w-8 h-8 rounded-lg flex items-center justify-center text-text-tertiary hover:text-text-primary hover:bg-bg-hover transition-all"
+            title="一键整理图片（重新网格对齐）"
+          >
+            <LayoutGrid size={15} />
+          </button>
+        </>
+      )}
 
       <div className="w-px h-6 bg-border-primary mx-1" />
 

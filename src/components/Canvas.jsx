@@ -443,9 +443,15 @@ export default function Canvas({
           const h = meta ? (p.w * meta.height) / meta.width : p.w;
           return Math.max(acc, p.y + h);
         }, 80);
+        const existingPlaceholderCount = renderImages.filter(
+          ri => ri.isGeneratingPlaceholder && ri.id !== img.id && positionsRef.current[ri.id]
+        ).length;
+        const globalSlot = existingPlaceholderCount + slotIndex;
+        const gridCol = globalSlot % 10;
+        const gridRow = Math.floor(globalSlot / 10);
         positionsRef.current[img.id] = {
-          x: 100 + (slotIndex % cols) * (INITIAL_IMG_WIDTH + gapX),
-          y: maxImageBottom + 60 + Math.floor(slotIndex / cols) * (INITIAL_IMG_WIDTH + gapY),
+          x: gridCol * (INITIAL_IMG_WIDTH + gapX) + 100,
+          y: maxImageBottom + 60 + gridRow * (INITIAL_IMG_WIDTH + gapY),
           w: INITIAL_IMG_WIDTH,
         };
       } else {
@@ -513,6 +519,20 @@ export default function Canvas({
           toast("画布已导出", "success");
         });
       }
+    },
+    autoAlign: () => {
+      const imgs = imagesRef.current;
+      if (!imgs.length) return;
+      imgs.forEach((img, i) => {
+        const col = i % 10;
+        const row = Math.floor(i / 10);
+        positionsRef.current[img.id] = {
+          ...positionsRef.current[img.id],
+          x: col * (INITIAL_IMG_WIDTH + 40) + 100,
+          y: row * (INITIAL_IMG_WIDTH + 60) + 100,
+        };
+      });
+      forceRender();
     },
   }), [images, toast]);
 
@@ -2780,6 +2800,20 @@ export default function Canvas({
           onShapeModeChange={onShapeModeChange}
           canvasColor={resolvedCanvasColor}
           onToggleCanvasColorPicker={() => setIsCanvasColorPickerOpen((open) => !open)}
+          onAutoAlign={() => {
+            const imgs = imagesRef.current;
+            if (!imgs.length) return;
+            imgs.forEach((img, i) => {
+              const col = i % 10;
+              const row = Math.floor(i / 10);
+              positionsRef.current[img.id] = {
+                ...positionsRef.current[img.id],
+                x: col * (INITIAL_IMG_WIDTH + 40) + 100,
+                y: row * (INITIAL_IMG_WIDTH + 60) + 100,
+              };
+            });
+            forceRender();
+          }}
         />
       </div>
 
