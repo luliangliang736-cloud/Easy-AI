@@ -125,7 +125,7 @@ async function prepareBatch({ limit = 5, start = 0, end = 0, tail = false } = {}
   const safeLimit = Math.min(Math.max(Number(limit) || 5, 1), 500);
   const safeStart = Math.max(Number(start) || 0, 0);
   const safeEnd = Math.max(Number(end) || 0, 0);
-  const readLimit = tail || safeStart > 0 || safeEnd > 0 ? 100 : safeLimit;
+  const readLimit = tail || safeStart > 0 || safeEnd > 0 ? 500 : safeLimit;
   const target = resolveTableTarget();
   const data = await runLarkCliJson([
     "base", "+record-list",
@@ -149,13 +149,24 @@ async function prepareBatch({ limit = 5, start = 0, end = 0, tail = false } = {}
     recordId: recordIds[index],
     index,
   }));
+
+  // 按任务序号升序排列，确保"前N张"对应视图里序号最小的N条记录
+  const taskNumFieldIndex = fields.indexOf("任务序号");
+  const sortedRecords = taskNumFieldIndex >= 0
+    ? [...indexedRecords].sort((a, b) => {
+        const aVal = Number(a.record[taskNumFieldIndex]) || 0;
+        const bVal = Number(b.record[taskNumFieldIndex]) || 0;
+        return aVal - bVal;
+      })
+    : indexedRecords;
+
   const selectedRecords = tail
-    ? indexedRecords.slice(-safeLimit)
+    ? sortedRecords.slice(-safeLimit)
     : safeStart > 0 && safeEnd > 0
-      ? indexedRecords.slice(safeStart - 1, safeEnd)
+      ? sortedRecords.slice(safeStart - 1, safeEnd)
       : safeStart > 0
-        ? indexedRecords.slice(safeStart - 1, safeStart)
-        : indexedRecords.slice(0, safeLimit);
+        ? sortedRecords.slice(safeStart - 1, safeStart)
+        : sortedRecords.slice(0, safeLimit);
 
   const items = [];
   for (const selected of selectedRecords) {
@@ -241,7 +252,7 @@ async function imageSourceToTempFile(source) {
   return writeTempBinary(buffer, ext);
 }
 
-async function uploadGeneratedImage({ recordId, imageUrl, name }) {
+async function uploadGeneratedImage({ recordId, imageUrl }) {
   if (!recordId || !imageUrl) throw new Error("recordId 和 imageUrl 必填");
   const target = resolveTableTarget();
   const tempFile = await imageSourceToTempFile(imageUrl);
@@ -254,7 +265,6 @@ async function uploadGeneratedImage({ recordId, imageUrl, name }) {
       "--record-id", recordId,
       "--field-id", aiImageFieldId,
       "--file", tempFile.cliPath,
-      "--name", name || `EasyAI-WA-${Date.now()}.png`,
       "--as", LARK_IDENTITY,
       "--jq", ".",
     ]);
