@@ -140,7 +140,7 @@ function parseFeishuWaBatchRequest(text = "") {
   if (rangeMatch) {
     const start = chineseNumberToInt(rangeMatch[1]);
     const end = chineseNumberToInt(rangeMatch[2]);
-    if (start > 0 && end >= start) return { start, end, limit: Math.min(end - start + 1, 50) };
+    if (start > 0 && end >= start) return { start, end, limit: end - start + 1 };
   }
   const singleMatch = source.match(/第([0-9一二两三四五六七八九十]+)(?:张|条|个)/);
   if (singleMatch) {
@@ -150,12 +150,12 @@ function parseFeishuWaBatchRequest(text = "") {
   const tailMatch = source.match(/(?:后|最后)([0-9一二两三四五六七八九十]+)(?:张|条|个)/);
   if (tailMatch) {
     const limit = chineseNumberToInt(tailMatch[1]);
-    if (limit > 0) return { limit: Math.min(limit, 50), tail: true };
+    if (limit > 0) return { limit, tail: true };
   }
   const headMatch = source.match(/前([0-9一二两三四五六七八九十]+)(?:张|条|个)/);
   if (headMatch) {
     const limit = chineseNumberToInt(headMatch[1]);
-    if (limit > 0) return { limit: Math.min(limit, 50) };
+    if (limit > 0) return { limit };
   }
   return null;
 }
