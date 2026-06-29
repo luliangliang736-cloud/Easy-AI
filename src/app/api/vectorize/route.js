@@ -21,8 +21,10 @@ export async function POST(req) {
       absoluteUrl = `${protocol}://${host}${imageUrl}`;
     }
 
-    // 从 OSS / CDN 拉取图片二进制
-    const imgRes = await fetch(absoluteUrl);
+    // 从 OSS / CDN 拉取图片二进制（透传 Cookie，避免内部 API 鉴权失败）
+    const imgRes = await fetch(absoluteUrl, {
+      headers: { cookie: req.headers.get("cookie") || "" },
+    });
     if (!imgRes.ok) {
       return Response.json({ error: `拉取原图失败（${imgRes.status}）` }, { status: 502 });
     }
