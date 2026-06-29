@@ -13,6 +13,7 @@ export const runtime = "nodejs";
 
 const BASE_TOKEN = process.env.FEISHU_WA_BASE_TOKEN || "R2edbyyrZaGixJsH0v2cD1Mcnkg";
 const TABLE_ID = process.env.FEISHU_WA_TABLE_ID || "tble6jwNnOTjv75V";
+const VIEW_ID = process.env.FEISHU_WA_VIEW_ID || "vewQ8ft4Ji";
 const AI_IMAGE_FIELD_NAME = "AI设计图";
 
 function normalizeText(value) {
@@ -125,15 +126,16 @@ async function prepareBatch({ limit = 5, start = 0, end = 0, tail = false } = {}
   const safeLimit = Math.min(Math.max(Number(limit) || 5, 1), 500);
   const safeStart = Math.max(Number(start) || 0, 0);
   const safeEnd = Math.max(Number(end) || 0, 0);
-  // 始终拉取足够多的记录以便 JS 层按任务序号排序后再切片，Railway lark-cli 单次上限 200
-  const readLimit = 200;
+  // 使用视图 ID 保证按任务序号顺序返回，直接取对应条数
+  const readLimit = tail ? 200 : (safeEnd > 0 ? safeEnd : safeLimit);
   const target = resolveTableTarget();
   const data = await runLarkCliJson([
     "base", "+record-list",
     "--base-token", BASE_TOKEN,
     "--table-id", target.tableId,
+    "--view-id", VIEW_ID,
     "--as", LARK_IDENTITY,
-    "--limit", String(readLimit),
+    "--limit", String(Math.min(readLimit, 200)),
     "--format", "json",
   ]);
   if (!data?.ok) {
@@ -151,23 +153,14 @@ async function prepareBatch({ limit = 5, start = 0, end = 0, tail = false } = {}
     index,
   }));
 
-  // 按任务序号升序排列，确保"前N张"对应视图里序号最小的N条记录
-  const taskNumFieldIndex = fields.indexOf("任务序号");
-  const sortedRecords = taskNumFieldIndex >= 0
-    ? [...indexedRecords].sort((a, b) => {
-        const aVal = Number(a.record[taskNumFieldIndex]) || 0;
-        const bVal = Number(b.record[taskNumFieldIndex]) || 0;
-        return aVal - bVal;
-      })
-    : indexedRecords;
-
+  // 视图已按任务序号排序，直接切片即可
   const selectedRecords = tail
-    ? sortedRecords.slice(-safeLimit)
+    ? indexedRecords.slice(-safeLimit)
     : safeStart > 0 && safeEnd > 0
-      ? sortedRecords.slice(safeStart - 1, safeEnd)
+      ? indexedRecords.slice(safeStart - 1, safeEnd)
       : safeStart > 0
-        ? sortedRecords.slice(safeStart - 1, safeStart)
-        : sortedRecords.slice(0, safeLimit);
+        ? indexedRecords.slice(safeStart - 1, safeStart)
+        : indexedRecords.slice(0, safeLimit);
 
   const items = [];
   for (const selected of selectedRecords) {
