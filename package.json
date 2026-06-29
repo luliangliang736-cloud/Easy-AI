@@ -10,7 +10,7 @@
   },
   "dependencies": {
     "@imgly/background-removal-node": "^1.4.5",
-    "@larksuite/cli": "^1.0.25",
+    "@larksuite/cli": "^1.0.59",
     "ali-oss": "^6.23.0",
     "lucide-react": "^1.8.0",
     "mammoth": "^1.12.0",
