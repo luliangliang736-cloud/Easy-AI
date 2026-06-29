@@ -122,7 +122,7 @@ function buildPrompt({ scene, headline, subline, role, outfit, style }, index) {
 }
 
 async function prepareBatch({ limit = 5, start = 0, end = 0, tail = false } = {}) {
-  const safeLimit = Math.min(Math.max(Number(limit) || 5, 1), 50);
+  const safeLimit = Math.min(Math.max(Number(limit) || 5, 1), 500);
   const safeStart = Math.max(Number(start) || 0, 0);
   const safeEnd = Math.max(Number(end) || 0, 0);
   const readLimit = tail || safeStart > 0 || safeEnd > 0 ? 100 : safeLimit;
