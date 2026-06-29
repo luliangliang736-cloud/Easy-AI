@@ -125,7 +125,8 @@ async function prepareBatch({ limit = 5, start = 0, end = 0, tail = false } = {}
   const safeLimit = Math.min(Math.max(Number(limit) || 5, 1), 500);
   const safeStart = Math.max(Number(start) || 0, 0);
   const safeEnd = Math.max(Number(end) || 0, 0);
-  const readLimit = tail || safeStart > 0 || safeEnd > 0 ? 500 : safeLimit;
+  // 始终拉取足够多的记录以便 JS 层按任务序号排序后再切片，Railway lark-cli 单次上限 200
+  const readLimit = 200;
   const target = resolveTableTarget();
   const data = await runLarkCliJson([
     "base", "+record-list",
