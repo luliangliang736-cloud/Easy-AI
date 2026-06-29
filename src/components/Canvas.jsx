@@ -7,7 +7,7 @@ import {
 import {
   Maximize2, Download, Trash2, Copy,
   MessageSquare, Lock, Unlock, FileDown, Image as ImageIcon,
-  Minus, Plus, Scissors, Type, Play, Pause,
+  Minus, Plus, Scissors, Type, Play, Pause, Spline,
 } from "lucide-react";
 import { flushSync } from "react-dom";
 import { useToast } from "@/components/Toast";
@@ -906,6 +906,7 @@ export default function Canvas({
   const quickEditActions = [
     { id: "cutout", label: "抠图", icon: Scissors },
     { id: "upscale", label: "高清放大", icon: Maximize2 },
+    { id: "vectorize", label: "转矢量", icon: Spline },
   ];
   const upscaleOptionGroups = [
     {
@@ -1739,7 +1740,8 @@ export default function Canvas({
           const a = document.createElement("a");
           a.href = url;
           const isVideo = img.media_type === "video" || img.mediaType === "video";
-          a.download = `${isVideo ? "video" : "image"}-${Date.now()}.${isVideo ? "mp4" : "png"}`;
+          const isSvgItem = img.media_type === "svg";
+          a.download = isSvgItem ? `vector-${Date.now()}.svg` : `${isVideo ? "video" : "image"}-${Date.now()}.${isVideo ? "mp4" : "png"}`;
           a.click();
           URL.revokeObjectURL(url);
           toast("已导出", "success", 1200);
@@ -2076,6 +2078,7 @@ export default function Canvas({
           const isLocked = lockedRef.current.has(img.id);
           const meta = imageMetaRef.current[img.id];
           const isVideo = img.media_type === "video" || img.mediaType === "video";
+          const isSvgImage = img.media_type === "svg";
           const semanticForImage = semanticSelection?.imageId === img.id ? semanticSelection : null;
           const semanticBox = semanticForImage?.bbox;
           const semanticLabel = semanticForImage?.label ? String(semanticForImage.label).trim() : "";
@@ -2097,10 +2100,10 @@ export default function Canvas({
             >
               {isChromeSingle && (
                 <div className="absolute left-1/2 bottom-full mb-2 z-10 flex -translate-x-1/2 flex-col items-center gap-2">
-                  <div className={`flex w-fit self-start items-center gap-2 px-2 py-1.5 rounded-xl border border-border-primary bg-bg-primary/92 backdrop-blur-xl pointer-events-auto overflow-visible ${
+                  <div className={`flex w-fit ${isSvgImage ? "self-center" : "self-start"} items-center gap-2 px-2 py-1.5 rounded-xl border border-border-primary bg-bg-primary/92 backdrop-blur-xl pointer-events-auto overflow-visible ${
                     isLightTheme ? "shadow-[0_10px_24px_rgba(15,23,42,0.08)]" : "shadow-lg"
                   }`}>
-                    {(isVideo ? [] : quickEditActions).map((action) => {
+                    {(isVideo || isSvgImage ? [] : quickEditActions).map((action) => {
                       if (action.id === "upscale") {
                         return (
                           <div key={action.id} className="relative">
@@ -2177,8 +2180,8 @@ export default function Canvas({
                         </button>
                       );
                     })}
-                    <div className="h-5 w-px bg-border-primary" />
-                    <button
+                    {!isSvgImage && <div className="h-5 w-px bg-border-primary" />}
+                    {!isSvgImage && <button
                       type="button"
                       onPointerDown={(e) => e.stopPropagation()}
                       onClick={async (e) => {
@@ -2220,7 +2223,7 @@ export default function Canvas({
                     >
                       <Copy size={12} />
                       <span>复制</span>
-                    </button>
+                    </button>}
                     <button
                       type="button"
                       onPointerDown={(e) => e.stopPropagation()}
@@ -2231,10 +2234,10 @@ export default function Canvas({
                       className="inline-flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-[11px] text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors whitespace-nowrap"
                       title="下载"
                     >
-                      <Download size={12} />
+                      {isSvgImage ? <Spline size={12} /> : <Download size={12} />}
                       <span>下载</span>
                     </button>
-                    <button
+                    {!isSvgImage && <button
                       type="button"
                       disabled={isLocked}
                       onPointerDown={(e) => e.stopPropagation()}
@@ -2251,8 +2254,9 @@ export default function Canvas({
                     >
                       <Trash2 size={12} />
                       <span>删除</span>
-                    </button>
+                    </button>}
                   </div>
+                  {!isSvgImage && (
                   <div className="flex w-full items-center justify-between gap-2 text-[10px] text-text-primary pointer-events-none">
                     <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden px-1.5 py-0.5">
                       <ImageIcon size={10} />
@@ -2264,6 +2268,7 @@ export default function Canvas({
                       {sizeLabel}
                     </div>
                   </div>
+                  )}
                 </div>
               )}
 

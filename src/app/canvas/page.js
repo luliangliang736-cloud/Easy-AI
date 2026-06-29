@@ -2274,17 +2274,21 @@ function HomeInner() {
   }, []);
 
   const handleGenerate = useCallback(async (retryPayload = null) => {
-    const sourceText = retryPayload?.text ?? prompt;
-    const effectiveTextEditBlocks = retryPayload?.textEditBlocks || textEditBlocks;
+    if (typeof retryPayload?.preventDefault === "function") {
+      retryPayload.preventDefault();
+    }
+    const payload = retryPayload?.nativeEvent || retryPayload?.currentTarget ? null : retryPayload;
+    const sourceText = payload?.text ?? prompt;
+    const effectiveTextEditBlocks = payload?.textEditBlocks || textEditBlocks;
     const composerText = String(sourceText || "").trim();
-    const effectiveRefImages = retryPayload?.refImages || refImages;
-    const effectiveSemanticSelection = retryPayload?.semanticSelection || semanticSelection;
-    const activeEntryMode = retryPayload?.entryMode || entryMode;
-    const requestedComposerMode = retryPayload?.composerMode || composerMode;
+    let effectiveRefImages = payload?.refImages || refImages;
+    const effectiveSemanticSelection = payload?.semanticSelection || semanticSelection;
+    const activeEntryMode = payload?.entryMode || entryMode;
+    const requestedComposerMode = payload?.composerMode || composerMode;
     const activeComposerMode = activeEntryMode === "quick" ? "agent" : requestedComposerMode;
     const baseText = buildTextEditPrompt(composerText, effectiveTextEditBlocks);
-    const baseParams = retryPayload?.params || params;
-    const effectiveParams = retryPayload?.disableAgentDefaults
+    const baseParams = payload?.params || params;
+    const effectiveParams = payload?.disableAgentDefaults
       ? baseParams
       : activeComposerMode === "agent"
         ? resolveAgentParams(baseParams, composerText || baseText, effectiveRefImages)
@@ -2292,10 +2296,10 @@ function HomeInner() {
     const text = activeComposerMode === "agent"
       ? buildAgentPrompt(baseText, effectiveRefImages)
       : baseText;
-    const preserveComposer = Boolean(retryPayload?.preserveComposer);
-    const hidePlaceholderPrompt = Boolean(retryPayload?.hidePlaceholderPrompt);
-    const hideConversationMessages = Boolean(retryPayload?.hideConversationMessages);
-    const editMode = retryPayload?.editMode || null;
+    const preserveComposer = Boolean(payload?.preserveComposer);
+    const hidePlaceholderPrompt = Boolean(payload?.hidePlaceholderPrompt);
+    const hideConversationMessages = Boolean(payload?.hideConversationMessages);
+    const editMode = payload?.editMode || null;
     if (!text || !activeConversationId) return;
     const generationBoardId = activeCanvasBoardId;
 
@@ -2304,7 +2308,7 @@ function HomeInner() {
       && (
       effectiveSemanticSelection?.maskDataUrl
       && effectiveSemanticSelection?.imageUrl
-      && !retryPayload?.disableSemanticEdit
+      && !payload?.disableSemanticEdit
       )
     ) {
       if (isTextEditing) return;
@@ -3294,6 +3298,56 @@ function HomeInner() {
         setTextEditPanelVisible(false);
         setPrompt("请基于这张参考图编辑其中的文字，保留原有版式与视觉风格，只修改文字相关内容。");
         toast(errStr(err) || "文字识别失败，已回退到通用编辑指令", "info", 2200);
+      }
+      return;
+    }
+
+    if (actionId === "vectorize") {
+      if (isBusy) {
+        toast("当前有任务进行中，请稍候再试", "info", 1500);
+        return;
+      }
+      toast("正在转矢量，请稍候...", "info", 2500);
+      try {
+        const res = await fetch("/api/vectorize", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ imageUrl: img.image_url }),
+        });
+        if (!res.ok) {
+          const err = await res.json().catch(() => ({}));
+          throw new Error(err.error || `转矢量失败（${res.status}）`);
+        }
+        const blob = await res.blob();
+        // 将 SVG blob 转为 base64 data URL，立即显示到画布
+        const svgDataUrl = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = (e) => resolve(e.target.result);
+          reader.onerror = reject;
+          reader.readAsDataURL(blob);
+        });
+        const itemId = `vectorize-${Date.now()}`;
+        appendCanvasImagesToBoard(activeCanvasBoardId, [{
+          id: itemId,
+          image_url: svgDataUrl,
+          prompt: "转矢量 SVG",
+          media_type: "svg",
+          canvasBoardId: activeCanvasBoardId,
+        }]);
+        toast("转矢量完成，已添加到画布", "success", 2000);
+        // 后台上传到云端（直接调用 upload API，避免 compressImage 光栅化 SVG）
+        void fetch("/api/cloud-assets/upload", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ dataUrl: svgDataUrl, filename: "vector.svg", scope: "canvas-vectorize" }),
+        })
+          .then((r) => r.json())
+          .then((data) => {
+            if (data?.url) updateCanvasImageInBoard(activeCanvasBoardId, itemId, { image_url: data.url });
+          })
+          .catch(() => {});
+      } catch (err) {
+        toast(err.message || "转矢量失败，请重试", "error", 2500);
       }
       return;
     }
