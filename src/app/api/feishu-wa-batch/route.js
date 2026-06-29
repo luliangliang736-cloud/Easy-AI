@@ -133,7 +133,6 @@ async function prepareBatch({ limit = 5, start = 0, end = 0, tail = false } = {}
     "--table-id", target.tableId,
     "--as", LARK_IDENTITY,
     "--limit", String(readLimit),
-    "--sort-json", JSON.stringify([{ field: "任务序号", desc: false }]),
     "--format", "json",
   ]);
   if (!data?.ok) {
