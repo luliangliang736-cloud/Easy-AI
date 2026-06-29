@@ -252,7 +252,8 @@ async function uploadGeneratedImage({ recordId, imageUrl }) {
   const tempFile = await imageSourceToTempFile(imageUrl);
   try {
     const aiImageFieldId = await resolveAiImageFieldId(target.tableId);
-    return await runLarkCliJson([
+    console.log("[feishu-upload] recordId=%s fieldId=%s file=%s", recordId, aiImageFieldId, tempFile.cliPath);
+    const result = await runLarkCliJson([
       "base", "+record-upload-attachment",
       "--base-token", BASE_TOKEN,
       "--table-id", target.tableId,
@@ -262,6 +263,9 @@ async function uploadGeneratedImage({ recordId, imageUrl }) {
       "--as", LARK_IDENTITY,
       "--jq", ".",
     ]);
+    console.log("[feishu-upload] result ok=%s", result?.ok, JSON.stringify(result)?.slice(0, 200));
+    if (!result?.ok) throw new Error(result?.error?.message || result?.msg || "附件上传失败");
+    return result;
   } finally {
     await unlink(tempFile.filePath).catch(() => {});
   }
