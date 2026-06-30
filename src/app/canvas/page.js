@@ -3307,7 +3307,15 @@ function HomeInner() {
         toast("当前有任务进行中，请稍候再试", "info", 1500);
         return;
       }
-      toast("正在转矢量，请稍候...", "info", 2500);
+      const placeholderId = `vectorize-placeholder-${Date.now()}`;
+      const srcRatio = (img.width && img.height) ? img.width / img.height : 1;
+      setCanvasGeneratingItems((prev) => [...prev, {
+        id: placeholderId,
+        boardId: activeCanvasBoardId,
+        generationStatus: "generating",
+        placeholderAspectRatio: srcRatio,
+        media_type: "image",
+      }]);
       try {
         const res = await fetch("/api/vectorize", {
           method: "POST",
@@ -3326,6 +3334,7 @@ function HomeInner() {
           reader.onerror = reject;
           reader.readAsDataURL(blob);
         });
+        setCanvasGeneratingItems((prev) => prev.filter((item) => item.id !== placeholderId));
         const itemId = `vectorize-${Date.now()}`;
         appendCanvasImagesToBoard(activeCanvasBoardId, [{
           id: itemId,
@@ -3347,6 +3356,7 @@ function HomeInner() {
           })
           .catch(() => {});
       } catch (err) {
+        setCanvasGeneratingItems((prev) => prev.filter((item) => item.id !== placeholderId));
         toast(err.message || "转矢量失败，请重试", "error", 2500);
       }
       return;
