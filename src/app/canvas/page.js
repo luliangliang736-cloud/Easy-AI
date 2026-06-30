@@ -3312,9 +3312,11 @@ function HomeInner() {
       setCanvasGeneratingItems((prev) => [...prev, {
         id: placeholderId,
         boardId: activeCanvasBoardId,
+        isGeneratingPlaceholder: true,
         generationStatus: "generating",
         placeholderAspectRatio: srcRatio,
         media_type: "image",
+        createdAt: Date.now(),
       }]);
       try {
         const res = await fetch("/api/vectorize", {
