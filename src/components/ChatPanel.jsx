@@ -86,6 +86,20 @@ const MODEL_TIERS = [
     serviceTierOptions: false,
     mediaType: "video",
   },
+  {
+    id: "seedance-video",
+    name: "Seedance 视频",
+    icon: Video,
+    desc: "字节 · 文生/图生视频",
+    variants: [
+      { model: "dreamina-seedance-2-0-260128", label: "标准版", credits: { default: 0, priority: 0 } },
+      { model: "dreamina-seedance-2-0-fast-260128", label: "快速版", credits: { default: 0, priority: 0 } },
+    ],
+    maxInputImages: 2,
+    extendedRatios: false,
+    serviceTierOptions: false,
+    mediaType: "video",
+  },
 ];
 
 const STANDARD_RATIOS = ["auto", "1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "2:1", "1:2", "4:5", "5:4"];
@@ -720,6 +734,7 @@ export default function ChatPanel({
 
   const currentTier = MODEL_TIERS.find((t) => t.variants.some((v) => v.model === params.model)) || MODEL_TIERS[0];
   const isKlingVideoTier = currentTier.id === "kling-video";
+  const isSeedanceVideoTier = currentTier.id === "seedance-video";
   const currentKlingModel = String(params.model || "").trim();
   const isKlingV26 = currentKlingModel === "kling-v2-6";
   const isKlingV3Family = currentKlingModel === "kling-v3" || currentKlingModel === "kling-v3-omni";
@@ -744,8 +759,8 @@ export default function ChatPanel({
       ? "Kling-V2-6 首尾帧不支持声音控制。"
       : "Kling-V2-6 文生/图生可选有声；有声会自动使用 1080p。"
     : "Kling-V3 / V3-Omni 不支持声音控制。";
-  const availableRatios = isKlingVideoTier
-    ? ["16:9", "9:16", "1:1"]
+  const availableRatios = (isKlingVideoTier || isSeedanceVideoTier)
+    ? ["16:9", "9:16", "1:1", "4:3", "3:4", "21:9"]
     : currentTier.extendedRatios
       ? [...STANDARD_RATIOS, ...EXTENDED_RATIOS]
       : STANDARD_RATIOS;
@@ -1700,6 +1715,84 @@ export default function ChatPanel({
                       </div>
                       <p className="text-[10px] text-text-tertiary mt-1.5">
                         {klingSoundHint} 0 张参考图为文生视频，1 张为图生视频，2 张为首尾帧生视频。
+                      </p>
+                    </div>
+                  </div>
+                </CollapsibleParamSection>
+              ) : isSeedanceVideoTier ? (
+                <CollapsibleParamSection
+                  title="Seedance 视频参数"
+                  summary={[
+                    `比例 ${params.image_size || "16:9"}`,
+                    `${params.duration || "5"}s`,
+                    params.resolution === "480p" ? "480p" : "720p",
+                    (refImages?.length || 0) === 0 ? "文生视频" : (refImages?.length || 0) === 1 ? "图生视频" : "首尾帧生视频",
+                  ].join(" · ")}
+                  open
+                  onToggle={() => {}}
+                >
+                  <div className="pt-2 space-y-3">
+                    <div>
+                      <span className="block text-[11px] text-text-tertiary mb-1.5">视频比例</span>
+                      <div className="flex gap-1 flex-wrap">
+                        {availableRatios.map((r) => (
+                          <button
+                            key={r}
+                            type="button"
+                            onClick={() => onParamsChange({ ...params, image_size: params.image_size === r ? "" : r })}
+                            className={`px-2 py-1 rounded-md text-[10px] font-medium transition-all ${
+                              (params.image_size || "16:9") === r
+                                ? PARAM_ACTIVE_CLASS
+                                : "bg-bg-tertiary text-text-secondary hover:bg-bg-hover border border-border-primary"
+                            }`}
+                          >
+                            {r}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="mb-2 flex items-center justify-between">
+                        <span className="block text-[11px] text-text-tertiary">生成时长</span>
+                        <span className="text-[11px] font-medium text-text-secondary">{params.duration || "5"}s</span>
+                      </div>
+                      <div className="flex gap-1.5">
+                        {["5", "10"].map((d) => (
+                          <button
+                            key={d}
+                            type="button"
+                            onClick={() => onParamsChange({ ...params, duration: d })}
+                            className={`px-2.5 py-1.5 rounded-lg text-[11px] font-medium transition-all ${
+                              String(params.duration || "5") === d
+                                ? PARAM_ACTIVE_CLASS
+                                : "bg-bg-tertiary text-text-secondary hover:bg-bg-hover border border-border-primary"
+                            }`}
+                          >
+                            {d}s
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    <div>
+                      <span className="block text-[11px] text-text-tertiary mb-1.5">分辨率</span>
+                      <div className="flex gap-1.5">
+                        {[{ value: "720p", label: "720p" }, { value: "480p", label: "480p（快）" }].map((item) => (
+                          <button
+                            key={item.value}
+                            type="button"
+                            onClick={() => onParamsChange({ ...params, resolution: item.value })}
+                            className={`px-2.5 py-1.5 rounded-lg text-[11px] font-medium transition-all ${
+                              (params.resolution || "720p") === item.value
+                                ? PARAM_ACTIVE_CLASS
+                                : "bg-bg-tertiary text-text-secondary hover:bg-bg-hover border border-border-primary"
+                            }`}
+                          >
+                            {item.label}
+                          </button>
+                        ))}
+                      </div>
+                      <p className="text-[10px] text-text-tertiary mt-1.5">
+                        0 张参考图为文生视频，1 张为图生视频（首帧），2 张为首尾帧生视频。
                       </p>
                     </div>
                   </div>

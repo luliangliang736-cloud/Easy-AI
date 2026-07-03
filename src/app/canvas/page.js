@@ -1271,10 +1271,16 @@ const MODEL_LABELS = {
 const GPT_IMAGE_2_MODEL = "gpt-image-2";
 const NANO_PRO_UPSCALE_MODEL = "gemini-3-pro-image-preview";
 const KLING_VIDEO_MODELS = new Set(["kling-v2-6", "kling-v3", "kling-v3-omni"]);
+const SEEDANCE_VIDEO_MODELS = new Set(["dreamina-seedance-2-0-260128", "dreamina-seedance-2-0-fast-260128"]);
 
 function isKlingVideoModel(model) {
   const value = String(model || "").trim().toLowerCase();
   return KLING_VIDEO_MODELS.has(value) || value.startsWith("kling-video") || value.startsWith("kling-v");
+}
+
+function isSeedanceVideoModel(model) {
+  const value = String(model || "").trim().toLowerCase();
+  return SEEDANCE_VIDEO_MODELS.has(value) || value.startsWith("dreamina-seedance");
 }
 
 function normalizeUpscaleRequest(request) {
@@ -2448,9 +2454,11 @@ function HomeInner() {
     }
     const requestParams = resolvedParams;
     const isKlingVideoRequest = isKlingVideoModel(requestParams.model);
-    const shouldUseEditApi = !isKlingVideoRequest && (Boolean(editMode) || hasImages);
+    const isSeedanceVideoRequest = isSeedanceVideoModel(requestParams.model);
+    const isAnyVideoRequest = isKlingVideoRequest || isSeedanceVideoRequest;
+    const shouldUseEditApi = !isAnyVideoRequest && (Boolean(editMode) || hasImages);
     const modelLabel = MODEL_LABELS[requestParams.model] || requestParams.model;
-    if (!isKlingVideoRequest && isTextEditing) return;
+    if (!isAnyVideoRequest && isTextEditing) return;
 
     const messageRefImages = hasImages
       ? await Promise.all(effectiveRefImages.map((img) => makeMessagePreviewImage(img)))
@@ -2458,7 +2466,7 @@ function HomeInner() {
 
     const inferred = inferLoopCountFromPrompt(composerText);
     const isEditLikeRequest = shouldUseEditApi;
-    const requestedCount = isKlingVideoRequest
+    const requestedCount = isAnyVideoRequest
       ? 1
       : isEditLikeRequest
       ? (inferred || 1)
@@ -2501,7 +2509,7 @@ function HomeInner() {
       status: "generating",
       tasks,
       urls: [],
-      mediaType: isKlingVideoRequest ? "video" : "image",
+      mediaType: isAnyVideoRequest ? "video" : "image",
       error: null,
       entryMode: activeEntryMode,
       composerMode: activeComposerMode,
@@ -2581,7 +2589,7 @@ function HomeInner() {
           isGeneratingPlaceholder: true,
           generationStatus: "pending",
           placeholderAspectRatio,
-          mediaType: isKlingVideoRequest ? "video" : "image",
+          mediaType: isAnyVideoRequest ? "video" : "image",
           requestTimeoutMs: taskRequestTimeoutMs,
           createdAt: ts,
         })),
@@ -2686,6 +2694,17 @@ function HomeInner() {
                 sound: requestParams.sound || "off",
                 ref_images: preparedImages.slice(0, 2),
               };
+            } else if (isSeedanceVideoRequest) {
+              requestUrl = "/api/seedance-video";
+              requestBody = {
+                prompt: requestPrompt,
+                model: requestParams.model,
+                ratio: imageSize || "16:9",
+                aspect_ratio: imageSize || "16:9",
+                duration: requestParams.duration || "5",
+                resolution: requestParams.resolution || "720p",
+                ref_images: preparedImages.slice(0, 2),
+              };
             } else if (shouldUseEditApi) {
               requestUrl = "/api/edit";
               requestBody = {
@@ -2716,7 +2735,7 @@ function HomeInner() {
               const responseData = await parseApiResponse(res);
               return { res, data: responseData, recovered: false };
             })();
-            const recoveredPromise = isKlingVideoRequest
+            const recoveredPromise = isAnyVideoRequest
               ? new Promise(() => {})
               : waitForRecoveredGenerationResult(clientRequestId);
             const { res, data, recovered } = await Promise.race([
@@ -2831,7 +2850,7 @@ function HomeInner() {
       ) {
         updateMessage(conversationId, aiMsgId, {
           status: successCount > 0 ? "completed" : "failed",
-          mediaType: isKlingVideoRequest ? "video" : "image",
+          mediaType: isAnyVideoRequest ? "video" : "image",
           error: successCount === 0
             ? (taskResults.find((result) => result?.error)?.error || "全部任务失败")
             : null,
@@ -2839,10 +2858,10 @@ function HomeInner() {
         if (activeCanvasBoardIdRef.current === generationBoardId) {
           toast(
             successCount > 0
-              ? isKlingVideoRequest
+              ? isAnyVideoRequest
                 ? "视频生成完成，已添加到画布"
                 : `生成完成，${successCount}/${count} 张已添加到画布`
-              : isKlingVideoRequest
+              : isAnyVideoRequest
                 ? "视频生成失败"
                 : `生成结束，0/${count} 张成功`,
             successCount > 0 ? "success" : "info",
