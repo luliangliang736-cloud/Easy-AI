@@ -14,10 +14,13 @@ const DEFAULT_MODEL = "dreamina-seedance-2-0-260128";
 const FAST_MODEL = "dreamina-seedance-2-0-fast-260128";
 const VALID_MODELS = new Set([DEFAULT_MODEL, FAST_MODEL]);
 
-const VALID_RESOLUTIONS = new Set(["480p", "720p"]);
+// 标准版支持 480p/720p/1080p/2K；快速版最高 720p
+const VALID_RESOLUTIONS_STANDARD = new Set(["480p", "720p", "1080p", "2K"]);
+const VALID_RESOLUTIONS_FAST     = new Set(["480p", "720p"]);
 const VALID_RATIOS = new Set(["16:9", "9:16", "1:1", "4:3", "3:4", "21:9"]);
-// Seedance 2.0 支持 5 / 10 秒（按 duration token 计费）
-const VALID_DURATIONS = new Set([5, 10]);
+// Seedance 2.0 支持 4–15 秒
+const MIN_DURATION = 4;
+const MAX_DURATION = 15;
 
 const POLL_INTERVAL_MS = Number(process.env.SEEDANCE_POLL_INTERVAL_MS || 8_000);
 const POLL_TIMEOUT_MS  = Number(process.env.SEEDANCE_POLL_TIMEOUT_MS  || 8 * 60 * 1000);
@@ -38,9 +41,13 @@ function normalizeModel(value) {
   return VALID_MODELS.has(v) ? v : DEFAULT_MODEL;
 }
 
-function normalizeResolution(value) {
-  const v = String(value || "").trim().toLowerCase();
-  return VALID_RESOLUTIONS.has(v) ? v : "720p";
+function normalizeResolution(value, model = "") {
+  const v = String(value || "").trim();
+  const isFast = String(model || "").includes("fast");
+  const validSet = isFast ? VALID_RESOLUTIONS_FAST : VALID_RESOLUTIONS_STANDARD;
+  if (validSet.has(v)) return v;
+  // 快速版最高 720p，标准版默认 1080p
+  return isFast ? "720p" : "1080p";
 }
 
 function normalizeRatio(value) {
@@ -52,7 +59,8 @@ function normalizeRatio(value) {
 
 function normalizeDuration(value) {
   const n = Math.round(Number(value || 5));
-  return VALID_DURATIONS.has(n) ? n : 5;
+  if (!Number.isFinite(n)) return 5;
+  return Math.min(MAX_DURATION, Math.max(MIN_DURATION, n));
 }
 
 function sleep(ms) {
@@ -205,7 +213,7 @@ export async function POST(request) {
     }
 
     const model      = normalizeModel(body?.model);
-    const resolution = normalizeResolution(body?.resolution || body?.mode);
+    const resolution = normalizeResolution(body?.resolution || body?.mode, model);
     const ratio      = normalizeRatio(body?.ratio || body?.aspect_ratio || body?.image_size);
     const duration   = normalizeDuration(body?.duration);
     const generateAudio = String(body?.generate_audio || "false").toLowerCase() !== "false"

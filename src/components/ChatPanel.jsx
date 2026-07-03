@@ -1725,77 +1725,85 @@ export default function ChatPanel({
                   summary={[
                     `比例 ${params.image_size || "16:9"}`,
                     `${params.duration || "5"}s`,
-                    params.resolution === "480p" ? "480p" : "720p",
-                    (refImages?.length || 0) === 0 ? "文生视频" : (refImages?.length || 0) === 1 ? "图生视频" : "首尾帧生视频",
+                    params.resolution || (String(params.model || "").includes("fast") ? "720p" : "1080p"),
+                    (refImages?.length || 0) === 0 ? "文生视频" : (refImages?.length || 0) === 1 ? "图生视频" : "首尾帧视频",
                   ].join(" · ")}
                   open
                   onToggle={() => {}}
                 >
-                  <div className="pt-2 space-y-3">
-                    <div>
-                      <span className="block text-[11px] text-text-tertiary mb-1.5">视频比例</span>
-                      <div className="flex gap-1 flex-wrap">
-                        {availableRatios.map((r) => (
-                          <button
-                            key={r}
-                            type="button"
-                            onClick={() => onParamsChange({ ...params, image_size: params.image_size === r ? "" : r })}
-                            className={`px-2 py-1 rounded-md text-[10px] font-medium transition-all ${
-                              (params.image_size || "16:9") === r
-                                ? PARAM_ACTIVE_CLASS
-                                : "bg-bg-tertiary text-text-secondary hover:bg-bg-hover border border-border-primary"
-                            }`}
-                          >
-                            {r}
-                          </button>
-                        ))}
+                  {(() => {
+                    const isSeedanceFast = String(params.model || "").includes("fast");
+                    const seedanceResolutions = isSeedanceFast
+                      ? [{ value: "480p", label: "480p" }, { value: "720p", label: "720p" }]
+                      : [{ value: "480p", label: "480p" }, { value: "720p", label: "720p" }, { value: "1080p", label: "1080p" }, { value: "2K", label: "2K" }];
+                    const currentResolution = params.resolution || (isSeedanceFast ? "720p" : "1080p");
+                    return (
+                      <div className="pt-2 space-y-3">
+                        <div>
+                          <span className="block text-[11px] text-text-tertiary mb-1.5">视频比例</span>
+                          <div className="flex gap-1 flex-wrap">
+                            {availableRatios.map((r) => (
+                              <button
+                                key={r}
+                                type="button"
+                                onClick={() => onParamsChange({ ...params, image_size: params.image_size === r ? "" : r })}
+                                className={`px-2 py-1 rounded-md text-[10px] font-medium transition-all ${
+                                  (params.image_size || "16:9") === r
+                                    ? PARAM_ACTIVE_CLASS
+                                    : "bg-bg-tertiary text-text-secondary hover:bg-bg-hover border border-border-primary"
+                                }`}
+                              >
+                                {r}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                        <div>
+                          <div className="mb-2 flex items-center justify-between">
+                            <span className="block text-[11px] text-text-tertiary">生成时长</span>
+                            <span className="text-[11px] font-medium text-text-secondary">{params.duration || "5"}s</span>
+                          </div>
+                          <div className="grid grid-cols-[28px_1fr_32px] items-center gap-2">
+                            <span className="text-[11px] text-text-tertiary">4s</span>
+                            <input
+                              type="range"
+                              min={4}
+                              max={15}
+                              step={1}
+                              value={Number(params.duration || 5)}
+                              onChange={(event) => onParamsChange({ ...params, duration: String(event.target.value) })}
+                              className="w-full accent-green-500"
+                            />
+                            <span className="text-right text-[11px] text-text-tertiary">15s</span>
+                          </div>
+                          <p className="text-[10px] text-text-tertiary mt-1">支持 4–15 秒。</p>
+                        </div>
+                        <div>
+                          <span className="block text-[11px] text-text-tertiary mb-1.5">分辨率</span>
+                          <div className="flex gap-1.5 flex-wrap">
+                            {seedanceResolutions.map((item) => (
+                              <button
+                                key={item.value}
+                                type="button"
+                                onClick={() => onParamsChange({ ...params, resolution: item.value })}
+                                className={`px-2.5 py-1.5 rounded-lg text-[11px] font-medium transition-all ${
+                                  currentResolution === item.value
+                                    ? PARAM_ACTIVE_CLASS
+                                    : "bg-bg-tertiary text-text-secondary hover:bg-bg-hover border border-border-primary"
+                                }`}
+                              >
+                                {item.label}
+                              </button>
+                            ))}
+                          </div>
+                          <p className="text-[10px] text-text-tertiary mt-1.5">
+                            {isSeedanceFast ? "快速版最高 720p。" : "标准版支持最高 2K，分辨率越高消耗 token 越多。"}
+                            {" "}0 张参考图为文生视频，1 张为图生视频（首帧），2 张为首尾帧生视频。
+                          </p>
+                        </div>
                       </div>
-                    </div>
-                    <div>
-                      <div className="mb-2 flex items-center justify-between">
-                        <span className="block text-[11px] text-text-tertiary">生成时长</span>
-                        <span className="text-[11px] font-medium text-text-secondary">{params.duration || "5"}s</span>
-                      </div>
-                      <div className="flex gap-1.5">
-                        {["5", "10"].map((d) => (
-                          <button
-                            key={d}
-                            type="button"
-                            onClick={() => onParamsChange({ ...params, duration: d })}
-                            className={`px-2.5 py-1.5 rounded-lg text-[11px] font-medium transition-all ${
-                              String(params.duration || "5") === d
-                                ? PARAM_ACTIVE_CLASS
-                                : "bg-bg-tertiary text-text-secondary hover:bg-bg-hover border border-border-primary"
-                            }`}
-                          >
-                            {d}s
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                    <div>
-                      <span className="block text-[11px] text-text-tertiary mb-1.5">分辨率</span>
-                      <div className="flex gap-1.5">
-                        {[{ value: "720p", label: "720p" }, { value: "480p", label: "480p（快）" }].map((item) => (
-                          <button
-                            key={item.value}
-                            type="button"
-                            onClick={() => onParamsChange({ ...params, resolution: item.value })}
-                            className={`px-2.5 py-1.5 rounded-lg text-[11px] font-medium transition-all ${
-                              (params.resolution || "720p") === item.value
-                                ? PARAM_ACTIVE_CLASS
-                                : "bg-bg-tertiary text-text-secondary hover:bg-bg-hover border border-border-primary"
-                            }`}
-                          >
-                            {item.label}
-                          </button>
-                        ))}
-                      </div>
-                      <p className="text-[10px] text-text-tertiary mt-1.5">
-                        0 张参考图为文生视频，1 张为图生视频（首帧），2 张为首尾帧生视频。
-                      </p>
-                    </div>
-                  </div>
+                    );
+                  })()}
                 </CollapsibleParamSection>
               ) : isGptImage2Tier ? (
                 <CollapsibleParamSection
