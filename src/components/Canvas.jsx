@@ -404,6 +404,8 @@ export default function Canvas({
   const [semanticPickModifierHeld, setSemanticPickModifierHeld] = useState(false);
   const [semanticPickCursorPos, setSemanticPickCursorPos] = useState(null);
   const [playingVideoIds, setPlayingVideoIds] = useState([]);
+  // 以 "id|url" 记录加载失败的图片，URL 被云端迁移替换后会自动重试加载。
+  const [failedImageKeys, setFailedImageKeys] = useState([]);
   /** 按住空格临时平移（与 Figma 类似）；与 handlePointerDown 同步读取 */
   const spacePanHeldRef = useRef(false);
   /** 画布内 Ctrl/Cmd+C 复制后的数据（系统剪贴板失败时仍可粘贴） */
@@ -2091,6 +2093,8 @@ export default function Canvas({
             meta?.width && meta?.height
               ? `${meta.width} × ${meta.height} px`
               : `${Math.round(pos.w)} × ${displayHeight}`;
+          const imageFailKey = `${img.id}|${img.image_url}`;
+          const isImageBroken = !isVideo && failedImageKeys.includes(imageFailKey);
           return (
             <div
               key={img.id}
@@ -2303,6 +2307,22 @@ export default function Canvas({
                         }
                       }}
                     />
+                  ) : isImageBroken ? (
+                    <div
+                      className="w-full flex flex-col items-center justify-center gap-2 bg-bg-secondary/80 text-text-tertiary select-none"
+                      style={{ height: displayHeight }}
+                    >
+                      <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                        <rect x="3" y="3" width="18" height="18" rx="2" />
+                        <circle cx="8.5" cy="8.5" r="1.5" />
+                        <path d="m21 15-3.5-3.5L9 20" />
+                        <path d="m2 2 20 20" />
+                      </svg>
+                      <span className="text-xs">图片已失效</span>
+                      {img.prompt ? (
+                        <span className="max-w-[80%] truncate text-[10px] opacity-70">{img.prompt}</span>
+                      ) : null}
+                    </div>
                   ) : (
                     <img
                       src={img.image_url}
@@ -2318,6 +2338,14 @@ export default function Canvas({
                           };
                           forceRender();
                         }
+                        setFailedImageKeys((prev) => (
+                          prev.includes(imageFailKey) ? prev.filter((key) => key !== imageFailKey) : prev
+                        ));
+                      }}
+                      onError={() => {
+                        setFailedImageKeys((prev) => (
+                          prev.includes(imageFailKey) ? prev : [...prev, imageFailKey]
+                        ));
                       }}
                     />
                   )}
