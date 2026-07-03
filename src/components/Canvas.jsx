@@ -7,7 +7,7 @@ import {
 import {
   Maximize2, Download, Trash2, Copy,
   MessageSquare, Lock, Unlock, FileDown, Image as ImageIcon,
-  Minus, Plus, Scissors, Type, Play, Pause, Spline,
+  Minus, Plus, Scissors, Type, Play, Pause, Spline, FileText,
 } from "lucide-react";
 import { flushSync } from "react-dom";
 import { useToast } from "@/components/Toast";
@@ -406,6 +406,8 @@ export default function Canvas({
   const [playingVideoIds, setPlayingVideoIds] = useState([]);
   // 以 "id|url" 记录加载失败的图片，URL 被云端迁移替换后会自动重试加载。
   const [failedImageKeys, setFailedImageKeys] = useState([]);
+  // 当前展开提示词浮层的图片 id，null 表示关闭。
+  const [promptPopoverId, setPromptPopoverId] = useState(null);
   /** 按住空格临时平移（与 Figma 类似）；与 handlePointerDown 同步读取 */
   const spacePanHeldRef = useRef(false);
   /** 画布内 Ctrl/Cmd+C 复制后的数据（系统剪贴板失败时仍可粘贴） */
@@ -428,6 +430,14 @@ export default function Canvas({
   renderImagesRef.current = renderImages;
   selectedImageIdRef.current = selectedImage?.id || "";
   multiSelectedImageIdsRef.current = multiSelectedImageIds;
+
+  // 取消选中图片时自动关闭提示词浮层
+  useEffect(() => {
+    if (!selectedImage) setPromptPopoverId(null);
+    else if (selectedImage.id !== promptPopoverId) setPromptPopoverId(null);
+  // 仅跟随 selectedImage 变化，不依赖 promptPopoverId 避免循环
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedImage?.id]);
 
   const positionsRef = useRef({});
   const imageMetaRef = useRef({});
@@ -2185,6 +2195,56 @@ export default function Canvas({
                       );
                     })}
                     {!isSvgImage && <div className="h-5 w-px bg-border-primary" />}
+                    {!isSvgImage && img.prompt && (
+                      <div className="relative">
+                        <button
+                          type="button"
+                          onPointerDown={(e) => e.stopPropagation()}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setPromptPopoverId((prev) => (prev === img.id ? null : img.id));
+                          }}
+                          className={`inline-flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-[11px] transition-colors whitespace-nowrap ${
+                            promptPopoverId === img.id
+                              ? "text-accent bg-accent/12"
+                              : "text-text-secondary hover:text-text-primary hover:bg-bg-hover"
+                          }`}
+                          title="查看提示词"
+                        >
+                          <FileText size={12} />
+                          <span>提示词</span>
+                        </button>
+                        {promptPopoverId === img.id && (
+                          <div
+                            className="absolute left-0 top-full mt-2 z-50 w-72 rounded-xl border border-border-primary bg-bg-primary/96 backdrop-blur-xl shadow-xl p-3 pointer-events-auto"
+                            onPointerDown={(e) => e.stopPropagation()}
+                          >
+                            <div className="flex items-center justify-between mb-2">
+                              <span className="text-[11px] font-medium text-text-secondary">生成提示词</span>
+                              <button
+                                type="button"
+                                onClick={async (e) => {
+                                  e.stopPropagation();
+                                  try {
+                                    await navigator.clipboard.writeText(img.prompt);
+                                    toast("已复制提示词", "success", 1200);
+                                  } catch {
+                                    toast("复制失败，请手动选择", "error", 1500);
+                                  }
+                                }}
+                                className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[10px] text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors"
+                              >
+                                <Copy size={10} />
+                                复制
+                              </button>
+                            </div>
+                            <p className="text-[11px] text-text-primary leading-relaxed max-h-40 overflow-y-auto break-words whitespace-pre-wrap select-text">
+                              {img.prompt}
+                            </p>
+                          </div>
+                        )}
+                      </div>
+                    )}
                     {!isSvgImage && <button
                       type="button"
                       onPointerDown={(e) => e.stopPropagation()}
