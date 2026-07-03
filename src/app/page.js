@@ -3033,6 +3033,7 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
         </div>
       </footer>
 
+      {/* FloatingEntryWidget 暂时隐藏，恢复时去掉此注释即可
       <FloatingEntryWidget
         storageKey="lovart-floating-entry-home-position"
         prompt={floatingPrompt}
@@ -3065,6 +3066,7 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
         }
         submitLabel="去生成"
       />
+      */}
 
     </div>
   );
