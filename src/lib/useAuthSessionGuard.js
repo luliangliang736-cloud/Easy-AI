@@ -2,7 +2,10 @@
 
 import { useEffect } from "react";
 
-const DEFAULT_CHECK_INTERVAL_MS = 30_000;
+// 兜底轮询间隔（页面一直在前台不切走时的检查频率）
+const DEFAULT_CHECK_INTERVAL_MS = 5 * 60_000;
+// 两次检查之间的最小间隔，避免频繁切换标签页时连续打请求
+const MIN_CHECK_GAP_MS = 30_000;
 const LOCAL_DEV_AUTH_BYPASS = process.env.NODE_ENV !== "production" && process.env.NEXT_PUBLIC_DISABLE_LOCAL_AUTH !== "0";
 
 function redirectToLogin() {
@@ -21,8 +24,11 @@ export function useAuthSessionGuard(options = {}) {
   useEffect(() => {
     if (!enabled || typeof window === "undefined") return undefined;
     let cancelled = false;
+    let lastCheckAt = 0;
 
-    async function checkSession() {
+    async function checkSession(force = false) {
+      if (!force && Date.now() - lastCheckAt < MIN_CHECK_GAP_MS) return;
+      lastCheckAt = Date.now();
       try {
         const res = await fetch("/api/auth/me", { cache: "no-store" });
         if (cancelled || res.ok) return;
@@ -38,11 +44,18 @@ export function useAuthSessionGuard(options = {}) {
       }
     }
 
-    void checkSession();
+    // 页面切回前台时检查一次（正常网站的常见策略），加兜底轮询
+    function handleVisibilityChange() {
+      if (document.visibilityState === "visible") void checkSession();
+    }
+
+    void checkSession(true);
     const timer = window.setInterval(checkSession, intervalMs);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
     return () => {
       cancelled = true;
       window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
   }, [enabled, intervalMs, onUnauthorized]);
 }

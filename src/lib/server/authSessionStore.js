@@ -3,6 +3,35 @@ import { ensureCloudDbSchema, getCloudDbPool, isCloudDbConfigured } from "@/lib/
 const MAX_ACTIVE_SESSIONS_PER_USER = Number(process.env.AUTH_MAX_ACTIVE_SESSIONS_PER_USER || 2);
 const LAST_SEEN_UPDATE_INTERVAL_MS = 60_000;
 
+// "session 是否活跃" 的内存缓存：签名 cookie 本身已防伪造，查库只是为了踢下线，
+// 容忍 30 秒延迟。避免画布图片加载、auth/me 轮询等场景每个请求都打一次 Postgres。
+// 只缓存"活跃"结果；失效/被踢的结果不缓存，保证重新登录立即生效。
+const ACTIVE_SESSION_CACHE_TTL_MS = 30_000;
+const activeSessionCache = new Map();
+
+function getCachedActive(cacheKey) {
+  const entry = activeSessionCache.get(cacheKey);
+  if (!entry) return false;
+  if (Date.now() > entry.expiresAt) {
+    activeSessionCache.delete(cacheKey);
+    return false;
+  }
+  return true;
+}
+
+function setCachedActive(cacheKey) {
+  // 简单容量保护，防止长期运行无限增长
+  if (activeSessionCache.size > 5000) activeSessionCache.clear();
+  activeSessionCache.set(cacheKey, { expiresAt: Date.now() + ACTIVE_SESSION_CACHE_TTL_MS });
+}
+
+function clearCachedSessionsForUser(userEmail) {
+  const prefix = `${userEmail}|`;
+  for (const key of activeSessionCache.keys()) {
+    if (key.startsWith(prefix)) activeSessionCache.delete(key);
+  }
+}
+
 export async function registerAuthSession(userEmail = "", sessionId = "", userAgent = "") {
   if (!isCloudDbConfigured()) return { configured: false };
   await ensureCloudDbSchema();
@@ -35,6 +64,8 @@ export async function registerAuthSession(userEmail = "", sessionId = "", userAg
       [userEmail, Math.max(1, MAX_ACTIVE_SESSIONS_PER_USER)],
     );
     await client.query("COMMIT");
+    // 新登录可能踢掉了该用户最早的 session，清掉缓存让踢下线尽快生效
+    clearCachedSessionsForUser(userEmail);
     return { configured: true };
   } catch (error) {
     await client.query("ROLLBACK").catch(() => {});
@@ -47,6 +78,10 @@ export async function registerAuthSession(userEmail = "", sessionId = "", userAg
 export async function isAuthSessionActive(userEmail = "", sessionId = "") {
   if (!isCloudDbConfigured()) return { configured: false, active: true };
   if (!userEmail || !sessionId) return { configured: true, active: false };
+
+  const cacheKey = `${userEmail}|${sessionId}`;
+  if (getCachedActive(cacheKey)) return { configured: true, active: true };
+
   await ensureCloudDbSchema();
   const pool = getCloudDbPool();
   const result = await pool.query(
@@ -59,6 +94,8 @@ export async function isAuthSessionActive(userEmail = "", sessionId = "") {
   );
   const session = result.rows[0];
   if (!session?.session_id) return { configured: true, active: false };
+
+  setCachedActive(cacheKey);
 
   const lastSeenAt = session.last_seen_at ? new Date(session.last_seen_at).getTime() : 0;
   if (!lastSeenAt || Date.now() - lastSeenAt > LAST_SEEN_UPDATE_INTERVAL_MS) {
@@ -79,6 +116,7 @@ export async function isAuthSessionActive(userEmail = "", sessionId = "") {
 
 export async function revokeAuthSession(userEmail = "", sessionId = "") {
   if (!isCloudDbConfigured() || !userEmail || !sessionId) return { configured: false };
+  activeSessionCache.delete(`${userEmail}|${sessionId}`);
   await ensureCloudDbSchema();
   await getCloudDbPool().query(
     `
