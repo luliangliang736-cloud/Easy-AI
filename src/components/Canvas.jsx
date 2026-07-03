@@ -457,8 +457,8 @@ export default function Canvas({
           w: INITIAL_IMG_WIDTH,
         };
       } else {
-        const col = i % 8;
-        const row = Math.floor(i / 8);
+        const col = i % 10;
+        const row = Math.floor(i / 10);
         positionsRef.current[img.id] = {
           x: col * (INITIAL_IMG_WIDTH + 40) + 100,
           y: row * (INITIAL_IMG_WIDTH + 60) + 100,
