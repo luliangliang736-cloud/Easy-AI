@@ -234,6 +234,44 @@ function blobToDataUrl(blob) {
   });
 }
 
+// /api/cloud-assets/ 默认 302 到 OSS，浏览器 fetch 因 CORS 读不到字节；
+// 加 raw=1 让服务端同源吐字节。其它 URL 原样返回。
+function toClipboardFetchUrl(url = "") {
+  const value = String(url || "");
+  if (!/^\/api\/cloud-assets\//i.test(value)) return value;
+  return `${value}${value.includes("?") ? "&" : "?"}raw=1`;
+}
+
+// Chrome 的 ClipboardItem 只接受 image/png：非 PNG 一律转码后再写入。
+async function blobToPngBlob(blob) {
+  if (blob.type === "image/png") return blob;
+  const bitmap = await createImageBitmap(blob);
+  try {
+    const cv = document.createElement("canvas");
+    cv.width = bitmap.width;
+    cv.height = bitmap.height;
+    cv.getContext("2d").drawImage(bitmap, 0, 0);
+    const pngBlob = await new Promise((resolve) => cv.toBlob(resolve, "image/png"));
+    if (!pngBlob) throw new Error("PNG encode failed");
+    return pngBlob;
+  } finally {
+    bitmap.close?.();
+  }
+}
+
+// 把画布图片写入系统剪贴板（PNG + marker 文字），让 PS/微信等外部应用可直接粘贴。
+// marker 保留在 text/plain 中，画布内部粘贴的判断逻辑不受影响。失败静默（保持仅 marker 的现状）。
+async function writeImageBlobToSystemClipboard(blob, marker = "") {
+  const pngBlob = await blobToPngBlob(blob);
+  const payload = { "image/png": pngBlob };
+  if (marker) payload["text/plain"] = new Blob([marker], { type: "text/plain" });
+  try {
+    await navigator.clipboard.write([new ClipboardItem(payload)]);
+  } catch {
+    await navigator.clipboard.write([new ClipboardItem({ "image/png": pngBlob })]);
+  }
+}
+
 function isImageLikeClipboardUrl(value = "") {
   const text = String(value || "").trim();
   if (!text) return false;
@@ -972,9 +1010,8 @@ export default function Canvas({
     (async () => {
       try {
         const first = capturedItems[0];
-        const res = await fetch(first.image_url);
+        const res = await fetch(toClipboardFetchUrl(first.image_url));
         const blob = await res.blob();
-        const type = blob.type?.startsWith("image/") ? blob.type : "image/png";
         // 缓存 dataURL，供粘贴路径使用（如果 canvasClipboard 未被新复制覆盖）
         try {
           const dataUrl = await blobToDataUrl(blob);
@@ -986,19 +1023,10 @@ export default function Canvas({
             };
           }
         } catch { /* keep OSS url */ }
-        // 升级系统剪贴板为 blob + marker（方便跨应用粘贴）
+        // 升级系统剪贴板为 PNG + marker（PS/微信等外部应用可直接粘贴）
         try {
-          await navigator.clipboard.write([
-            new ClipboardItem({
-              [type]: blob,
-              "text/plain": new Blob([marker], { type: "text/plain" }),
-            }),
-          ]);
-        } catch {
-          try {
-            await navigator.clipboard.write([new ClipboardItem({ [type]: blob })]);
-          } catch { /* keep marker */ }
-        }
+          await writeImageBlobToSystemClipboard(blob, marker);
+        } catch { /* keep marker */ }
       } catch { /* keep marker, keep OSS URL */ }
     })();
   }, [toast]);
@@ -1730,9 +1758,9 @@ export default function Canvas({
     switch (actionId) {
       case "copy":
         try {
-          const res = await fetch(img.image_url);
+          const res = await fetch(toClipboardFetchUrl(img.image_url));
           const blob = await res.blob();
-          await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]);
+          await writeImageBlobToSystemClipboard(blob);
           toast("已复制到剪贴板", "success", 1500);
         } catch {
           try {
@@ -2259,12 +2287,11 @@ export default function Canvas({
                         try { await navigator.clipboard.writeText(marker); } catch { /* ignore */ }
                         // 立即 toast，不等 blob 下载
                         toast("已复制", "success", 1200);
-                        // 后台静默：下载 blob → 缓存 dataURL + 升级系统剪贴板
+                        // 后台静默：下载 blob → 缓存 dataURL + 升级系统剪贴板（PNG，外部应用可粘贴）
                         (async () => {
                           try {
-                            const res = await fetch(img.image_url);
+                            const res = await fetch(toClipboardFetchUrl(img.image_url));
                             const blob = await res.blob();
-                            const type = blob.type?.startsWith("image/") ? blob.type : "image/png";
                             try {
                               const dataUrl = await blobToDataUrl(blob);
                               if (canvasClipboardRef.current?.items === toolbarItems) {
@@ -2272,13 +2299,8 @@ export default function Canvas({
                               }
                             } catch { /* keep OSS url */ }
                             try {
-                              await navigator.clipboard.write([new ClipboardItem({
-                                [type]: blob,
-                                "text/plain": new Blob([marker], { type: "text/plain" }),
-                              })]);
-                            } catch {
-                              try { await navigator.clipboard.write([new ClipboardItem({ [type]: blob })]); } catch { /* keep marker */ }
-                            }
+                              await writeImageBlobToSystemClipboard(blob, marker);
+                            } catch { /* keep marker */ }
                           } catch { /* keep marker, keep OSS URL */ }
                         })();
                       }}

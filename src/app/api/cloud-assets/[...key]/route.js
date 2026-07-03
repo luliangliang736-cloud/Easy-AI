@@ -50,6 +50,22 @@ export async function GET(request, { params }) {
     //   ✗ 不要把 max-age 设置超过 OSS_SIGNED_URL_EXPIRES_SECONDS（会缓存过期签名）
     // ============================================================
     const signedUrl = getCloudAssetSignedUrl(key);
+
+    // raw=1：服务端拉取 OSS 字节后同源返回（绕过 302→OSS 的 CORS 限制），
+    // 供前端"复制到系统剪贴板"读取 blob 使用。默认路径仍为 302，不影响图片显示。
+    if (new URL(request.url).searchParams.get("raw") === "1") {
+      const ossRes = await fetch(signedUrl);
+      if (!ossRes.ok) {
+        return NextResponse.json({ error: "读取素材失败" }, { status: 502 });
+      }
+      return new NextResponse(ossRes.body, {
+        headers: {
+          "Content-Type": ossRes.headers.get("content-type") || "application/octet-stream",
+          "Cache-Control": "private, max-age=300",
+        },
+      });
+    }
+
     return NextResponse.redirect(signedUrl, {
       status: 302,
       headers: {
