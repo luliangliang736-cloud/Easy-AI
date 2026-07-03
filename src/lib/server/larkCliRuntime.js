@@ -81,7 +81,11 @@ export async function runLarkCliJson(args) {
     const text = Buffer.from(stdout || "").toString("utf8").trim();
     return text ? JSON.parse(text) : {};
   } catch (error) {
-    throw new Error(getLarkCliErrorMessage(error));
+    const msg = getLarkCliErrorMessage(error);
+    const stderr = Buffer.from(error?.stderr || "").toString("utf8").trim();
+    const stdout = Buffer.from(error?.stdout || "").toString("utf8").trim();
+    console.error('[larkCli] failed:', msg, '| stderr:', stderr.slice(0, 200), '| stdout:', stdout.slice(0, 200), '| args:', JSON.stringify(args.slice(0, 5)));
+    throw new Error(msg);
   }
 }
 

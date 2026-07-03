@@ -163,6 +163,7 @@ function parseFeishuWaBatchRequest(text = "") {
     const limit = chineseNumberToInt(headMatch[1]);
     if (limit > 0) return { limit };
   }
+  if (/(所有|全部|全表)/.test(source)) return { start: 1, end: 9999 };
   return null;
 }
 
@@ -1902,7 +1903,7 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
     }
     // ─────────────────────────────────────────────────────
 
-    // WA 模板：系统资产必须作为第一参考图；EZlogo 有用户参考图时让用户图优先引导风格/版式
+    // WA 模板：系统资产必须作为第一参考图；EZlogo 有用户图时让用户图优先引导风格/版式
     // 无触发：正常使用 floatingRefImages
     const submittedImages = autoRefImages.length > 0
       ? (waTemplateRequest

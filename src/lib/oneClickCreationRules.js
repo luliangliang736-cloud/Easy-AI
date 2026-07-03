@@ -1,4 +1,4 @@
-export function detectEzFamilyTrigger(promptText) {
+﻿export function detectEzFamilyTrigger(promptText) {
   const text = String(promptText || "");
   const match = text.match(/(^|[^a-z0-9])(boy|girl|robot)(?=$|[^a-z0-9])/i);
   if (!match) return null;
@@ -476,6 +476,28 @@ export function parseWaTemplateRequest(promptText) {
   };
 }
 
+export function parseWaDataPosterRequest(promptText) {
+  const text = String(promptText || "").trim();
+  if (!text) return null;
+  if (!/(WA数据图|WA数据海报|WA\+数据|wa数据图|wa数据海报|wa\+data|wa data poster)/i.test(text)) {
+    return null;
+  }
+
+  const headlineLabels = ["主标题", "标题", "headline"];
+  const sublineLabels = ["副标题", "副文案", "subline", "subtitle"];
+  const headline = pickLabeledLine(text, headlineLabels, sublineLabels);
+  const subline = pickLabeledLine(text, sublineLabels, headlineLabels);
+  if (!headline || !subline) return null;
+
+  return {
+    headline,
+    subline,
+    role: detectWaRequestedRole(text),
+    outfitStyle: detectWaOutfitStyle(text),
+    visualStyle: detectWaVisualStyle(text),
+  };
+}
+
 export function parseBatchWaTemplatePrompts(inputText) {
   const text = String(inputText || "").trim();
   if (!text) return [];
@@ -791,6 +813,152 @@ ${isRobotRole ? "- 本次角色是 Robot：不要新增上衣、外套、裙装/
 - 不要完全忽略用户指定的视觉风格关键词；如果用户指定 ins 小众治愈、炫酷、高级、可爱、极简、科技、赛博、渐变、复古、国潮、电商、节日等风格，需要做出可感知的审美差异，但不得破坏核心版式和品牌规则。
 - 如果用户指定扁平插画、蒙德里安、几何抽象、孟菲斯、手绘、像素等平面类风格，不要生成与画面不匹配的强 3D 人物；人物可以转译为 2D/flat/vector illustration，但必须保留 EZfamily 角色识别度。
 - 不要改变左文案右元素的固定版式。`;
+}
+
+export function chooseWaDataPosterIpRole(request = {}) {
+  return chooseWaTemplateIpRole(request);
+}
+
+export function buildWaDataPosterPrompt({ headline = "", subline = "", outfitStyle = "", visualStyle = "" } = {}, role = "Girl") {
+  const headlineCopy = normalizeWaEmphasisText(headline);
+  const sublineCopy = normalizeWaEmphasisText(subline);
+  const displayHeadline = headlineCopy.text || String(headline || "").trim();
+  const displaySubline = sublineCopy.text || String(subline || "").trim();
+  const emphasisTerms = [...headlineCopy.emphasis, ...sublineCopy.emphasis];
+  const emphasisInstruction = emphasisTerms.length > 0
+    ? `- 强调标记只用于设计理解，不属于最终文案。最终画面里禁止出现【】、[]、「」、《》这些括号符号；请把 ${emphasisTerms.map((item) => `“${item}”`).join("、")} 作为重点词，在上半部分文案区用更醒目的字号、字重、品牌绿色/金色高亮、标签底板或局部描边强调。`
+    : "- 如果主标题或副标题里出现【...】、[...]、「」、《》等强调标记，最终画面必须去掉括号符号，只保留括号内文字并高亮强调。";
+  const isRealisticRole = String(role || "").includes("真人版");
+  const baseRole = String(role || "").replace("真人版", "") || role;
+  const isRobotRole = String(baseRole || "").toLowerCase() === "robot";
+  const prop = chooseWaTemplateProp({ headline: displayHeadline, subline: displaySubline });
+  const backgroundStyle = chooseWaTemplateBackgroundStyle(visualStyle);
+  const characterVariation = chooseWaTemplateCharacterVariation(outfitStyle);
+  const characterRenderStyle = isRealisticRole
+    ? `真人版商业视觉质感：参考图是 EasyFamily ${baseRole} 的真人版身份素材，必须保留 ${baseRole} 的核心脸型、发型轮廓、五官比例、眼镜、年轻亲和气质和品牌角色识别度；整体呈现为真实人物摄影/半写实商业广告质感，不要退回 3D 卡通、公仔、玩偶，也不要变成陌生真人模特`
+    : isRobotRole
+      ? "强身份复制 EasyFamily Robot 标准形态：Robot 只能使用库里的 Robot标准形态作为唯一外形来源，必须保持原始头身轮廓、屏幕脸比例、机身形状、标准绿色主体机身、黑色屏幕脸、银白机械臂/脚部和原始机械臂结构；最多只允许改变姿势、朝向、手势和与道具的关系，不允许更换服饰、增加配饰、改变颜色、改变脸部表情结构或重新设计身体"
+      : chooseWaTemplateCharacterRenderStyle(visualStyle);
+  const realisticRoleRequirement = isRealisticRole
+    ? `- 真人版是 ${baseRole} 的独立视觉变体，只在用户明确写“真人版”时启用；本次必须以参考图中的真人版 ${baseRole} 身份为准，不能混用普通卡通版 ${baseRole} 素材，也不能改变原有 EasyFamily 身份特征。
+- 真人版 ${baseRole} 的正视图是身份锚点：优先保留其脸型、发型轮廓、眼镜、眉眼比例、鼻口关系、年龄气质和亲和表情；服装、姿势和场景可以变化，但不能换成参考场景里的陌生人物脸。`
+    : "";
+  const robotRoleRequirement = isRobotRole
+    ? `- Robot 是 EasyFamily 的固定 IP 角色，不是通用机器人；本次只能使用库里的 Robot标准形态作为唯一角色外形来源，不允许参考其它穿服饰版本来改变头身结构、脸部结构、机身曲线、颜色或机械臂。
+- 生成上半部分 Robot 时必须以第二张参考图的绿色 Robot 本体作为唯一角色来源；不能根据模型常识自行生成白色机器人、通用机器人或其它机器人配色/结构。
+- Robot 不允许穿外套、制服、职业背心、围巾、胸牌、节日配饰、帽子、耳机、头盔、手套或任何新增服饰/配饰；即使用户写了服装，也必须忽略 Robot 的服装变化，只保留库里标准 Robot 本体。
+- 必须保持 Robot标准形态的屏幕脸/脸部区域比例、头身轮廓、机身曲线、标准绿色主体机身、黑色屏幕脸、银白机械臂/脚部、短小机械臂、亲和表情和整体品牌识别度；只允许小幅改变姿势、朝向、手势、站位、道具关系和局部光影。
+- Robot 只能有原本结构中合理的两只机械臂/夹爪/手部表达；禁止多出第三只手、额外手臂、额外手指、人类皮肤手、漂浮手、断裂手、重复手或从身体错误位置长出的手。`
+    : "";
+
+  return `这是图像编辑任务：基于第一张参考图（WA数据图完整模板，下半部分已包含黑色数据表）生成一张新的 WA数据海报，只改动上半部分主视觉，下半部分完整照搬第一张参考图。
+
+【两条绝对不可违反的固定规则】
+
+第一条 — 黑色数据表必须原位照搬，且底部必须留白：
+- 第一张参考图的下半部分是完整的黑色数据卡片，它已经在正确的位置、有正确的尺寸和正确的内容。
+- 把这个黑色数据卡片视为一个"已锁定图层"，原位复制到新图中，一个像素都不能移动、缩放、裁切或修改。
+- 黑色卡片的位置、宽度、高度、圆角、背景颜色、内边距、所有表头文字、所有数字、所有 Rp、所有行高、列宽、图标、分割线全部与第一张参考图完全一致。
+- 【底部留白是强制约束】黑色数据卡片的底边与画面最底边之间必须保留明显的浅色背景留白，留白宽度约为画面总高度的 3%–5%；这个留白与左右留白等宽，三边对称。
+- 【绝对禁止触底】黑色数据卡片不能贴到、压到或超出画面底边；如果卡片底边接触到画面边缘，即为错误结果。
+- 左边、右边留白同理：黑色卡片不能贴到画面左右边缘，左右留白与底部留白等宽。
+- 上半部分所有元素（人物、标题、背景、装饰）都不能侵入、覆盖或触碰黑色数据卡片区域。
+
+第二条 — Logo+OJK 合规标识必须原位照搬（顶部 12% 为硬锁定区域）：
+- 画面顶部约 12% 高度的区域是硬锁定区（mask 约束），AI 不得在此区域生成任何新内容。
+- 第一张参考图左上角已有完整的 Logo+OJK 合规标识组合（最后一张参考图是独立的 Logo+OJK 资产，以它为准）。
+- 把这个 Logo+OJK 组合视为另一个"已锁定图层"，原位复制到新图左上角，位置、尺寸、样式、颜色全部不变。
+- 最终画面只允许出现这一个 Logo+OJK 合规标识，不允许在任何其它位置生成重复的品牌标识。
+- 禁止在 Logo+OJK 旁边生成竖线、分隔线、占位线、额外文字或任何装饰符号。
+- 禁止对 OJK 徽章做任何修改、重绘、文字替换、形状变形或颜色修改；OJK 文字必须是正确的 "OTORITAS JASA KEUANGAN"，不允许改写或模糊。
+
+其它版式规则：
+- 画面比例必须保持 1:1 正方形。
+- 第一张参考图是 WA数据图模板，不是普通 WA 横版模板。
+- 【严禁上方视觉过高】上半部分主视觉区绝对不能超过画面总高度的 40%；标题、人物、背景装饰和道具都必须在 40% 高度线以上完成布局，必要时缩小人物和标题，而不是把数据表往下挤。
+- 【数据行必须完整】黑色数据板块里的所有数据行必须完整显示在画面内，不得截断、遮挡或溢出图像底部边界。
+- 所有变化只能发生在黑色数据板块以上的上半部分主视觉区域。
+- 生成结果应该像普通 WA 海报延展成"上半部分营销海报 + 下半部分固定数据框"的 1:1 数据版海报。
+
+上半部分版式要求：
+- 上半部分沿用普通 WA 海报的创作逻辑：清晰主标题/副标题、Easycash 金融营销氛围、EZfamily IP 人物或 Robot、少量金融道具、干净背景。
+- 主标题、副标题和人物/IP 都必须位于黑色数据板块以上，不得侵入数据板块。
+- 人物/IP 可以位于上半部分右侧或模板原人物区域，但角色底部不得低于 40% 高度线，不允许把角色身体延伸到黑色数据表区域上方形成挤压。
+- 主标题和副标题需要在 40% 高度线以上排完；如果文字较大，应压缩字号或行距，不要为了放大标题而抬高或下移黑色数据表。
+- 上半部分人物、标题和背景必须为黑色数据表底部留白让出空间；如果画面拥挤，优先缩小上半部分人物和标题，不能把黑色数据表往画面底部推。
+- 背景、人物背板、道具和装饰只能服务上半部分主视觉，不要重新设计底部数据板块。
+
+必须使用的文案：
+主标题：${displayHeadline}
+副标题：${displaySubline}
+
+文案排版要求：
+- 主标题必须是上半部分最大字号和最高视觉层级。
+${emphasisInstruction}
+- 副标题必须明显小于主标题，建议为主标题字号的 35%-55%，不要接近主标题大小。
+- 主标题和副标题必须保持高对比度和高可读性，不要被人物、道具、光效或背景纹理遮挡。
+- 文案组不要下沉到黑色数据板块附近；文案与黑色数据板块顶部必须保留清晰安全距离。
+
+视觉风格要求：
+- 用户指定的视觉风格：${visualStyle || "未指定，使用默认年轻金融科技广告风格"}。
+- 风格只作用在上半部分主视觉区域，不能改变下半部分黑色数据板块。
+- 如果用户指定风格，需要体现在上半部分的配色、背景质感、人物背板、装饰元素、光影氛围、字体节奏中。
+- 即使风格变化明显，也必须保持 1:1 数据版模板结构、上半部分营销海报、下半部分固定黑色数据框。
+
+背景变化要求：
+- 本次上半部分背景变化方向：${backgroundStyle}。
+- 背景必须低干扰、低对比、服务主标题和人物/IP。
+- 背景元素只能放在上半部分边缘、人物背后或非文案区；不要进入底部黑色数据板块。
+- 不要把 smile logo / Easycash logo / EZlogo 当作背景低透明图案或角落水印。
+
+右侧人物/IP要求：
+- 使用 ${role} 风格的 EZfamily IP 角色作为上半部分主视觉参考。
+- 人物渲染方式：${characterRenderStyle}。
+${realisticRoleRequirement}
+${robotRoleRequirement}
+- 【面部是绝对锁定项】人物的脸型轮廓、五官比例、眼睛形状、眼镜款式（如有）、鼻型、嘴型、发色、发型轮廓、肤色、年龄感和整体亲和气质必须与参考图完全一致，不允许任何改变。面部是身份识别的核心，宁可其它部分妥协也不能让脸型/五官偏离参考图。
+- 【服装可以自由变化】服装、颜色、配饰、姿势、朝向、手势、道具可以根据文案风格灵活调整，这些变化不影响角色身份。
+- 本次人物变化方向：${isRobotRole ? "Robot 只能基于标准库图做姿势/朝向/手势变化，不执行服装变化" : characterVariation}。
+${isRobotRole ? "- 本次角色是 Robot：忽略所有服饰/服装/穿搭字段，不要把服饰关键词应用到 Robot 身上。" : ""}
+- 人物/IP 必须保留 EZfamily 的核心脸型、眼镜/五官比例、亲和气质和品牌角色识别度。
+- 人物/IP 不能遮挡主标题、副标题，不能压到底部黑色数据板块。
+- 核心金融道具只能选择 1 个：${prop}，放在上半部分人物手部附近或原装饰点位。
+- 普通品牌口号类文案默认不要让人物拿手机；只有文案明确提到 app、手机、下载、到账、额度、limit 时才允许出现手机。
+- 如果出现金币、钞票、现金、钱包、额度卡、优惠券或票券，道具上的文字只能是清晰正确的 "Rp"、简单数字、"0%" 或纯图形；无法保证清晰时不要写任何文字。
+${isRobotRole ? `- Robot 是 EasyFamily 的固定 IP 角色，不是通用机器人；本次只能使用库里的 Robot标准形态作为唯一角色外形来源。\n- 生成 Robot 时必须以第二张参考图的绿色 Robot 本体作为唯一角色来源；不能根据模型常识自行生成白色机器人、通用机器人或其它机器人配色/结构。` : ""}
+
+参考图说明（按顺序）：
+- 第一张参考图：完整的 WA数据图模板，包含上半部分营销区域 + 下半部分黑色数据卡片 + 左上角 Logo+OJK。
+- 中间若干张参考图：EZfamily IP 人物素材，用于理解角色外形、脸型和风格。
+- 最后一张参考图：独立的 Logo+OJK 合规标识资产，左上角品牌标识必须严格参照此图的样式、字体、颜色和排列。
+
+品牌规则：
+- Logo + OJK 合规标识的样式以最后一张参考图（独立资产）为准，位置以第一张参考图的左上角为准；两者共同决定最终 Logo+OJK 的外观和定位。
+- 不要生成第二套 Logo + OJK，不要在品牌区旁边生成竖线或占位符。
+- 单独 smile logo 只允许白色、黑色、品牌绿色；底板或图标底色只能是纯白色或 #3FCA58。
+- 如果出现 "EASYCASH / Easycash" 文字，必须清晰、完整、可读，不要模糊、错拼、变形。
+- 人物服饰上不允许出现 "Easycash / EASYCASH" 文字，也不允许把 EZlogo 和 Easycash 文字组合成小徽章。
+
+禁止：
+- 禁止改变下半部分黑色数据板块的任何内容。
+- 禁止重新生成、重新设计、重排、缩放、拉伸或替换第一张参考图中的黑色数据表；黑色数据表的位置、尺寸和内容必须 1:1 保持参考图原样。
+- 禁止改变数据表整体高度；禁止压缩数据行高度、压缩表头、减少行距、减少内边距或让表格内容变得更扁更密。
+- 【最高优先级禁令】禁止让黑色数据表贴底、触底、碰到底边或溢出底边；黑色数据表底边与画面底边之间必须留有约 3%–5% 画面高度的浅色背景留白。
+- 底部留白、左侧留白、右侧留白三者必须等宽；如果生成结果中黑色数据表底部没有明显留白，就属于错误，需要重新生成。
+- 禁止让上方主视觉区超过 40% 高度；如果生成结果中黑色数据表顶部明显低于参考图，就属于错误。
+- 禁止截断、遮挡或让黑色数据板块的任何内容溢出图像底部边界；所有数据行必须在 1:1 画面内完整可见。
+- 禁止生成重复的左上角 Logo + OJK；只保留第一张参考图原本的 Logo + OJK 合规标识（样式参照最后一张参考图）。
+- 禁止在左上角品牌区或 Logo+OJK 右侧生成任何竖线、黑线、分隔线、边框线或占位符。
+- 禁止改写、重绘、翻译、模糊或覆盖黑色数据板块里的数据、文字、图标和结构。
+- 禁止把普通 WA 横版 2:1 规则套到整张图；本次必须是 1:1 WA数据图。
+- 禁止让上半部分背景、人物、道具、Logo、标题侵入底部黑色数据板块。
+- 禁止新增大面积元素覆盖数据板块。
+- 禁止改写主标题和副标题。
+- 禁止生成杂乱背景、过多小字、医疗/红十字/心电图/药丸/针筒/救护等无关行业符号。
+- 如果本次角色是 Robot，不要改变 Robot 的主体颜色、屏幕脸结构、机身轮廓、身体比例、机械臂数量或标准表情结构；Robot 主体必须保持标准绿色机身，禁止变成白色/浅色主体；不要生成多手、多臂、漂浮手、人手或陌生机器人。
+- 不要改变"上半部分营销主视觉 + 下半部分固定黑色数据板块"的结构。
+
+其它保持不变。`;
 }
 
 export function detectOneClickEntryMode(promptText, refImages = []) {

@@ -323,10 +323,109 @@ async function imgSrcToBlob(imgSrc) {
   return base64ToBlob(imgSrc);
 }
 
+// WA data poster mask layout (ratios of total image height):
+//   0% – LOGO_LOCK_END   : locked  (Logo + OJK badge)
+//   LOGO_LOCK_END – EDIT_END : editable (marketing text + character)
+//   EDIT_END – 100%      : locked  (black data table)
+const WA_LOGO_LOCK_END = 0.12;  // top 12% locked for logo
+const WA_EDIT_END = 0.40;       // editable band ends at 40%
+
+async function createWaDataPosterMask(imgSrc) {
+  const { default: sharp } = await import("sharp");
+  const { blob } = await imgSrcToBlob(imgSrc);
+  const sourceBuffer = Buffer.from(await blob.arrayBuffer());
+  const metadata = await sharp(sourceBuffer).metadata();
+  const width = metadata.width || 1024;
+  const height = metadata.height || 1024;
+
+  const logoLockHeight = Math.round(height * WA_LOGO_LOCK_END);   // locked top band
+  const editableTop = logoLockHeight;
+  const editableEnd = Math.round(height * WA_EDIT_END);
+  const editableHeight = Math.max(1, editableEnd - editableTop);
+  const dataTableTop = editableEnd;
+  const dataTableHeight = Math.max(1, height - dataTableTop);
+
+  const opaqueStrip = (h) =>
+    sharp({
+      create: { width, height: h, channels: 4, background: { r: 255, g: 255, b: 255, alpha: 1 } },
+    }).png().toBuffer();
+
+  const [logoLockBuf, dataTableBuf] = await Promise.all([
+    opaqueStrip(logoLockHeight),
+    opaqueStrip(dataTableHeight),
+  ]);
+
+  // OpenAI image edit masks: transparent = editable, opaque = preserved.
+  // Start fully transparent, then paint the two locked bands opaque.
+  const maskBuffer = await sharp({
+    create: { width, height, channels: 4, background: { r: 255, g: 255, b: 255, alpha: 0 } },
+  })
+    .composite([
+      { input: logoLockBuf, left: 0, top: 0 },
+      { input: dataTableBuf, left: 0, top: dataTableTop },
+    ])
+    .png()
+    .toBuffer();
+
+  return new Blob([maskBuffer], { type: "image/png" });
+}
+
+/**
+ * After the model generates an image, composite the template's locked bottom
+ * portion directly onto the output. This guarantees pixel-perfect preservation
+ * of the data table area regardless of model behavior.
+ *
+ * @param {string} generatedDataUrl - base64 data URL of the generated image
+ * @param {string} templateImgSrc - the original template image source
+ * @param {number} outputSize - the output image size (assumed square), default 1024
+ * @returns {string} - base64 data URL of the composited image
+ */
+async function applyWaDataPosterComposite(generatedUrl, templateImgSrc, outputSize = 1024) {
+  const { default: sharp } = await import("sharp");
+
+  // Load the generated image via imgSrcToBlob to support both data URLs and
+  // /api/generated-images/... paths returned by normalizeGeneratedImageUrls.
+  const { blob: genBlob } = await imgSrcToBlob(generatedUrl);
+  const genBuffer = Buffer.from(await genBlob.arrayBuffer());
+
+  // Resize generated image to canonical output size to ensure correct dimensions
+  const genResized = await sharp(genBuffer)
+    .resize(outputSize, outputSize, { fit: "fill" })
+    .png()
+    .toBuffer();
+
+  // Load and resize template to the same output size
+  const { blob: templateBlob } = await imgSrcToBlob(templateImgSrc);
+  const templateBuffer = Buffer.from(await templateBlob.arrayBuffer());
+  const templateResized = await sharp(templateBuffer)
+    .resize(outputSize, outputSize, { fit: "fill" })
+    .png()
+    .toBuffer();
+
+  // Extract the locked bottom portion from the template
+  const lockTop = Math.round(outputSize * WA_DATA_POSTER_LOCK_RATIO);
+  const lockHeight = outputSize - lockTop;
+  const lockedPortion = await sharp(templateResized)
+    .extract({ left: 0, top: lockTop, width: outputSize, height: lockHeight })
+    .png()
+    .toBuffer();
+
+  // Composite: place locked template bottom over the generated image
+  const resultBuffer = await sharp(genResized)
+    .composite([{ input: lockedPortion, left: 0, top: lockTop }])
+    .png()
+    .toBuffer();
+
+  // Save to the generated image store and return a short path URL
+  return saveGeneratedImageBuffer(resultBuffer, "image/png");
+}
+
+
 async function postFormData(url, {
   model,
   prompt,
   images,
+  mask,
   size,
   n,
   quality,
@@ -348,10 +447,13 @@ async function postFormData(url, {
     }
     if (moderation) formData.append("moderation", moderation);
 
-    for (const imgSrc of images) {
+    for (const [index, imgSrc] of images.entries()) {
       const { blob, mimeType } = await imgSrcToBlob(imgSrc);
       const ext = mimeType.split("/")[1] || "png";
-      formData.append("image[]", blob, `image.${ext}`);
+      formData.append(mask && index === 0 ? "image" : "image[]", blob, `image.${ext}`);
+    }
+    if (mask) {
+      formData.append("mask", mask, "mask.png");
     }
 
     return {
@@ -438,6 +540,7 @@ export async function editWithGptImage2({
   outputFormat = GPT_IMAGE_2_OUTPUT_FORMAT,
   outputCompression = GPT_IMAGE_2_OUTPUT_COMPRESSION,
   moderation = GPT_IMAGE_2_MODERATION,
+  waDataPosterMask = false,
 }) {
   if (!isGptImage2Configured()) {
     throw new Error("GPT Image 2 尚未配置完整的 API 信息。");
@@ -451,6 +554,7 @@ export async function editWithGptImage2({
   const normalizedOutputFormat = normalizeOutputFormat(outputFormat);
   const normalizedOutputCompression =
     normalizedOutputFormat === "png" ? null : normalizeOutputCompression(outputCompression);
+  const mask = waDataPosterMask ? await createWaDataPosterMask(images[0]) : null;
 
   const result = await postFormData(
     buildDeploymentUrl("/images/edits"),
@@ -458,6 +562,7 @@ export async function editWithGptImage2({
       model: GPT_IMAGE_2_MODEL,
       prompt: String(prompt || "").trim(),
       images,
+      mask,
       size: mapImageSize(imageSize, true),
       n: Math.max(1, Number(num) || 1),
       quality: normalizeQuality(quality),

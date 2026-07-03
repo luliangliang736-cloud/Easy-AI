@@ -31,13 +31,16 @@ import { GENERATION_STAGE_ORDER, getGenerationStageCopy } from "@/lib/generation
 import BrandLogo from "@/components/BrandLogo";
 import {
   buildEzFamilyTriggerPrompt,
+  buildWaDataPosterPrompt,
   buildWaTemplatePrompt,
+  chooseWaDataPosterIpRole,
   chooseWaTemplateIpRole,
   detectEzFamilyTrigger,
   detectOneClickEntryMode,
   getLatestGeneratedImages,
   isObviousOneClickGenerateRequest,
   parseBatchWaTemplatePrompts,
+  parseWaDataPosterRequest,
   parseWaTemplateRequest,
   shouldReusePreviousGeneratedImages,
 } from "@/lib/oneClickCreationRules";
@@ -53,6 +56,8 @@ const IMAGE_HISTORY_LIMIT = 100;
 const ATTACHMENT_ACCEPT = "image/*,.pdf,.doc,.docx,.txt,.md,.markdown,.rtf,.csv,.json,.xml,.xls,.xlsx,.ppt,.pptx";
 const EZFAMILY_ASSET_URL = "/api/ezfamily";
 const EZLOGO_ASSET_URL = "/ip-assets/EZlogo/EZlogo.jpg";
+const WA_DATA_TEMPLATE_ASSET_URL = "/api/wa-data-templates";
+const WA_DATA_LOCKUP_ASSET_URL = "/api/wa-data-lockup";
 const WA_TEMPLATE_ASSET_URL = "/api/wa-templates";
 const WA_LOCKUP_ASSET_URL = "/api/wa-lockup";
 const WA_SMILE_LOGO_ASSET_URL = "/api/wa-smile-logo";
@@ -157,6 +162,7 @@ function parseFeishuWaBatchRequest(text = "") {
     const limit = chineseNumberToInt(headMatch[1]);
     if (limit > 0) return { limit };
   }
+  if (/(所有|全部|全表)/.test(source)) return { start: 1, end: 9999 };
   return null;
 }
 
@@ -1688,21 +1694,22 @@ export default function ChatPage() {
     if (!allowConcurrent && isGenerating) return { aborted: true };
     const qualityFixPrompt = buildWaQualityFixPrompt(override?.qualityCheck);
 
-    // ── WA 模板 / EZfamily / EZlogo 关键词自动触发参考图 ─────────────
+    // ── WA 数据图 / WA 模板 / EZfamily / EZlogo 关键词自动触发参考图 ─────────────
     let autoRefImages = [];
     let apiText = text; // 对 API 使用的 prompt（可能被增强）
-    const waTemplateRequest = parseWaTemplateRequest(text);
+    const waDataPosterRequest = parseWaDataPosterRequest(text);
+    const waTemplateRequest = waDataPosterRequest ? null : parseWaTemplateRequest(text);
     const ezFamilyRole = detectEzFamilyTrigger(text);
     const hasEzLogoTrigger = /ezlogo/i.test(text);
     const ipSceneRequest = detectIpSceneExtension(text, {
       hasUserReferenceImages: activeRefImages.length > 0,
-      isWaTemplate: Boolean(waTemplateRequest),
+      isWaTemplate: Boolean(waTemplateRequest || waDataPosterRequest),
     });
     // 先把用户输入显示出来，自动素材仍按原逻辑继续准备生成 payload。
     const inheritedImages = shouldReusePreviousGeneratedImages(text, activeRefImages)
       ? getLatestGeneratedImages(messages)
       : [];
-    const hasAutoReferenceIntent = Boolean(waTemplateRequest || ipSceneRequest || ezFamilyRole || hasEzLogoTrigger);
+    const hasAutoReferenceIntent = Boolean(waDataPosterRequest || waTemplateRequest || ipSceneRequest || ezFamilyRole || hasEzLogoTrigger);
     const displayRefImages = hasAutoReferenceIntent ? activeRefImages : [...activeRefImages, ...inheritedImages];
     const userMsg = createMessage("user", text, { refImages: displayRefImages });
     const historyForApi = [...messages, userMsg].map((m) => ({
@@ -1722,7 +1729,22 @@ export default function ChatPage() {
       setIsGenerating(true);
     }
 
-    if (waTemplateRequest) {
+    let useWaDataPosterMask = false;
+    if (waDataPosterRequest) {
+      try {
+        const templateImage = await fetchImageAsDataUrl(`${WA_DATA_TEMPLATE_ASSET_URL}?random=1`);
+        if (templateImage) autoRefImages.push(templateImage);
+        const role = ezFamilyRole || chooseWaDataPosterIpRole(waDataPosterRequest);
+        const roleReferenceImages = await fetchEzFamilyReferenceImages(role);
+        autoRefImages.push(...roleReferenceImages);
+        const lockupImage = await fetchImageAsDataUrl(WA_DATA_LOCKUP_ASSET_URL);
+        if (lockupImage) autoRefImages.push(lockupImage);
+        // WA数据海报：所有角色都发两次参考图以加强身份一致性
+        autoRefImages.push(...roleReferenceImages);
+        apiText = buildWaDataPosterPrompt(waDataPosterRequest, role);
+        useWaDataPosterMask = true;
+      } catch { /* 静默跳过 */ }
+    } else if (waTemplateRequest) {
       try {
         const templateImage = await fetchImageAsDataUrl(`${WA_TEMPLATE_ASSET_URL}?random=1`);
         if (templateImage) autoRefImages.push(templateImage);
@@ -1775,10 +1797,10 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
     }
     // ─────────────────────────────────────────────────────
 
-    // WA 模板：系统资产必须作为第一参考图；EZlogo 有用户参考图时让用户图优先引导风格/版式
+    // WA 数据图 / WA 模板：系统模板资产必须作为第一参考图；EZlogo 有用户参考图时让用户图优先引导风格/版式
     // 无触发：正常使用 refImages
     const submittedImages = autoRefImages.length > 0
-      ? (waTemplateRequest
+      ? (waDataPosterRequest || waTemplateRequest
         ? [...autoRefImages, ...activeRefImages, ...inheritedImages]
         : hasEzLogoTrigger
           ? (activeRefImages.length > 0
@@ -1853,10 +1875,14 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
           : quickImageSize;
       const endpoint = hasImages ? "/api/edit" : "/api/generate";
       // apiText 可能已被触发词场景增强，优先用 apiText
-      const finalPrompt = isAgentMode ? buildAgentPrompt(apiText, submittedImages) : apiText;
+      const finalPrompt = waDataPosterRequest
+        ? apiText
+        : isAgentMode
+          ? buildAgentPrompt(apiText, submittedImages)
+          : apiText;
       activeClientRequestId = createClientRequestId("chat");
       const payload = hasImages
-        ? { prompt: finalPrompt, image: submittedImages.length === 1 ? submittedImages[0] : submittedImages, model: generationModel, image_size: imageSize, num: 1, service_tier: isAgentMode ? agentParams.service_tier : FLOATING_DEFAULT_SERVICE_TIER, clientRequestId: activeClientRequestId }
+        ? { prompt: finalPrompt, image: submittedImages.length === 1 ? submittedImages[0] : submittedImages, model: generationModel, image_size: imageSize, num: 1, service_tier: isAgentMode ? agentParams.service_tier : FLOATING_DEFAULT_SERVICE_TIER, ...(useWaDataPosterMask ? { waDataPosterMask: true } : {}), clientRequestId: activeClientRequestId }
         : { prompt: finalPrompt, model: generationModel, image_size: imageSize, num: 1, ref_images: submittedImages, service_tier: isAgentMode ? agentParams.service_tier : FLOATING_DEFAULT_SERVICE_TIER, clientRequestId: activeClientRequestId };
 
       if (!hideGenerationCard) {

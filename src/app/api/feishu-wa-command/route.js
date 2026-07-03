@@ -39,7 +39,7 @@ async function runWithTempJson(argsBeforeJson, payload, argsAfterJson = []) {
   }
 }
 
-async function listRecords(limit = 100) {
+async function listRecords(limit = 500) {
   const data = await runLarkCliJson([
     "base", "+record-list",
     "--base-token", BASE_TOKEN,
@@ -245,6 +245,7 @@ function parseRewriteVariationRequest(text = "") {
   if (!mentionsVariationFields || !asksRewrite) return null;
   if (/(创建|新建|建立).*(表格|表)/.test(source)) return null;
 
+
   const robotMatch = compact.match(/(?:robot|机器人)(?:只要|保留|减少到|降到|控制在)?([0-9一二两三四五六七八九十]+)(?:个|条|张)?/i);
   const robotTarget = robotMatch ? parseChineseNumber(robotMatch[1]) : null;
   const preferences = {
@@ -272,10 +273,8 @@ function parseRewriteVariationRequest(text = "") {
 
   if (/所有|全部|全表/.test(source)) return { all: true, preferences };
 
-  return {
-    limit: parseLimit(source, 39),
-    preferences,
-  };
+  // 未指定范围时默认操作全表，避免遗漏超出前N条的记录
+  return { all: true, preferences };
 }
 
 function compactText(record) {
@@ -473,6 +472,7 @@ async function reduceRobots(target = 4) {
 }
 
 function selectRecordsByRewriteRequest(records, request) {
+  console.log('[DEBUG selectRecords] total records:', records.length, 'request:', JSON.stringify(request));
   if (request?.all) return records;
   if (request?.start > 0 && request?.end > 0) {
     const start = Math.min(request.start, request.end);
@@ -482,12 +482,16 @@ function selectRecordsByRewriteRequest(records, request) {
       return seq >= start && seq <= end;
     });
   }
-  const limit = Math.min(Math.max(Number(request?.limit) || 39, 1), 100);
-  return records.slice(0, limit);
+  // 未指定范围时处理全部记录，避免超出前N条的记录被遗漏
+  if (Number.isFinite(request?.limit) && request.limit > 0) {
+    return records.slice(0, Math.min(request.limit, records.length));
+  }
+  return records;
 }
 
 async function rewriteVariationFields(request) {
-  const records = await listRecords(100);
+  const records = await listRecords(500);
+  console.log('[DEBUG rewriteVariation] listRecords returned:', records.length, 'request:', JSON.stringify(request));
   const selected = selectRecordsByRewriteRequest(records, request);
   if (selected.length === 0) throw new Error("没有找到需要重写的 WA 记录");
 
@@ -518,6 +522,7 @@ async function handleCommand(text = "") {
   if (!source) throw new Error("指令为空");
 
   const rewriteRequest = parseRewriteVariationRequest(source);
+  console.log('[DEBUG handleCommand] source:', JSON.stringify(source), '=> rewriteRequest:', JSON.stringify(rewriteRequest));
   if (rewriteRequest) {
     const result = await rewriteVariationFields(rewriteRequest);
     const preview = result.changed
@@ -614,8 +619,8 @@ async function handleCommand(text = "") {
     return { reply: `已清空飞书表格里的 AI设计图 字段，新字段 ID：${fieldId || "已创建"}。` };
   }
 
-  if (/(robot|机器人)/i.test(source) && /(减少|少一些|少一点|不要太多|降低)/.test(source)) {
-    const targetMatch = source.match(/(?:保留|减少到|降到)\s*([0-9一二两三四五六七八九十]+)\s*(?:个|条|张)?/);
+  if (/(robot|机器人)/i.test(source) && /(减少|少一些|少一点|不要太多|降低|只要|控制到|控制在)/.test(source)) {
+    const targetMatch = source.match(/(?:保留|减少到|降到|控制到|控制在|只要)\s*([0-9一二两三四五六七八九十]+)\s*(?:个|条|张)?/);
     const target = targetMatch ? Math.max(parseChineseNumber(targetMatch[1]), 1) : 4;
     const result = await reduceRobots(target);
     const detail = result.changed.length

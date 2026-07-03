@@ -157,6 +157,8 @@ export async function POST(request) {
       moderation,
       _nanoResolution,
       _autoRatio,
+      waDataPosterMask,
+      waDataPosterOverlay,
       clientRequestId: requestIdFromClient,
     } = body;
     clientRequestId = String(requestIdFromClient || "").trim();
@@ -212,6 +214,8 @@ export async function POST(request) {
         outputFormat: output_format,
         outputCompression: output_compression,
         moderation,
+        waDataPosterMask: Boolean(waDataPosterMask),
+        waDataPosterOverlay: Boolean(waDataPosterOverlay),
       });
       const displayUrls = await normalizeGeneratedImageUrls(urls);
       const tasks = buildCompletedTasks(displayUrls, "gpt-image-2");
