@@ -1012,7 +1012,7 @@ const EFFECT_SHOWCASE_CARDS = [
   },
 ];
 
-const HERO_CAROUSEL_FILES = ["1.mp4", "2.webp", "3.mp4", "4.mp4", "5.webp", "6.mp4", "7.webp"];
+const HERO_CAROUSEL_FILES = ["3.mp4", "4.mp4", "5.webp", "6.mp4"];
 const HERO_CAROUSEL_PUBLIC_BASE_URL = String(
   process.env.NEXT_PUBLIC_HOME_HERO_ASSET_BASE_URL
     || (HOME_ASSET_PUBLIC_BASE_URL ? `${HOME_ASSET_PUBLIC_BASE_URL}/home-hero-carousel` : ""),
