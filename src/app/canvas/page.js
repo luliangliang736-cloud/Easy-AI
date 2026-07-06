@@ -773,9 +773,9 @@ function normalizeResultMessage(message) {
 }
 
 function sanitizeMessagesForStorage(messages) {
-  // 只保留最近 40 条消息。localStorage 对话数据总量（50会话×200条）很容易超过
-  // 5MB 配额，写入失败后所有新数据都无法持久化，导致刷新后全部回退到旧快照。
-  return messages.slice(-40).map((msg) => {
+  // 单会话消息上限放宽到 200 条；总量控制交给 sanitizeConversationsForStorage
+  // 按序列化后的实际体积动态裁剪（消息内只存 HTTPS URL、不存 base64，单条体积很小）。
+  return messages.slice(-200).map((msg) => {
     const normalized = normalizeResultMessage(msg);
     return {
       ...normalized,
@@ -811,17 +811,46 @@ function restoreInterruptedMessages(messages) {
   });
 }
 
+// localStorage 配额约 5MB（按 UTF-16 计约 250 万字符），对话数据预算控制在
+// 180 万字符（约 3.5MB），给画布图片列表等其它 key 留出余量。
+const CONVERSATIONS_STORAGE_CHAR_BUDGET = 1_800_000;
+
 function sanitizeConversationsForStorage(conversations) {
-  // 只保留最近 10 个会话，每会话最多 40 条消息（见 sanitizeMessagesForStorage）。
-  // 历史上曾设置 50×200=10000 条上限，但实际产出数据轻易超过 5MB localStorage 配额，
-  // 导致写入静默失败、新数据无法持久化、刷新后回退到旧快照。云端数据库已单独保存完整历史。
-  return conversations
-    .slice(-10)
+  // 按序列化后的实际体积从最新会话往旧会话累计裁剪，替代早前固定的
+  // “10 会话 × 40 条”上限——固定条数会把老画布的会话挤出存储，
+  // 导致该画布右侧对话记录刷新后为空。文字消息体积很小（图片只存 URL），
+  // 按体积裁剪通常可完整保留所有画布的会话。云端数据库仍单独保存完整历史。
+  const sanitized = conversations
     .map((conversation) => ({
       ...conversation,
       messages: sanitizeMessagesForStorage(conversation.messages || []),
     }))
     .filter((conversation) => (conversation.messages || []).length > 0);
+
+  const kept = [];
+  let usedChars = 2; // "[]" 括号
+  for (let i = sanitized.length - 1; i >= 0; i -= 1) {
+    let conversation = sanitized[i];
+    let size = JSON.stringify(conversation).length + 1;
+    if (usedChars + size > CONVERSATIONS_STORAGE_CHAR_BUDGET) {
+      // 最新的会话本身就超预算时，裁剪它的消息数量硬塞进去，避免丢掉当前会话
+      if (kept.length === 0) {
+        let messages = conversation.messages;
+        while (messages.length > 1 && usedChars + size > CONVERSATIONS_STORAGE_CHAR_BUDGET) {
+          messages = messages.slice(Math.ceil(messages.length / 2));
+          conversation = { ...conversation, messages };
+          size = JSON.stringify(conversation).length + 1;
+        }
+        if (usedChars + size <= CONVERSATIONS_STORAGE_CHAR_BUDGET) {
+          kept.unshift(conversation);
+        }
+      }
+      break;
+    }
+    kept.unshift(conversation);
+    usedChars += size;
+  }
+  return kept;
 }
 
 function safeParseStorageArray(value) {
@@ -4017,6 +4046,15 @@ function HomeInner() {
                   const showFailedNotice = !generatingCount && !showCompletedNotice && taskNotice?.failed;
                   const showDropBefore = projectDropIndicator?.boardId === board.id && projectDropIndicator.position === "before";
                   const showDropAfter = projectDropIndicator?.boardId === board.id && projectDropIndicator.position === "after";
+                  // 当前画布用实时图片状态，其它画布用 board 里保存的图片；视频不作缩略图
+                  const boardThumbSource = (isActive ? canvasImages : board.images) || [];
+                  const boardThumbs = boardThumbSource
+                    .filter((item) => item?.image_url && item.media_type !== "video" && item.mediaType !== "video")
+                    .slice(0, 4);
+                  const boardUpdatedAt = Number(board.updatedAt || board.createdAt || 0);
+                  const boardUpdatedLabel = boardUpdatedAt
+                    ? new Date(boardUpdatedAt).toLocaleDateString("zh-CN", { year: "numeric", month: "numeric", day: "numeric" })
+                    : "";
                   return (
                     <div
                       key={board.id}
@@ -4051,86 +4089,123 @@ function HomeInner() {
                       {showDropBefore && (
                         <div className="pointer-events-none absolute left-2 right-2 top-0 z-10 h-0.5 -translate-y-1 rounded-full bg-green-500" />
                       )}
-                      <div className={`group mb-1.5 flex items-center gap-2 rounded-xl px-3 py-2.5 transition-all ${
-                        isDragging
-                          ? theme === "light"
-                            ? "bg-black/[0.06] opacity-60"
-                            : "bg-white/[0.08] opacity-60"
-                          : isActive
-                          ? theme === "light"
-                            ? "bg-green-500/12 text-[#111]"
-                            : "bg-green-400/12 text-white"
-                          : theme === "light"
-                            ? "text-[#111] hover:bg-black/[0.045]"
-                            : "text-white hover:bg-white/[0.06]"
-                      }`}
-                      >
-                      {isRenaming ? (
-                        <input
-                          value={projectRenamingTitle}
-                          onChange={(event) => setProjectRenamingTitle(event.target.value)}
-                          onBlur={commitProjectRename}
-                          onKeyDown={(event) => {
-                            if (event.key === "Enter") commitProjectRename();
-                            if (event.key === "Escape") cancelProjectRename();
-                          }}
-                          autoFocus
-                          className={`min-w-0 flex-1 rounded-lg px-2 py-1 text-sm font-medium outline-none ${
-                            theme === "light"
-                              ? "bg-white text-[#111] ring-1 ring-black/10"
-                              : "bg-black/40 text-white ring-1 ring-white/12"
-                          }`}
-                        />
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => handleSelectCanvasBoard(board.id)}
-                          onDoubleClick={() => {
-                            if (canRenameBoard) startProjectRename(board);
-                          }}
-                          title={canRenameBoard ? "双击重命名" : "默认画布不能重命名"}
-                          className="min-w-0 flex-1 cursor-move truncate text-left text-sm font-medium"
-                        >
-                          {board.title || "默认画布"}
-                        </button>
-                      )}
-                      {generatingCount > 0 && !isRenaming && (
-                        <span
-                          className={`relative inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full ${
-                          theme === "light"
-                            ? "bg-green-500/12 text-green-600"
-                            : "bg-green-400/15 text-green-200"
+                      <div
+                        className={`group mb-2.5 cursor-pointer rounded-2xl p-1.5 transition-all ${
+                          isDragging
+                            ? theme === "light"
+                              ? "bg-black/[0.06] opacity-60"
+                              : "bg-white/[0.08] opacity-60"
+                            : isActive
+                            ? theme === "light"
+                              ? "bg-green-500/12 text-[#111] ring-1 ring-green-500/30"
+                              : "bg-green-400/12 text-white ring-1 ring-green-400/25"
+                            : theme === "light"
+                              ? "text-[#111] hover:bg-black/[0.045]"
+                              : "text-white hover:bg-white/[0.06]"
                         }`}
-                          title={generatingCount > 1 ? `生成中 ${generatingCount}` : "生成中"}
-                          aria-label={generatingCount > 1 ? `生成中 ${generatingCount}` : "生成中"}
-                        >
-                          <Loader2 size={12} className="animate-spin" />
-                          {generatingCount > 1 && (
-                            <span className="absolute -right-1 -top-1 min-w-3 rounded-full bg-green-500 px-0.5 text-center text-[8px] leading-3 text-white">
-                              {generatingCount}
+                        onClick={() => handleSelectCanvasBoard(board.id)}
+                      >
+                        {/* 缩略图拼贴 */}
+                        <div className={`relative w-full overflow-hidden rounded-xl ${
+                          theme === "light" ? "bg-black/[0.04]" : "bg-white/[0.05]"
+                        }`}>
+                          {boardThumbs.length === 0 ? (
+                            <div className={`flex aspect-[16/8] w-full items-center justify-center ${
+                              theme === "light" ? "text-black/20" : "text-white/20"
+                            }`}>
+                              <Layers size={22} />
+                            </div>
+                          ) : boardThumbs.length === 1 ? (
+                            <img
+                              src={boardThumbs[0].image_url}
+                              alt=""
+                              draggable={false}
+                              className="aspect-[16/8] w-full object-cover"
+                            />
+                          ) : (
+                            <div className={`grid aspect-[16/8] w-full gap-0.5 ${
+                              boardThumbs.length >= 3 ? "grid-cols-2 grid-rows-2" : "grid-cols-2"
+                            }`}>
+                              {boardThumbs.slice(0, boardThumbs.length >= 3 ? 4 : 2).map((thumb, thumbIndex) => (
+                                <img
+                                  key={thumb.id || thumbIndex}
+                                  src={thumb.image_url}
+                                  alt=""
+                                  draggable={false}
+                                  className="h-full w-full object-cover"
+                                />
+                              ))}
+                            </div>
+                          )}
+                          {/* 状态角标覆盖在缩略图右上角 */}
+                          <div className="absolute right-1.5 top-1.5 flex items-center gap-1">
+                            {generatingCount > 0 && (
+                              <span
+                                className="relative inline-flex h-5 w-5 items-center justify-center rounded-full bg-black/45 text-green-300 backdrop-blur-sm"
+                                title={generatingCount > 1 ? `生成中 ${generatingCount}` : "生成中"}
+                                aria-label={generatingCount > 1 ? `生成中 ${generatingCount}` : "生成中"}
+                              >
+                                <Loader2 size={12} className="animate-spin" />
+                                {generatingCount > 1 && (
+                                  <span className="absolute -right-1 -top-1 min-w-3 rounded-full bg-green-500 px-0.5 text-center text-[8px] leading-3 text-white">
+                                    {generatingCount}
+                                  </span>
+                                )}
+                              </span>
+                            )}
+                            {showCompletedNotice && (
+                              <span className="rounded-md bg-green-500/85 px-1.5 py-0.5 text-[10px] text-white backdrop-blur-sm">
+                                完成
+                              </span>
+                            )}
+                            {showFailedNotice && (
+                              <span className="rounded-md bg-red-500/85 px-1.5 py-0.5 text-[10px] text-white backdrop-blur-sm">
+                                失败
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                        {/* 标题与更新时间 */}
+                        <div className="mt-1.5 flex items-center gap-1.5 px-1">
+                          {isRenaming ? (
+                            <input
+                              value={projectRenamingTitle}
+                              onChange={(event) => setProjectRenamingTitle(event.target.value)}
+                              onBlur={commitProjectRename}
+                              onKeyDown={(event) => {
+                                if (event.key === "Enter") commitProjectRename();
+                                if (event.key === "Escape") cancelProjectRename();
+                              }}
+                              autoFocus
+                              onClick={(event) => event.stopPropagation()}
+                              className={`min-w-0 flex-1 rounded-lg px-2 py-1 text-sm font-medium outline-none ${
+                                theme === "light"
+                                  ? "bg-white text-[#111] ring-1 ring-black/10"
+                                  : "bg-black/40 text-white ring-1 ring-white/12"
+                              }`}
+                            />
+                          ) : (
+                            <span
+                              onDoubleClick={() => {
+                                if (canRenameBoard) startProjectRename(board);
+                              }}
+                              title={canRenameBoard ? "双击重命名" : "默认画布不能重命名"}
+                              className="min-w-0 flex-1 truncate text-left text-sm font-medium"
+                            >
+                              {board.title || "默认画布"}
                             </span>
                           )}
-                        </span>
-                      )}
-                      {showCompletedNotice && !isRenaming && (
-                        <span className="shrink-0 rounded-md bg-green-500/15 px-1.5 py-0.5 text-[10px] text-green-600">
-                          完成
-                        </span>
-                      )}
-                      {showFailedNotice && !isRenaming && (
-                        <span className={`shrink-0 rounded-md px-1.5 py-0.5 text-[10px] ${
-                          theme === "light"
-                            ? "bg-red-500/10 text-red-600"
-                            : "bg-red-400/15 text-red-200"
-                        }`}>
-                          失败
-                        </span>
-                      )}
-                      {isActive && !isRenaming && (
-                        <span className="shrink-0 rounded-md bg-green-500/15 px-1.5 py-0.5 text-[10px] text-green-600">
-                          当前
-                        </span>
-                      )}
+                          {isActive && !isRenaming && (
+                            <span className="shrink-0 rounded-md bg-green-500/15 px-1.5 py-0.5 text-[10px] text-green-600">
+                              当前
+                            </span>
+                          )}
+                        </div>
+                        {boardUpdatedLabel && !isRenaming && (
+                          <div className={`px-1 pt-0.5 text-[10px] ${theme === "light" ? "text-black/35" : "text-white/35"}`}>
+                            更新于 {boardUpdatedLabel}
+                          </div>
+                        )}
                       </div>
                       {showDropAfter && (
                         <div className="pointer-events-none absolute bottom-0 left-2 right-2 z-10 h-0.5 translate-y-0.5 rounded-full bg-green-500" />
