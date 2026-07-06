@@ -1443,7 +1443,7 @@ export default function ChatPanel({
         </div>
 
         {/* Input area */}
-        <div className="relative border-t border-border-primary p-3 flex-shrink-0 space-y-2">
+        <div className="border-t border-border-primary p-3 flex-shrink-0 space-y-2">
           {!isQuickEntryMode && (
             <div className="flex items-center gap-2">
               <div className="inline-flex rounded-xl border border-border-primary bg-bg-tertiary p-1">
@@ -1481,9 +1481,8 @@ export default function ChatPanel({
             </div>
           )}
 
-          {/* 参数面板：悬浮在输入区上方，不挤压消息流 */}
           {!isQuickEntryMode && composerMode === "manual" && showParams && (
-            <div className="absolute bottom-full left-2 right-2 mb-1 z-30 max-h-[min(62vh,560px)] overflow-y-auto scrollbar-thin rounded-2xl border border-border-primary bg-bg-secondary/98 backdrop-blur-xl shadow-2xl p-3 space-y-3 animate-fade-in">
+            <div className="space-y-3 py-2 animate-fade-in">
               <div>
                 <span className="block text-[11px] text-text-tertiary mb-1.5">模型</span>
                 <div className="relative" data-model-menu-root>
