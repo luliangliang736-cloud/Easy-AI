@@ -3993,7 +3993,9 @@ function HomeInner() {
                 ? "text-black/50 hover:bg-black/[0.05] hover:text-black/80"
                 : "text-white/50 hover:bg-white/[0.06] hover:text-white"
           }`}
+          title={isInspirationMode ? "收起项目列表" : "展开项目列表 · 管理画布"}
         >
+          <Layers size={15} className="shrink-0" />
           {activeCanvasBoard?.title || "项目层"}
           {hasOtherBoardTaskNotice && (
             <span className="h-1.5 w-1.5 rounded-full bg-green-500" aria-label="其它画布有新结果" />
