@@ -1003,9 +1003,10 @@ export default function Canvas({
     const marker = `${CANVAS_CLIPBOARD_TEXT_PREFIX}${Date.now()}`;
     try { await navigator.clipboard.writeText(marker); } catch { /* ignore */ }
     canvasClipboardFallbackRef.current = { active: false, previousSignature: "" };
-    // 立即 toast，不等 blob 下载，避免用户感知卡顿
-    toast("已复制", "success", 1200);
-    // 后台静默：下载 blob → 缓存 dataURL（粘贴时直接用内存数据，无需重新请求 OSS）+ 升级系统剪贴板
+    // 先提示“复制中”，等图片真正写入系统剪贴板后撤掉它再提示“已复制”，
+    // 避免用户在写入完成前去外部应用粘贴只得到 marker 文字
+    const pendingToastId = toast("复制中…", "info", 8000);
+    // 后台：下载 blob → 缓存 dataURL（粘贴时直接用内存数据，无需重新请求 OSS）+ 升级系统剪贴板
     const capturedItems = items;
     (async () => {
       try {
@@ -1024,10 +1025,14 @@ export default function Canvas({
           }
         } catch { /* keep OSS url */ }
         // 升级系统剪贴板为 PNG + marker（PS/微信等外部应用可直接粘贴）
-        try {
-          await writeImageBlobToSystemClipboard(blob, marker);
-        } catch { /* keep marker */ }
-      } catch { /* keep marker, keep OSS URL */ }
+        await writeImageBlobToSystemClipboard(blob, marker);
+        toast.dismiss?.(pendingToastId);
+        toast("已复制", "success", 1200);
+      } catch {
+        // 外部剪贴板写入失败：画布内粘贴仍可用（marker + 内存缓存）
+        toast.dismiss?.(pendingToastId);
+        toast("已复制（粘贴到外部应用可能不可用）", "info", 1800);
+      }
     })();
   }, [toast]);
 
@@ -2285,9 +2290,9 @@ export default function Canvas({
                         canvasClipboardFallbackRef.current = { active: false, previousSignature: "" };
                         const marker = `${CANVAS_CLIPBOARD_TEXT_PREFIX}${Date.now()}`;
                         try { await navigator.clipboard.writeText(marker); } catch { /* ignore */ }
-                        // 立即 toast，不等 blob 下载
-                        toast("已复制", "success", 1200);
-                        // 后台静默：下载 blob → 缓存 dataURL + 升级系统剪贴板（PNG，外部应用可粘贴）
+                        // 先提示“复制中”，真正写入系统剪贴板成功后撤掉它再提示“已复制”
+                        const pendingToastId = toast("复制中…", "info", 8000);
+                        // 后台：下载 blob → 缓存 dataURL + 升级系统剪贴板（PNG，外部应用可粘贴）
                         (async () => {
                           try {
                             const res = await fetch(toClipboardFetchUrl(img.image_url));
@@ -2298,10 +2303,14 @@ export default function Canvas({
                                 canvasClipboardRef.current = { items: [{ ...toolbarItem, image_url: dataUrl }] };
                               }
                             } catch { /* keep OSS url */ }
-                            try {
-                              await writeImageBlobToSystemClipboard(blob, marker);
-                            } catch { /* keep marker */ }
-                          } catch { /* keep marker, keep OSS URL */ }
+                            await writeImageBlobToSystemClipboard(blob, marker);
+                            toast.dismiss?.(pendingToastId);
+                            toast("已复制", "success", 1200);
+                          } catch {
+                            // 外部剪贴板写入失败：画布内粘贴仍可用（marker + 内存缓存）
+                            toast.dismiss?.(pendingToastId);
+                            toast("已复制（粘贴到外部应用可能不可用）", "info", 1800);
+                          }
                         })();
                       }}
                       className="inline-flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-[11px] text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors whitespace-nowrap"
