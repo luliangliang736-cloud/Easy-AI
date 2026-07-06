@@ -2,6 +2,7 @@
 
 import { useRef, useEffect, useState, useCallback } from "react";
 import {
+  Eye,
   Send,
   ImagePlus,
   ImageIcon,
@@ -445,12 +446,17 @@ function MessageBubble({ message, onRetry, onDownload, onImageClick, onPreview, 
   return (
     <div className="flex justify-start animate-fade-in">
       <div className="max-w-[85%] w-full group/message">
-        <div className="flex items-center gap-2 mb-2">
-          <BrandLogo className="h-6 w-auto flex-shrink-0" />
+        <div className="flex items-center gap-1.5 mb-2 min-w-0">
+          <Eye size={13} className="flex-shrink-0 text-text-tertiary" />
+          <span className="truncate text-[11px] text-text-tertiary">
+            {message.modelLabel || "生成结果"}
+            {message.params?.image_size ? ` · ${message.params.image_size}` : ""}
+            {message.params?.num > 1 ? ` · ${message.params.num}张` : ""}
+          </span>
           <button
             type="button"
             onClick={() => onDelete?.(message.id)}
-            className="ml-auto w-7 h-7 rounded-lg flex items-center justify-center text-text-tertiary hover:text-red-400 hover:bg-red-500/10 transition-all opacity-0 group-hover/message:opacity-100"
+            className="ml-auto w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 text-text-tertiary hover:text-red-400 hover:bg-red-500/10 transition-all opacity-0 group-hover/message:opacity-100"
             title="删除记录"
           >
             <Trash2 size={13} />
@@ -563,7 +569,7 @@ function MessageBubble({ message, onRetry, onDownload, onImageClick, onPreview, 
             {message.urls.map((url, i) => (
               <div key={i} className="bg-bg-tertiary border border-border-primary rounded-2xl rounded-tl-md overflow-hidden">
                 <div
-                  className="relative block w-full cursor-grab active:cursor-grabbing"
+                  className="group/result relative block w-full cursor-grab active:cursor-grabbing"
                   draggable
                   onDragStart={(e) => handleGeneratedImageDragStart(e, url, i)}
                   onClick={() => {
@@ -610,16 +616,28 @@ function MessageBubble({ message, onRetry, onDownload, onImageClick, onPreview, 
                   ) : (
                     <img src={url} alt={message.text} className="w-full hover:opacity-95 transition-opacity" />
                   )}
-                </div>
-                <div className="px-3 py-2 flex items-center justify-between">
-                  <span className="text-[10px] text-text-tertiary">
-                    {message.modelLabel} · {message.params?.image_size}
-                    {message.mediaType === "video" && message.params?.duration && ` · ${message.params.duration}s`}
-                    {message.urls.length > 1 && ` · ${i + 1}/${message.urls.length}`}
-                  </span>
-                  <button onClick={() => onDownload?.({ ...message, image_url: url })}
-                    className="p-1.5 rounded-md text-text-tertiary hover:text-text-primary hover:bg-bg-hover transition-all" title="下载">
-                    <Download size={14} />
+                  {(() => {
+                    const infoLabel = [
+                      message.mediaType === "video" && message.params?.duration ? `${message.params.duration}s` : "",
+                      message.urls.length > 1 ? `${i + 1}/${message.urls.length}` : "",
+                    ].filter(Boolean).join(" · ");
+                    return infoLabel ? (
+                      <span className="pointer-events-none absolute left-2 top-2 rounded-md bg-black/55 px-1.5 py-0.5 text-[10px] text-white backdrop-blur-sm">
+                        {infoLabel}
+                      </span>
+                    ) : null;
+                  })()}
+                  <button
+                    type="button"
+                    onPointerDown={(event) => event.stopPropagation()}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onDownload?.({ ...message, image_url: url });
+                    }}
+                    className="absolute right-2 bottom-2 text-white opacity-0 drop-shadow-[0_1px_3px_rgba(0,0,0,0.7)] transition-opacity hover:scale-110 group-hover/result:opacity-100"
+                    title="下载"
+                  >
+                    <Download size={15} />
                   </button>
                 </div>
               </div>
