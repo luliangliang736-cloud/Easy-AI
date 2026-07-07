@@ -14,7 +14,7 @@ import { useAuthSessionGuard } from "@/lib/useAuthSessionGuard";
 import { CLOUD_STATE_RESTORED_EVENT, useCloudLocalStorageSync } from "@/lib/useCloudLocalStorageSync";
 import { CLOUD_STATE_DELETIONS_KEY, normalizeCloudStateDeletions, recordCloudDeletions } from "@/lib/cloudStateDeletions";
 import { MAX_GEN_COUNT } from "@/lib/genLimits";
-import { Layers, Loader2, Plus } from "lucide-react";
+import { ChevronsLeft, Layers, Loader2, Plus } from "lucide-react";
 
 const FLOATING_ENTRY_DRAFT_KEY = "lovart-floating-entry-draft";
 const CANVAS_REF_IMAGES_STORAGE_KEY = "lovart-canvas-ref-images";
@@ -514,8 +514,33 @@ Agent mode hidden instructions:
 - if multiple reference images are provided, use the first image as the main composition and aspect-ratio anchor`;
 }
 
+function detectAgentVideoIntent(compactText) {
+  // 明确指向“静态图”的词优先排除，避免“视频封面”“动画风格插画”被误判成生成视频
+  if (/封面|截图|缩略图|分镜|脚本|动画风|动漫风|插画|漫画|表情包|海报|banner|logo/i.test(compactText)) {
+    return false;
+  }
+  return (
+    /视频|短片|影片|vlog|动起来|会动|让它动|让她动|让他动|做成动画|变成动画|生成动画|生成一段动画|运镜|转场|镜头推|镜头拉|镜头摇|镜头移|拍成/.test(compactText)
+    || /\b(video|animate|animation|motion)\b/i.test(compactText)
+  );
+}
+
 function resolveAgentParams(baseParams, promptText, refImages = []) {
   const compactText = String(promptText || "").replace(/\s+/g, "");
+
+  // 命中视频意图时自动路由到 Seedance（有参考图后端自动走图生视频）
+  if (detectAgentVideoIntent(compactText)) {
+    return {
+      ...baseParams,
+      model: AGENT_DEFAULT_VIDEO_MODEL,
+      image_size: refImages.length > 0 ? "auto" : "16:9",
+      num: 1,
+      duration: "5",
+      resolution: "1080p",
+      service_tier: AGENT_DEFAULT_SERVICE_TIER,
+    };
+  }
+
   const needsHighFidelity = /海报|poster|品牌|branding|logo|字体|排版|版式|产品图|电商|包装|KV|banner|高清|高细节|细节/.test(compactText);
 
   return {
@@ -556,6 +581,7 @@ const VALID_SERVICE_TIERS = new Set(["default", "priority"]);
 const DEFAULT_COMPOSER_MODE = "agent";
 const DEFAULT_ENTRY_MODE = "agent";
 const AGENT_DEFAULT_MODEL = "gemini-3.1-flash-image-preview";
+const AGENT_DEFAULT_VIDEO_MODEL = "dreamina-seedance-2-0-260128";
 const AGENT_DEFAULT_SERVICE_TIER = "priority";
 const MAX_REF_IMAGES = 14;
 
@@ -1295,6 +1321,8 @@ const MODEL_LABELS = {
   "kling-v2-6": "Kling-V2-6 视频",
   "kling-v3": "Kling-V3 视频",
   "kling-v3-omni": "Kling-V3-Omni 视频",
+  "dreamina-seedance-2-0-260128": "Seedance 视频",
+  "dreamina-seedance-2-0-fast-260128": "Seedance 快速视频",
 };
 
 const GPT_IMAGE_2_MODEL = "gpt-image-2";
@@ -1491,6 +1519,7 @@ function HomeInner() {
   const [activeGenerationCount, setActiveGenerationCount] = useState(0);
   const [isTextEditing, setIsTextEditing] = useState(false);
   const [panelWidth, setPanelWidth] = useState(340);
+  const [isPanelCollapsed, setIsPanelCollapsed] = useState(false);
   const [isInspirationMode, setIsInspirationMode] = useState(false);
   const [inspirationPanelWidth, setInspirationPanelWidth] = useState(380);
   const [, setIsInspirationResizing] = useState(false);
@@ -4319,6 +4348,12 @@ function HomeInner() {
           />
         </div>
       )}
+      {/* 收起时用 CSS 隐藏而非卸载，保留面板内部状态（输入、菜单等）；
+          展开时不能加 overflow-hidden，否则会裁掉面板向左弹出的下拉菜单 */}
+      <div
+        className={`h-full flex-shrink-0 ${isPanelCollapsed ? "overflow-hidden" : ""}`}
+        style={{ width: isPanelCollapsed ? 0 : undefined }}
+      >
       <ChatPanel
         conversations={activeCanvasConversations}
         activeConversationId={activeConversation?.id || ""}
@@ -4365,7 +4400,24 @@ function HomeInner() {
         onClearCanvasHistory={handleClearHistory}
         canvasHistorySearch={historySearch}
         onCanvasHistorySearchChange={setHistorySearch}
+        onCollapse={() => setIsPanelCollapsed(true)}
       />
+      </div>
+      {isPanelCollapsed && (
+        <button
+          type="button"
+          onClick={() => setIsPanelCollapsed(false)}
+          className={`fixed right-2 top-2 z-40 flex h-8 w-8 items-center justify-center rounded-lg border shadow-lg transition-all ${
+            theme === "light"
+              ? "border-black/10 bg-white text-black/55 hover:text-black"
+              : "border-white/12 bg-[#1a1a1c] text-white/55 hover:text-white"
+          }`}
+          title="展开对话面板"
+          aria-label="展开对话面板"
+        >
+          <ChevronsLeft size={16} />
+        </button>
+      )}
     </div>
   );
 }

@@ -2,6 +2,7 @@
 
 import { useRef, useEffect, useState, useCallback } from "react";
 import {
+  ChevronsRight,
   Eye,
   Send,
   ImagePlus,
@@ -712,6 +713,7 @@ export default function ChatPanel({
   onClearCanvasHistory,
   canvasHistorySearch = "",
   onCanvasHistorySearchChange,
+  onCollapse,
 }) {
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null);
@@ -1414,6 +1416,17 @@ export default function ChatPanel({
                 title={theme === "dark" ? "切换到浅色" : "切换到深色"}
               >
                 {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
+              </button>
+            )}
+            {onCollapse && (
+              <button
+                type="button"
+                onClick={onCollapse}
+                className="w-8 h-8 rounded-lg flex items-center justify-center text-text-tertiary hover:text-text-primary hover:bg-bg-hover transition-all"
+                title="收起对话面板"
+                aria-label="收起对话面板"
+              >
+                <ChevronsRight size={16} />
               </button>
             )}
           </div>
