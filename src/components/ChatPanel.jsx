@@ -33,8 +33,6 @@ import {
 import { compressImage } from "@/lib/imageUtils";
 import { MAX_GEN_COUNT } from "@/lib/genLimits";
 import TextEditBlocksPanel from "@/components/TextEditBlocksPanel";
-import BrandLogo from "@/components/BrandLogo";
-
 const CANVAS_IMAGE_MIME = "application/x-easy-ai-canvas-image";
 
 const MODEL_TIERS = [
@@ -824,7 +822,6 @@ export default function ChatPanel({
     availableKlingModes.find((item) => item.value === (params.mode || "pro"))?.label || "1080p";
   const klingActiveClass = PARAM_ACTIVE_CLASS;
   const currentEntryMode = "agent";
-  const currentEntryModeLabel = "Agent";
   const isQuickEntryMode = false;
   const filteredConversations = conversations
     .filter((conversation) => (conversation.messages || []).length > 0)
@@ -1167,10 +1164,7 @@ export default function ChatPanel({
       <div className="flex-1 bg-bg-secondary border-l border-border-primary flex flex-col h-full min-w-0">
         {/* Header */}
         <div className="h-12 px-4 flex items-center justify-between border-b border-border-primary flex-shrink-0">
-          <div className="flex items-center gap-2 min-w-0">
-            <BrandLogo className="h-6 w-auto" showText={false} />
-            <span className="px-1 py-1 text-sm font-medium text-text-primary">{currentEntryModeLabel}</span>
-          </div>
+          <div className="flex items-center gap-2 min-w-0" />
           <div className="flex items-center gap-1.5">
             <div className="relative" ref={canvasHistoryMenuRef}>
               <button

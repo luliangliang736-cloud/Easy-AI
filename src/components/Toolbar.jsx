@@ -10,6 +10,7 @@ import {
   Plus,
   Palette,
   LayoutGrid,
+  Scan,
 } from "lucide-react";
 
 const TOOLS = [
@@ -29,6 +30,7 @@ export default function Toolbar({
   canvasColor,
   onToggleCanvasColorPicker,
   onAutoAlign,
+  onFitView,
 }) {
   return (
     <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-20 flex items-center gap-1 px-2 py-1.5 rounded-2xl bg-bg-secondary/90 backdrop-blur-xl border border-border-primary shadow-2xl shadow-black/40">
@@ -113,6 +115,16 @@ export default function Toolbar({
 
       <div className="w-px h-6 bg-border-primary mx-1" />
 
+      {onFitView && (
+        <button
+          type="button"
+          onClick={onFitView}
+          className="w-8 h-8 rounded-lg flex items-center justify-center text-text-tertiary hover:text-text-primary hover:bg-bg-hover transition-all"
+          title="适应画布 (Shift+1)：缩放至能看到全部内容"
+        >
+          <Scan size={15} />
+        </button>
+      )}
       <button
             type="button"
         onClick={() => onZoomChange((z) => Math.max(z - 10, 1))}

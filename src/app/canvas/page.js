@@ -14,7 +14,7 @@ import { useAuthSessionGuard } from "@/lib/useAuthSessionGuard";
 import { CLOUD_STATE_RESTORED_EVENT, useCloudLocalStorageSync } from "@/lib/useCloudLocalStorageSync";
 import { CLOUD_STATE_DELETIONS_KEY, normalizeCloudStateDeletions, recordCloudDeletions } from "@/lib/cloudStateDeletions";
 import { MAX_GEN_COUNT } from "@/lib/genLimits";
-import { ChevronsLeft, Layers, Loader2, Plus } from "lucide-react";
+import { ChevronsLeft, Home as HomeIcon, Layers, Loader2, Plus } from "lucide-react";
 
 const FLOATING_ENTRY_DRAFT_KEY = "lovart-floating-entry-draft";
 const CANVAS_REF_IMAGES_STORAGE_KEY = "lovart-canvas-ref-images";
@@ -1522,13 +1522,14 @@ function HomeInner() {
   const [panelWidth, setPanelWidth] = useState(340);
   const [isPanelCollapsed, setIsPanelCollapsed] = useState(false);
   const [isInspirationMode, setIsInspirationMode] = useState(false);
-  const [inspirationPanelWidth, setInspirationPanelWidth] = useState(380);
+  const [inspirationPanelWidth, setInspirationPanelWidth] = useState(220);
   const [, setIsInspirationResizing] = useState(false);
   const [projectRenamingBoardId, setProjectRenamingBoardId] = useState("");
   const [projectRenamingTitle, setProjectRenamingTitle] = useState("");
   const [draggingProjectBoardId, setDraggingProjectBoardId] = useState("");
   const [projectDropIndicator, setProjectDropIndicator] = useState(null);
   const [projectContextMenu, setProjectContextMenu] = useState(null);
+  const [showLogoMenu, setShowLogoMenu] = useState(false);
   const [canvasBoardTaskNotices, setCanvasBoardTaskNotices] = useState({});
   const [historySearch, setHistorySearch] = useState("");
   const canvasRef = useRef(null);
@@ -3985,6 +3986,21 @@ function HomeInner() {
       window.removeEventListener("keydown", handleKeyDown);
     };
   }, [projectContextMenu]);
+  useEffect(() => {
+    if (!showLogoMenu) return undefined;
+    const handlePointerDown = (event) => {
+      if (!event.target.closest("[data-logo-menu-root]")) setShowLogoMenu(false);
+    };
+    const handleKeyDown = (event) => {
+      if (event.key === "Escape") setShowLogoMenu(false);
+    };
+    window.addEventListener("pointerdown", handlePointerDown);
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("pointerdown", handlePointerDown);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [showLogoMenu]);
   const contextProjectBoard = projectContextMenu
     ? canvasBoards.find((board) => board.id === projectContextMenu.boardId)
     : null;
@@ -4000,17 +4016,38 @@ function HomeInner() {
         className="absolute top-0 z-30 flex h-12 items-center gap-2 transition-[left]"
         style={{ left: isInspirationMode ? inspirationPanelWidth + 12 : 12 }}
       >
-        <Link
-          href="/"
-          className="flex items-center px-0.5 py-0.5 transition-opacity hover:opacity-80"
-          title="返回首页"
-        >
-          <BrandLogo
-            className="h-6 w-auto"
-            showText={false}
-            wordmarkOffsetClassName={`translate-y-[2px] ${theme === "light" ? "invert" : ""}`}
-          />
-        </Link>
+        <div className="relative" data-logo-menu-root>
+          <button
+            type="button"
+            onClick={() => setShowLogoMenu((value) => !value)}
+            className="flex items-center gap-0.5 rounded-lg px-0.5 py-0.5 transition-opacity hover:opacity-80"
+            title="菜单"
+          >
+            <BrandLogo
+              className="h-6 w-auto"
+              showText={false}
+              wordmarkOffsetClassName={`translate-y-[2px] ${theme === "light" ? "invert" : ""}`}
+            />
+          </button>
+          {showLogoMenu && (
+            <div className={`absolute left-0 top-[calc(100%+6px)] z-50 min-w-[140px] rounded-xl border p-1 shadow-2xl backdrop-blur-xl animate-fade-in ${
+              theme === "light" ? "border-black/10 bg-white/95" : "border-white/10 bg-[#1a1a1a]/95"
+            }`}>
+              <Link
+                href="/"
+                className={`flex items-center gap-2 rounded-lg px-3 py-2 text-[13px] font-medium transition-colors ${
+                  theme === "light"
+                    ? "text-black/75 hover:bg-black/[0.06] hover:text-black"
+                    : "text-white/75 hover:bg-white/[0.08] hover:text-white"
+                }`}
+                onClick={() => setShowLogoMenu(false)}
+              >
+                <HomeIcon size={14} className="shrink-0" />
+                返回首页
+              </Link>
+            </div>
+          )}
+        </div>
         <button
           type="button"
           onClick={() => setIsInspirationMode((value) => !value)}
@@ -4041,7 +4078,6 @@ function HomeInner() {
             <div className={`flex h-12 shrink-0 items-center justify-between gap-3 border-b px-4 ${theme === "light" ? "border-black/8" : "border-white/8"}`}>
               <div className="min-w-0">
                 <div className={`inline-flex items-center gap-1.5 text-sm font-semibold ${theme === "light" ? "text-[#111]" : "text-white"}`}>
-                  <Layers size={15} className={theme === "light" ? "text-black/55" : "text-white/55"} />
                   项目列表
                 </div>
               </div>

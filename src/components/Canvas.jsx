@@ -801,6 +801,61 @@ export default function Canvas({
     [onZoomChange]
   );
 
+  /** 适应画布：缩放并平移至能看到全部内容（上限 100%，避免单张小图被放得过大） */
+  const handleFitView = useCallback(() => {
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (!rect || rect.width < 10 || rect.height < 10) return;
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    const include = (x, y, w, h) => {
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return;
+      minX = Math.min(minX, x);
+      minY = Math.min(minY, y);
+      maxX = Math.max(maxX, x + Math.max(0, w || 0));
+      maxY = Math.max(maxY, y + Math.max(0, h || 0));
+    };
+    renderImagesRef.current.forEach((img) => {
+      const pos = positionsRef.current[img.id];
+      if (!pos) return;
+      include(pos.x, pos.y, pos.w, getCanvasImageHeight(img, pos, imageMetaRef.current[img.id]));
+    });
+    textItems.forEach((t) => {
+      const fontPx = Math.min(MAX_TEXT_FONT, Math.max(MIN_TEXT_FONT, t.fontSize ?? DEFAULT_TEXT_FONT));
+      include(t.x, t.y, Math.min(900, Math.max(80, t.width ?? 240)), fontPx * 1.6);
+    });
+    shapeItems.forEach((s) => include(s.x, s.y, s.w, s.h));
+    if (!Number.isFinite(minX)) return;
+    const pad = 80;
+    const contentW = Math.max(1, maxX - minX);
+    const contentH = Math.max(1, maxY - minY);
+    const scale = Math.min(
+      (rect.width - pad * 2) / contentW,
+      (rect.height - pad * 2) / contentH,
+      1
+    );
+    const z = Math.round(Math.min(MAX_ZOOM_PCT, Math.max(MIN_ZOOM_PCT, scale * 100)));
+    const s = z / 100;
+    const cam = cameraRef.current;
+    cam.zoom = z;
+    cam.x = (rect.width - contentW * s) / 2 - minX * s;
+    cam.y = (rect.height - contentH * s) / 2 - minY * s;
+    onZoomChange?.(z);
+    forceRender();
+  }, [textItems, shapeItems, onZoomChange]);
+
+  /** Shift+1 快捷键：适应画布 */
+  useEffect(() => {
+    const handleFitKey = (e) => {
+      const tag = document.activeElement?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA") return;
+      if (e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && e.code === "Digit1") {
+        e.preventDefault();
+        handleFitView();
+      }
+    };
+    window.addEventListener("keydown", handleFitKey);
+    return () => window.removeEventListener("keydown", handleFitKey);
+  }, [handleFitView]);
+
   /** 滚轮：指数缩放 + 光标锚点（世界坐标不变） */
   const handleWheel = useCallback(
     (e) => {
@@ -2924,6 +2979,7 @@ export default function Canvas({
           onShapeModeChange={onShapeModeChange}
           canvasColor={resolvedCanvasColor}
           onToggleCanvasColorPicker={() => setIsCanvasColorPickerOpen((open) => !open)}
+          onFitView={handleFitView}
           onAutoAlign={() => {
             const imgs = imagesRef.current;
             if (!imgs.length) return;
