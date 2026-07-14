@@ -1314,6 +1314,7 @@ const MODEL_LABELS = {
   "gemini-3.1-flash-image-preview": "Nano Banana 2 1K",
   "gemini-3.1-flash-image-preview-2k": "Nano Banana 2 2K",
   "gemini-3.1-flash-image-preview-4k": "Nano Banana 2 4K",
+  "gemini-3.1-flash-lite-image": "Nano Banana 2 Lite 1K",
   "gemini-3-pro-image-preview": "Pro 1K",
   "gemini-3-pro-image-preview-2k": "Pro 2K",
   "gemini-3-pro-image-preview-4k": "Pro 4K",

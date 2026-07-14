@@ -28,6 +28,7 @@ import {
   Sparkles,
   Trash2,
   Video,
+  Zap,
 } from "lucide-react";
 import { compressImage } from "@/lib/imageUtils";
 import { MAX_GEN_COUNT } from "@/lib/genLimits";
@@ -47,6 +48,18 @@ const MODEL_TIERS = [
     ],
     maxInputImages: 10,
     extendedRatios: true,
+    serviceTierOptions: false,
+  },
+  {
+    id: "flash2-lite",
+    name: "Nano Banana 2 Lite",
+    icon: Zap,
+    desc: "极速 · 低成本 · 仅1K",
+    variants: [
+      { model: "gemini-3.1-flash-lite-image", label: "默认", credits: { default: 0, priority: 0 } },
+    ],
+    maxInputImages: 10,
+    extendedRatios: false,
     serviceTierOptions: false,
   },
   {
