@@ -7,9 +7,10 @@ import {
   Sparkles, ArrowRight, Wand2, Image as ImageIcon,
   Layers, Zap, Crown, Rocket, PenTool, Factory, Library, Megaphone, PanelTop, ShieldCheck, Coins,
   Palette, RefreshCw, Download, MousePointer2, Sun, Moon, Bot, LayoutGrid, Clock3, Palette as PaletteIcon, Users,
-  Mail, LockKeyhole, LogIn, LogOut, Play, Maximize2,
+  Mail, LockKeyhole, LogIn, LogOut, Play, Maximize2, Globe,
 } from "lucide-react";
 import { useTheme } from "@/lib/useTheme";
+import { getHomeCopy, HOME_LANGUAGE_STORAGE_KEY } from "@/lib/homeI18n";
 import { compressImage } from "@/lib/imageUtils";
 import { useAuthSessionGuard } from "@/lib/useAuthSessionGuard";
 import { useCloudLocalStorageSync } from "@/lib/useCloudLocalStorageSync";
@@ -884,47 +885,28 @@ function resolveFloatingGenerationModel({ hasImages = false, isAgentMode = false
   return FLOATING_EDIT_MODEL;
 }
 
-const FEATURES = [
-  { icon: Factory, title: "AI 设计生产线", desc: "一句话完成之前耗费时间的重复设计", iconColor: "text-violet-400" },
-  { icon: Library, title: "品牌资产控制台", desc: "统一管理 Logo、品牌色、IP 角色与出图规范", iconColor: "text-blue-400" },
-  { icon: Megaphone, title: "营销内容生成引擎", desc: "批量生成海报、活动图与业务宣传等高频物料", iconColor: "text-emerald-400" },
-  { icon: PanelTop, title: "可编辑交付画布", desc: "生成结果可继续精修、排版、组合并沉淀复用", iconColor: "text-amber-400" },
-  { icon: ShieldCheck, title: "智能出图质检", desc: "一键利用AI评分和建议系统检测出图质量", iconColor: "text-rose-400" },
-  { icon: Coins, title: "低成本规模化供给", desc: "Easy AI单图平均成本低于市面平台十倍以上", iconColor: "text-sky-400" },
+// 文案在 src/lib/homeI18n.js 词典中按语言维护，这里只保留图标与颜色等非文案配置。
+const FEATURE_VISUALS = [
+  { icon: Factory, iconColor: "text-violet-400" },
+  { icon: Library, iconColor: "text-blue-400" },
+  { icon: Megaphone, iconColor: "text-emerald-400" },
+  { icon: PanelTop, iconColor: "text-amber-400" },
+  { icon: ShieldCheck, iconColor: "text-rose-400" },
+  { icon: Coins, iconColor: "text-sky-400" },
 ];
 
-const PAIN_POINTS = [
-  { icon: Clock3, title: "高频物料消耗时间", desc: "活动、海报、社媒图等都要快速迭代", iconColor: "text-amber-400" },
-  { icon: PaletteIcon, title: "品牌一致性难维护", desc: "多人协作时 Logo、色彩、IP、版式容易跑偏", iconColor: "text-emerald-400" },
-  { icon: Users, title: "重复设计占用人力", desc: "大量时间花在改尺寸、换文案、套模板上", iconColor: "text-sky-400" },
+const PAIN_POINT_VISUALS = [
+  { icon: Clock3, iconColor: "text-amber-400" },
+  { icon: PaletteIcon, iconColor: "text-emerald-400" },
+  { icon: Users, iconColor: "text-sky-400" },
 ];
 
-const VALUE_METRICS = [
-  { value: "10x+", title: "成本优势", desc: "单图平均成本低于市面平台十倍以上" },
-  { value: "分钟级", title: "设计启动", desc: "从需求到首版设计图，大幅缩短启动时间" },
-  { value: "稳定", title: "品牌输出", desc: "品牌资产、IP 角色与模板规范可持续复用" },
-  { value: "闭环", title: "可交付流程", desc: "生成、编辑、质检、再优化形成完整工作流" },
-];
+const VALUE_COMPARISON_TONES = ["muted", "active"];
 
-const VALUE_COMPARISON = [
-  {
-    label: "传统设计流程",
-    title: "沟通、修改、质检、交付反复消耗",
-    points: ["多人沟通", "反复改稿", "人工质检", "手动交付"],
-    tone: "muted",
-  },
-  {
-    label: "Easy AI 自动化流程",
-    title: "一句需求驱动完整设计生产闭环",
-    points: ["AI 生成", "品牌约束", "专业画布", "质检优化"],
-    tone: "active",
-  },
-];
-
-const MODELS = [
-  { icon: Rocket, name: "Nano Banana 2", desc: "推荐 · 高性价比 · 最高4K", cost: "平均一张图 0.12-0.15元", color: "text-blue-400" },
-  { icon: Crown, name: "Nano Banana Pro", desc: "专业画质 · Thinking · 最高4K", cost: "平均一张图 0.25-0.30元", color: "text-amber-400" },
-  { icon: Sparkles, name: "GPT Image 2", desc: "灵活尺寸 · 高保真输入 · 图像编辑", cost: "平均一张图 0.08-0.10元", color: "text-fuchsia-400" },
+const MODEL_VISUALS = [
+  { icon: Rocket, name: "Nano Banana 2", color: "text-blue-400" },
+  { icon: Crown, name: "Nano Banana Pro", color: "text-amber-400" },
+  { icon: Sparkles, name: "GPT Image 2", color: "text-fuchsia-400" },
 ];
 
 const HOME_ASSET_PUBLIC_BASE_URL = String(process.env.NEXT_PUBLIC_HOME_ASSET_BASE_URL || "").replace(/\/+$/g, "");
@@ -1071,6 +1053,7 @@ export default function HomePage() {
   const [pendingAuthNext, setPendingAuthNext] = useState("/");
   const [isProfileMenuOpen, setIsProfileMenuOpen] = useState(false);
   const [isProfileAccountOpen, setIsProfileAccountOpen] = useState(false);
+  const [homeLanguage, setHomeLanguage] = useState("zh");
   const [profileDisplayName, setProfileDisplayName] = useState("");
   const [profileAvatar, setProfileAvatar] = useState("");
   const floatingStorageReadyRef = useRef(false);
@@ -1085,6 +1068,7 @@ export default function HomePage() {
   const profileAvatarInputRef = useRef(null);
   const initialAuthCheckAbortRef = useRef(null);
   const { theme, toggleTheme } = useTheme("dark");
+  const copy = getHomeCopy(homeLanguage);
   const floatingEntryMode = floatingIsGenerating
     ? floatingRuntimeMode
     : detectOneClickEntryMode(floatingPrompt, floatingRefImages);
@@ -1142,7 +1126,21 @@ export default function HomePage() {
     try {
       setProfileDisplayName(localStorage.getItem("easyai-profile-display-name") || "");
       setProfileAvatar(localStorage.getItem("easyai-profile-avatar") || "");
+      const storedLanguage = localStorage.getItem(HOME_LANGUAGE_STORAGE_KEY);
+      if (storedLanguage === "zh" || storedLanguage === "en") {
+        setHomeLanguage(storedLanguage);
+      }
     } catch {}
+  }, []);
+
+  const handleToggleLanguage = useCallback(() => {
+    setHomeLanguage((prev) => {
+      const next = prev === "zh" ? "en" : "zh";
+      try {
+        localStorage.setItem(HOME_LANGUAGE_STORAGE_KEY, next);
+      } catch {}
+      return next;
+    });
   }, []);
 
   useEffect(() => {
@@ -2206,8 +2204,8 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
                   ? "bg-black/[0.14] text-black/70 hover:bg-black/[0.20] hover:text-[#3FCA58]"
                   : "bg-white/[0.32] text-white/85 hover:bg-white/[0.40] hover:text-[#3FCA58]"
               }`}
-              title="选择模式"
-              aria-label="选择模式"
+              title={copy.nav.modeMenuTitle}
+              aria-label={copy.nav.modeMenuTitle}
             >
               <LayoutGrid size={16} />
             </button>
@@ -2220,14 +2218,14 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
                   href="/chat"
                   className="flex items-center justify-between rounded-xl px-3 py-2.5 text-sm text-text-secondary transition-all hover:text-[#3FCA58]"
                 >
-                  一键创作模式
+                  {copy.nav.oneClickMode}
                   <ArrowRight size={14} />
                 </Link>
                 <Link
                   href="/canvas"
                   className="mt-1 flex items-center justify-between rounded-xl px-3 py-2.5 text-sm text-text-secondary transition-all hover:text-[#3FCA58]"
                 >
-                  专业创作模式
+                  {copy.nav.professionalMode}
                   <ArrowRight size={14} />
                 </Link>
               </div>
@@ -2240,7 +2238,7 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
                 ? "bg-black/[0.14] text-black/70 hover:bg-black/[0.20] hover:text-[#3FCA58]"
                 : "bg-white/[0.32] text-white/85 hover:bg-white/[0.40] hover:text-[#3FCA58]"
             }`}
-            title={theme === "dark" ? "切换到浅色" : "切换到深色"}
+            title={theme === "dark" ? copy.nav.themeToLight : copy.nav.themeToDark}
           >
             {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
           </button>
@@ -2255,8 +2253,8 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
                 className={`flex h-9 w-9 items-center justify-center overflow-hidden rounded-xl backdrop-blur-md transition-all hover:scale-105 ${
                   theme === "light" ? "bg-black/[0.14]" : "bg-white/[0.32]"
                 }`}
-                title="个人信息"
-                aria-label="个人信息"
+                title={copy.nav.profileTitle}
+                aria-label={copy.nav.profileTitle}
               >
                 <img
                   src={profileAvatarSrc}
@@ -2283,7 +2281,7 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
                         />
                         <div className="min-w-0">
                           <div className="truncate text-sm font-semibold">
-                            {profileDisplayName.trim() || "EasyAI 内测用户"}
+                            {profileDisplayName.trim() || copy.account.defaultUserName}
                           </div>
                           <div className={`mt-0.5 truncate text-xs ${theme === "light" ? "text-black/45" : "text-white/45"}`}>
                             {authUser.username}
@@ -2292,12 +2290,12 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
                       </div>
 
                       <label className={`mb-1.5 block text-xs font-medium ${theme === "light" ? "text-black/60" : "text-white/55"}`}>
-                        显示名称
+                        {copy.account.displayNameLabel}
                       </label>
                       <input
                         value={profileDisplayName}
                         onChange={(event) => handleProfileNameChange(event.target.value)}
-                        placeholder="填写你的显示名称"
+                        placeholder={copy.account.displayNamePlaceholder}
                         className={`mb-3 w-full rounded-xl border px-3 py-2 text-sm outline-none transition-colors focus:border-[#3FCA58]/70 ${
                           theme === "light"
                             ? "border-black/10 bg-black/[0.035] placeholder:text-black/30"
@@ -2306,7 +2304,7 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
                       />
 
                       <label className={`mb-1.5 block text-xs font-medium ${theme === "light" ? "text-black/60" : "text-white/55"}`}>
-                        头像
+                        {copy.account.avatarLabel}
                       </label>
                       <div className={`mb-3 rounded-xl border p-3 ${theme === "light" ? "border-black/10 bg-black/[0.025]" : "border-white/10 bg-black/20"}`}>
                         <div className="flex items-center gap-3">
@@ -2318,7 +2316,7 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
                           />
                           <div className="min-w-0 flex-1">
                             <div className={`text-xs ${theme === "light" ? "text-black/55" : "text-white/50"}`}>
-                              支持上传 JPG / PNG 图片，仅保存在当前浏览器。
+                              {copy.account.avatarHint}
                             </div>
                             <div className="mt-2 flex items-center gap-2">
                               <button
@@ -2330,7 +2328,7 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
                                     : "bg-white/[0.08] text-white/75 hover:bg-white/[0.12]"
                                 }`}
                               >
-                                上传头像
+                                {copy.account.uploadAvatar}
                               </button>
                               {profileAvatar ? (
                                 <button
@@ -2338,7 +2336,7 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
                                   onClick={handleResetProfileAvatar}
                                   className="rounded-lg px-2.5 py-1.5 text-xs text-red-400 transition-all hover:bg-red-500/10"
                                 >
-                                  恢复默认
+                                  {copy.account.resetDefault}
                                 </button>
                               ) : null}
                             </div>
@@ -2354,7 +2352,7 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
                       </div>
 
                       <div className={`mb-3 rounded-xl px-3 py-2 text-xs ${theme === "light" ? "bg-black/[0.035] text-black/55" : "bg-white/[0.06] text-white/55"}`}>
-                        登录状态保留 30 天，仅用于团队内测访问控制。
+                        {copy.account.sessionHint}
                       </div>
 
                       <button
@@ -2366,7 +2364,7 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
                             : "bg-white/[0.08] text-white/75 hover:bg-white/[0.12]"
                         }`}
                       >
-                        返回
+                        {copy.account.back}
                       </button>
                     </>
                   ) : (
@@ -2380,8 +2378,20 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
                             : "text-white/75 hover:bg-white/[0.08]"
                         }`}
                       >
-                        账户管理
+                        {copy.nav.accountManage}
                         <ArrowRight size={15} />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleToggleLanguage}
+                        className={`mt-1 flex w-full items-center justify-between rounded-xl px-3 py-2.5 text-sm font-medium transition-all ${
+                          theme === "light"
+                            ? "text-black/75 hover:bg-black/[0.06]"
+                            : "text-white/75 hover:bg-white/[0.08]"
+                        }`}
+                      >
+                        {copy.nav.languageToggle}
+                        <Globe size={15} />
                       </button>
                       <button
                         type="button"
@@ -2392,7 +2402,7 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
                             : "text-white/75 hover:bg-red-500/12 hover:text-red-300"
                         }`}
                       >
-                        退出登录
+                        {copy.nav.logout}
                         <LogOut size={15} />
                       </button>
                     </>
@@ -2414,7 +2424,7 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
                   : "bg-[#3FCA58] text-white hover:bg-[#35b54d]"
               }`}
             >
-              <span className="hidden sm:inline">登录</span>
+              <span className="hidden sm:inline">{copy.nav.login}</span>
               <LogIn size={15} className="sm:hidden" />
             </button>
           )}
@@ -2435,9 +2445,9 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
               <div className="flex items-center gap-3">
                 <BrandLogo className="h-12" showText={false} />
                 <div>
-                  <h2 className="text-xl font-semibold tracking-tight">内测登录</h2>
+                  <h2 className="text-xl font-semibold tracking-tight">{copy.login.title}</h2>
                   <p className={`mt-1 text-sm ${theme === "light" ? "text-black/50" : "text-white/50"}`}>
-                    登录后可使用创作功能
+                    {copy.login.subtitle}
                   </p>
                 </div>
               </div>
@@ -2452,13 +2462,13 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
                     ? "text-black/45 hover:bg-black/5 hover:text-black"
                     : "text-white/45 hover:bg-white/8 hover:text-white"
                 }`}
-                aria-label="关闭登录"
+                aria-label={copy.login.closeAria}
               >
                 ×
               </button>
             </div>
 
-            <label className={`mb-2 block text-sm font-medium ${theme === "light" ? "text-black/75" : "text-white/80"}`}>公司邮箱</label>
+            <label className={`mb-2 block text-sm font-medium ${theme === "light" ? "text-black/75" : "text-white/80"}`}>{copy.login.emailLabel}</label>
             <div className={`mb-5 flex items-center gap-3 rounded-2xl border px-4 py-3 transition-colors focus-within:border-[#3FCA58]/70 ${
               theme === "light" ? "border-black/10 bg-black/[0.035]" : "border-white/10 bg-black/25"
             }`}>
@@ -2467,7 +2477,7 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
                 type="email"
                 value={loginEmail}
                 onChange={(event) => setLoginEmail(event.target.value)}
-                placeholder="请输入公司邮箱"
+                placeholder={copy.login.emailPlaceholder}
                 required
                 style={{ colorScheme: theme === "light" ? "light" : "dark" }}
                 className={`login-input w-full bg-transparent text-sm outline-none ${
@@ -2476,7 +2486,7 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
               />
             </div>
 
-            <label className={`mb-2 block text-sm font-medium ${theme === "light" ? "text-black/75" : "text-white/80"}`}>内测密码</label>
+            <label className={`mb-2 block text-sm font-medium ${theme === "light" ? "text-black/75" : "text-white/80"}`}>{copy.login.passwordLabel}</label>
             <div className={`mb-5 flex items-center gap-3 rounded-2xl border px-4 py-3 transition-colors focus-within:border-[#3FCA58]/70 ${
               theme === "light" ? "border-black/10 bg-black/[0.035]" : "border-white/10 bg-black/25"
             }`}>
@@ -2485,7 +2495,7 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
                 type="password"
                 value={loginPassword}
                 onChange={(event) => setLoginPassword(event.target.value)}
-                placeholder="请输入统一内测密码"
+                placeholder={copy.login.passwordPlaceholder}
                 required
                 style={{ colorScheme: theme === "light" ? "light" : "dark" }}
                 className={`login-input w-full bg-transparent text-sm outline-none ${
@@ -2505,7 +2515,7 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
               disabled={loginSubmitting}
               className="flex w-full items-center justify-center rounded-2xl bg-[#3FCA58] px-4 py-3 text-sm font-semibold text-black transition hover:bg-[#35b54d] disabled:cursor-not-allowed disabled:opacity-60"
             >
-              {loginSubmitting ? "登录中..." : "登录并进入"}
+              {loginSubmitting ? copy.login.submitting : copy.login.submit}
             </button>
           </form>
         </div>
@@ -2563,7 +2573,7 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
               key={item.src}
               type="button"
               onClick={() => setHeroSlideIndex(index)}
-              aria-label={`切换到首页轮播 ${index + 1}`}
+              aria-label={`${copy.hero.carouselAria} ${index + 1}`}
               className={`h-1.5 rounded-full transition-all ${
                 index === heroSlideIndex ? "w-7 bg-[#3FCA58]" : "w-1.5 bg-white/45 hover:bg-white/75"
               }`}
@@ -2576,17 +2586,17 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
       <section className={`relative z-10 px-6 lg:px-12 max-w-5xl mx-auto pt-32 lg:pt-40 pb-24 lg:pb-32 text-center transition-all duration-700 ${mounted ? "opacity-100 translate-y-0" : "opacity-0 translate-y-8"}`}>
         <h1 className={`font-bold text-text-primary tracking-tight ${heroPreset.title}`}>
             Easy <span style={{ color: "#3FCA58" }}>AI</span>
-            <br />让设计迈入自动化时代
+            <br />{copy.hero.titleLine}
         </h1>
         <p className={`text-text-secondary mx-auto leading-relaxed ${heroPreset.description}`}>
-          Easy AI 将海报生成、品牌资产、IP 角色、专业画布和出图质检整合成一套高质量出图设计工作流，帮助团队高效产出稳定、可交付、低成本的设计内容
+          {copy.hero.description}
         </p>
         <div className={`flex flex-wrap items-center justify-center ${heroPreset.actions}`}>
           <Link
             href="/chat"
             className={`rounded-full bg-[#3FCA58] text-white font-medium flex items-center gap-2.5 transition-all animate-[hero-button-breathe_2.4s_ease-in-out_infinite] hover:bg-[#3FCA58]/90 hover:scale-[1.04] hover:[animation-play-state:paused] active:scale-[0.98] ${heroPreset.primaryButton}`}
           >
-            一键创作模式
+            {copy.nav.oneClickMode}
             <ArrowRight size={16} />
           </Link>
           <Link
@@ -2597,7 +2607,7 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
                 : "bg-white/[0.12] text-white/80 hover:bg-white/[0.18] hover:text-white"
             }`}
           >
-            专业创作模式
+            {copy.nav.professionalMode}
             <ArrowRight size={16} />
           </Link>
         </div>
@@ -2613,7 +2623,7 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
               <button
                 type="button"
                 className="absolute bottom-2 right-2 z-10 flex h-7 w-7 items-center justify-center rounded-lg bg-black/40 text-white/80 backdrop-blur-sm transition-all hover:bg-black/60 hover:text-white"
-                title="全屏"
+                title={copy.demos.fullscreen}
                 onClick={(e) => { e.currentTarget.closest("div").querySelector("video")?.requestFullscreen?.(); }}
               >
                 <Maximize2 size={13} />
@@ -2622,10 +2632,10 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
             <div className="px-5 py-4">
               <div className="flex items-center gap-2 mb-1.5">
                 <span className="inline-block h-2 w-2 rounded-full bg-[#3FCA58]" />
-                <span className="text-xs font-semibold text-[#3FCA58]">一键创作模式</span>
+                <span className="text-xs font-semibold text-[#3FCA58]">{copy.nav.oneClickMode}</span>
               </div>
               <p className={`text-xs leading-relaxed ${theme === "light" ? "text-black/50" : "text-white/45"}`}>
-                面向未来 AI 出图，输入需求AI自动完成可交付商业内容
+                {copy.demos.oneClickDesc}
               </p>
             </div>
           </div>
@@ -2637,7 +2647,7 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
               <button
                 type="button"
                 className="absolute bottom-2 right-2 z-10 flex h-7 w-7 items-center justify-center rounded-lg bg-black/40 text-white/80 backdrop-blur-sm transition-all hover:bg-black/60 hover:text-white"
-                title="全屏"
+                title={copy.demos.fullscreen}
                 onClick={(e) => { e.currentTarget.closest("div").querySelector("video")?.requestFullscreen?.(); }}
               >
                 <Maximize2 size={13} />
@@ -2646,10 +2656,10 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
             <div className="px-5 py-4">
               <div className="flex items-center gap-2 mb-1.5">
                 <span className={`inline-block h-2 w-2 rounded-full ${theme === "light" ? "bg-black/40" : "bg-white/40"}`} />
-                <span className={`text-xs font-semibold ${theme === "light" ? "text-black/60" : "text-white/60"}`}>专业创作模式</span>
+                <span className={`text-xs font-semibold ${theme === "light" ? "text-black/60" : "text-white/60"}`}>{copy.nav.professionalMode}</span>
               </div>
               <p className={`text-xs leading-relaxed ${theme === "light" ? "text-black/50" : "text-white/45"}`}>
-                面向当下真实生产环境，AI 快速辅助提效
+                {copy.demos.professionalDesc}
               </p>
             </div>
           </div>
@@ -2659,12 +2669,13 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
       {/* Pain points */}
       <section className={`relative z-10 px-6 lg:px-12 max-w-5xl mx-auto pt-4 lg:pt-8 pb-20 transition-all duration-700 delay-200 ${mounted ? "opacity-100 translate-y-0" : "opacity-0 translate-y-8"}`}>
         <div className="text-center mb-14">
-          <h2 className="text-2xl lg:text-3xl font-bold text-text-primary mb-3">商业设计市场核心痛点</h2>
-          <p className="text-sm text-text-secondary">高频、分散、反复修改的设计需求，正在吞噬团队的创意时间</p>
+          <h2 className="text-2xl lg:text-3xl font-bold text-text-primary mb-3">{copy.painPoints.title}</h2>
+          <p className="text-sm text-text-secondary">{copy.painPoints.desc}</p>
         </div>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          {PAIN_POINTS.map((item, index) => {
-            const Icon = item.icon;
+          {copy.painPoints.items.map((item, index) => {
+            const visual = PAIN_POINT_VISUALS[index] || PAIN_POINT_VISUALS[0];
+            const Icon = visual.icon;
             return (
               <div
                 key={index}
@@ -2674,7 +2685,7 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
                     : "border-white/0 bg-bg-secondary"
                 }`}
               >
-                <div className={`w-11 h-11 rounded-xl flex items-center justify-center mx-auto mb-5 ${theme === "light" ? "bg-slate-50" : "bg-bg-tertiary"} ${item.iconColor}`}>
+                <div className={`w-11 h-11 rounded-xl flex items-center justify-center mx-auto mb-5 ${theme === "light" ? "bg-slate-50" : "bg-bg-tertiary"} ${visual.iconColor}`}>
                   <Icon size={21} />
                 </div>
                 <h3 className="text-sm font-semibold text-text-primary mb-2">{item.title}</h3>
@@ -2688,12 +2699,13 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
       {/* Features */}
       <section id="features" className={`relative z-10 px-6 lg:px-12 max-w-5xl mx-auto pt-24 lg:pt-32 pb-20 transition-all duration-700 delay-300 ${mounted ? "opacity-100 translate-y-0" : "opacity-0 translate-y-8"}`}>
         <div className="text-center mb-14">
-          <h2 className="text-2xl lg:text-3xl font-bold text-text-primary mb-3">Easy AI 核心产品能力</h2>
-          <p className="text-sm text-text-secondary">围绕设计生产、品牌一致性和低成本交付构建完整工作流</p>
+          <h2 className="text-2xl lg:text-3xl font-bold text-text-primary mb-3">{copy.features.title}</h2>
+          <p className="text-sm text-text-secondary">{copy.features.desc}</p>
         </div>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {FEATURES.map((f, i) => {
-            const Icon = f.icon;
+          {copy.features.items.map((f, i) => {
+            const visual = FEATURE_VISUALS[i] || FEATURE_VISUALS[0];
+            const Icon = visual.icon;
             return (
               <div
                 key={i}
@@ -2703,7 +2715,7 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
                     : "border-white/0 bg-bg-secondary hover:bg-bg-hover hover:shadow-lg hover:shadow-black/20"
                 }`}
               >
-                <div className={`w-10 h-10 rounded-xl flex items-center justify-center mx-auto mb-4 ${theme === "light" ? "bg-slate-50" : "bg-bg-tertiary"} ${f.iconColor}`}>
+                <div className={`w-10 h-10 rounded-xl flex items-center justify-center mx-auto mb-4 ${theme === "light" ? "bg-slate-50" : "bg-bg-tertiary"} ${visual.iconColor}`}>
                   <Icon size={20} />
                 </div>
                 <h3 className="text-sm font-semibold text-text-primary mb-2">{f.title}</h3>
@@ -2718,10 +2730,10 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
       <section className="relative z-10 bg-bg-primary py-20 lg:py-28 overflow-hidden">
         <div className="mx-auto max-w-3xl px-6 text-center mb-10 lg:mb-14">
           <h2 className="mb-5 text-2xl lg:text-3xl font-semibold tracking-tight text-text-primary">
-            一站式创作
+            {copy.oneStop.title}
           </h2>
           <p className="text-xs lg:text-sm text-text-secondary leading-relaxed">
-            一句话就是一张可交付的设计图，一键/专业两种模式任你选择，把更多时间留给创意和判断
+            {copy.oneStop.desc}
           </p>
         </div>
         <div className="h-[24vh] min-h-[160px] overflow-hidden lg:h-[30vh]">
@@ -2738,11 +2750,11 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
       {/* Value metrics */}
       <section className={`relative z-10 px-6 lg:px-12 max-w-5xl mx-auto mt-20 lg:mt-24 pt-4 lg:pt-8 pb-24 lg:pb-32 transition-all duration-700 delay-500 ${mounted ? "opacity-100 translate-y-0" : "opacity-0 translate-y-8"}`}>
         <div className="text-center mb-14">
-          <h2 className="text-2xl lg:text-3xl font-bold text-text-primary mb-3">从出图工具，到企业设计生产系统</h2>
-          <p className="text-sm text-text-secondary">成本、效率、品牌一致性和交付在Easy AI形成闭环</p>
+          <h2 className="text-2xl lg:text-3xl font-bold text-text-primary mb-3">{copy.value.title}</h2>
+          <p className="text-sm text-text-secondary">{copy.value.desc}</p>
         </div>
         <div className="mb-14 grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
-          {VALUE_METRICS.map((item) => (
+          {copy.value.metrics.map((item) => (
             <div
               key={item.title}
               className={`home-card rounded-2xl border p-7 text-center ${
@@ -2758,7 +2770,7 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
           ))}
         </div>
         <div className="relative grid grid-cols-1 gap-4 lg:grid-cols-[1fr_auto_1fr] lg:items-stretch">
-          {[VALUE_COMPARISON[0]].map((group) => (
+          {[{ ...copy.value.comparison[0], tone: VALUE_COMPARISON_TONES[0] }].map((group) => (
             <div
               key={group.label}
               className="p-6 text-center"
@@ -2792,7 +2804,7 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
               VS
             </div>
           </div>
-          {[VALUE_COMPARISON[1]].map((group) => (
+          {[{ ...copy.value.comparison[1], tone: VALUE_COMPARISON_TONES[1] }].map((group) => (
             <div
               key={group.label}
               className="p-6 text-center"
@@ -2829,13 +2841,13 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
       {/* Effect showcase */}
       <section className={`relative z-10 px-6 lg:px-12 max-w-5xl mx-auto mt-12 pt-4 lg:pt-8 pb-36 lg:pb-48 transition-all duration-700 delay-500 ${mounted ? "opacity-100 translate-y-0" : "opacity-0 translate-y-8"}`}>
         <div className="text-center mb-14">
-          <h2 className="text-2xl lg:text-3xl font-bold text-text-primary mb-3">艺术效果展示</h2>
-          <p className="text-sm text-text-secondary">覆盖品牌、角色、产品等多种创作场景</p>
+          <h2 className="text-2xl lg:text-3xl font-bold text-text-primary mb-3">{copy.effect.title}</h2>
+          <p className="text-sm text-text-secondary">{copy.effect.desc}</p>
         </div>
         <Link
           ref={effectShowcaseRef}
           href="/gallery"
-          aria-label="进入效果展示无线画布"
+          aria-label={copy.effect.enterAria}
           className="group relative block aspect-video overflow-visible bg-transparent transition-all duration-300 ease-out hover:scale-[1.015]"
         >
           <div className={`absolute inset-0 flex flex-col items-center justify-center overflow-visible px-8 text-center ${theme === "light" ? "text-[#111]" : "text-white"}`}>
@@ -2898,8 +2910,8 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
       {/* Business showcase */}
       <section className={`relative z-10 px-6 lg:px-12 max-w-5xl mx-auto -mt-[70px] pt-4 lg:pt-8 pb-36 lg:pb-48 transition-all duration-700 delay-500 ${mounted ? "opacity-100 translate-y-0" : "opacity-0 translate-y-8"}`}>
         <div className="text-center mb-14">
-          <h2 className="text-2xl lg:text-3xl font-bold text-text-primary mb-3">业务效果展示</h2>
-          <p className="text-sm text-text-secondary">向活动营销、业务宣传和品牌物料的批量设计输出</p>
+          <h2 className="text-2xl lg:text-3xl font-bold text-text-primary mb-3">{copy.business.title}</h2>
+          <p className="text-sm text-text-secondary">{copy.business.desc}</p>
         </div>
         <div ref={businessShowcaseRef} className="grid grid-cols-1 gap-6 md:grid-cols-2">
           {BUSINESS_SHOWCASE_COVERS.map((cover, index) => (
@@ -2907,7 +2919,7 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
               href="/business-gallery"
               key={cover.src}
               className="transition-transform duration-300"
-              aria-label={`进入${cover.alt}`}
+              aria-label={`${copy.business.enterAria} ${index + 1}`}
               style={{
                 transform: `translateX(${(index === 0 ? -1 : 1) * businessCardSpread * 22}px) rotate(${(index === 0 ? -1 : 1) * businessCardSpread * 6}deg) scale(${1 + businessCardSpread * 0.055})`,
                 transformOrigin: index === 0 ? "right center" : "left center",
@@ -2945,12 +2957,13 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
       {/* Models */}
       <section className={`relative z-10 px-6 lg:px-12 max-w-5xl mx-auto pt-4 lg:pt-8 pb-32 lg:pb-40 transition-all duration-700 delay-400 ${mounted ? "opacity-100 translate-y-0" : "opacity-0 translate-y-8"}`}>
         <div className="text-center mb-14">
-          <h2 className="text-2xl lg:text-3xl font-bold text-text-primary mb-3">模型选择</h2>
-          <p className="text-sm text-text-secondary">超低价格，三档算力，灵活匹配你的创作需求</p>
+          <h2 className="text-2xl lg:text-3xl font-bold text-text-primary mb-3">{copy.models.title}</h2>
+          <p className="text-sm text-text-secondary">{copy.models.desc}</p>
         </div>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-          {MODELS.map((m, i) => {
-            const Icon = m.icon;
+          {copy.models.items.map((m, i) => {
+            const visual = MODEL_VISUALS[i] || MODEL_VISUALS[0];
+            const Icon = visual.icon;
             return (
               <div
                 key={i}
@@ -2960,11 +2973,11 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
                     : "border-white/0 bg-bg-secondary hover:bg-bg-hover hover:shadow-lg hover:shadow-black/20"
                 }`}
               >
-                <div className={`w-14 h-14 rounded-2xl flex items-center justify-center mx-auto mb-5 ${theme === "light" ? "bg-slate-50" : "bg-bg-tertiary"} ${m.color}`}>
+                <div className={`w-14 h-14 rounded-2xl flex items-center justify-center mx-auto mb-5 ${theme === "light" ? "bg-slate-50" : "bg-bg-tertiary"} ${visual.color}`}>
                   <Icon size={26} />
                 </div>
-                <p className={`mb-5 text-xs leading-relaxed ${m.color}`}>{m.cost}</p>
-                <h3 className="text-base font-semibold text-text-primary mb-2">{m.name}</h3>
+                <p className={`mb-5 text-xs leading-relaxed ${visual.color}`}>{m.cost}</p>
+                <h3 className="text-base font-semibold text-text-primary mb-2">{visual.name}</h3>
                 <p className="text-xs text-text-secondary leading-relaxed">{m.desc}</p>
               </div>
             );
@@ -2988,9 +3001,9 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
         </div>
         <div className="mx-auto mt-24 lg:mt-32 max-w-6xl text-center">
           <p className="text-xl font-semibold leading-relaxed tracking-tight text-text-primary lg:text-3xl">
-            Easy AI 致力于成为企业级 AI 视觉生产基础设施，
+            {copy.summary.line1}
             <br />
-            <span className="whitespace-nowrap">帮助品牌以更低成本、更高效率，持续规模化地完成商业视觉内容交付</span>
+            <span className="whitespace-nowrap">{copy.summary.line2}</span>
           </p>
         </div>
       </section>
@@ -3009,15 +3022,15 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
                   <BrandLogo className="h-7" />
                 </div>
                 <p className="max-w-[220px] text-xs leading-relaxed text-white/55">
-                  Easy AI产品持续优化中
+                  {copy.footer.tagline}
                 </p>
               </div>
 
               <div className="md:justify-self-end">
-                <h3 className="mb-4 text-xs font-medium text-white/85">联系我</h3>
+                <h3 className="mb-4 text-xs font-medium text-white/85">{copy.footer.contactTitle}</h3>
                 <ul className="space-y-2 text-xs text-white/45">
-                  <li>邮箱：15638439536@163.com</li>
-                  <li>微信：15638439536</li>
+                  <li>{copy.footer.email}</li>
+                  <li>{copy.footer.wechat}</li>
                 </ul>
               </div>
             </div>

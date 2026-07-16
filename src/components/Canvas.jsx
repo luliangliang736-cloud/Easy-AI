@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { flushSync } from "react-dom";
 import { useToast } from "@/components/Toast";
+import { useCanvasT } from "@/lib/canvasI18n";
 import Toolbar from "@/components/Toolbar";
 
 const INITIAL_IMG_WIDTH = 280;
@@ -412,7 +413,19 @@ export default function Canvas({
   semanticEditEnabled = true,
   theme = "dark",
 }) {
-  const toast = useToast();
+  const rawToast = useToast();
+  const { t } = useCanvasT();
+  const tRef = useRef(null);
+  tRef.current = t;
+  // 包装 toast：气泡文案先过翻译表，命中不了原样展示。
+  const toastRef = useRef(null);
+  if (!toastRef.current || toastRef.current._raw !== rawToast) {
+    const wrapped = (message, ...rest) => rawToast(tRef.current ? tRef.current(message) : message, ...rest);
+    wrapped.dismiss = rawToast.dismiss;
+    wrapped._raw = rawToast;
+    toastRef.current = wrapped;
+  }
+  const toast = toastRef.current;
   const containerRef = useRef(null);
   /** 相机：同步可变对象（非 React state），平移/缩放后需 forceRender */
   const cameraRef = useRef({
@@ -1009,14 +1022,14 @@ export default function Canvas({
   const defaultShapeFill = isLightTheme ? "#000000" : "#FFFFFF";
   const resolvedCanvasColor = canvasBackgroundColor || (isLightTheme ? "#f4f5f7" : "#0b0b0c");
   const quickEditActions = [
-    { id: "cutout", label: "抠图", icon: Scissors },
-    { id: "upscale", label: "高清放大", icon: Maximize2 },
-    { id: "vectorize", label: "转矢量", icon: Spline },
+    { id: "cutout", label: t("抠图"), icon: Scissors },
+    { id: "upscale", label: t("高清放大"), icon: Maximize2 },
+    { id: "vectorize", label: t("转矢量"), icon: Spline },
   ];
   const upscaleOptionGroups = [
     {
       id: "image2",
-      label: "Image2 高清放大",
+      label: t("Image2 高清放大"),
       options: [
         { id: "2K", edge: 2048, provider: "image2", label: "Image2 2K" },
         { id: "4K", edge: 4096, provider: "image2", label: "Image2 4K" },
@@ -1024,7 +1037,7 @@ export default function Canvas({
     },
     {
       id: "nano-pro",
-      label: "Nano Pro 高清放大",
+      label: t("Nano Pro 高清放大"),
       options: [
         { id: "2K", edge: 2048, provider: "nano-pro", label: "Nano Pro 2K" },
         { id: "4K", edge: 4096, provider: "nano-pro", label: "Nano Pro 4K" },
@@ -2038,7 +2051,7 @@ export default function Canvas({
       {semanticPickActive && (
         <div className="absolute top-4 left-1/2 z-30 -translate-x-1/2 pointer-events-none">
           <div className="px-3 py-1.5 rounded-full border border-accent/40 bg-bg-primary/92 backdrop-blur-xl text-[11px] text-accent shadow-lg">
-            Ctrl/Cmd + 点击图片，选择对象区域
+            {t("Ctrl/Cmd + 点击图片，选择对象区域")}
           </div>
         </div>
       )}
@@ -2060,7 +2073,7 @@ export default function Canvas({
       {fileDragOver && (
         <div className="absolute inset-0 z-30 bg-accent/10 border-2 border-dashed border-accent/50 flex items-center justify-center pointer-events-none">
           <div className="bg-bg-secondary/90 backdrop-blur-xl px-6 py-4 rounded-2xl border border-accent/30 shadow-2xl">
-            <p className="text-sm text-accent font-medium">松手将图片添加到画布</p>
+            <p className="text-sm text-accent font-medium">{t("松手将图片添加到画布")}</p>
           </div>
         </div>
       )}
@@ -2085,8 +2098,8 @@ export default function Canvas({
                 <path d="m21 15-5-5L5 21" />
               </svg>
             </div>
-            <p className="text-sm text-text-tertiary opacity-40">在右侧面板输入提示词开始生成</p>
-            <p className="text-xs text-text-tertiary opacity-25 mt-1">中键或按住空格拖拽平移 · 滚轮缩放 · Ctrl+C / Ctrl+V · 拖入图片 · 文字工具 · 右键菜单</p>
+            <p className="text-sm text-text-tertiary opacity-40">{t("在右侧面板输入提示词开始生成")}</p>
+            <p className="text-xs text-text-tertiary opacity-25 mt-1">{t("中键或按住空格拖拽平移 · 滚轮缩放 · Ctrl+C / Ctrl+V · 拖入图片 · 文字工具 · 右键菜单")}</p>
           </div>
         )}
 
@@ -2163,7 +2176,7 @@ export default function Canvas({
                     <div className={`w-8 h-8 rounded-full border-2 border-accent/30 border-t-accent ${isRunning ? "animate-spin" : ""}`} />
                     <div className="text-center">
                       <p className="text-xs text-white font-medium">
-                        {isRunning ? "生成中" : "等待中"}
+                        {t(isRunning ? "生成中" : "等待中")}
                       </p>
                     </div>
                   </div>
@@ -2297,10 +2310,10 @@ export default function Canvas({
                               ? "text-accent bg-accent/12"
                               : "text-text-secondary hover:text-text-primary hover:bg-bg-hover"
                           }`}
-                          title="查看提示词"
+                          title={t("查看提示词")}
                         >
                           <FileText size={12} />
-                          <span>提示词</span>
+                          <span>{t("提示词")}</span>
                         </button>
                         {promptPopoverId === img.id && (
                           <div
@@ -2308,7 +2321,7 @@ export default function Canvas({
                             onPointerDown={(e) => e.stopPropagation()}
                           >
                             <div className="flex items-center justify-between mb-2">
-                              <span className="text-[11px] font-medium text-text-secondary">生成提示词</span>
+                              <span className="text-[11px] font-medium text-text-secondary">{t("生成提示词")}</span>
                               <button
                                 type="button"
                                 onClick={async (e) => {
@@ -2323,7 +2336,7 @@ export default function Canvas({
                                 className="inline-flex items-center gap-1 px-2 py-1 rounded-md text-[10px] text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors"
                               >
                                 <Copy size={10} />
-                                复制
+                                {t("复制")}
                               </button>
                             </div>
                             <p className="text-[11px] text-text-primary leading-relaxed max-h-40 overflow-y-auto break-words whitespace-pre-wrap select-text">
@@ -2369,10 +2382,10 @@ export default function Canvas({
                         })();
                       }}
                       className="inline-flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-[11px] text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors whitespace-nowrap"
-                      title="复制 (Ctrl+C)"
+                      title={t("复制 (Ctrl+C)")}
                     >
                       <Copy size={12} />
-                      <span>复制</span>
+                      <span>{t("复制")}</span>
                     </button>}
                     <button
                       type="button"
@@ -2382,10 +2395,10 @@ export default function Canvas({
                         handleContextAction("export", img);
                       }}
                       className="inline-flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-[11px] text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors whitespace-nowrap"
-                      title="下载"
+                      title={t("下载")}
                     >
                       {isSvgImage ? <Spline size={12} /> : <Download size={12} />}
-                      <span>下载</span>
+                      <span>{t("下载")}</span>
                     </button>
                     {!isSvgImage && <button
                       type="button"
@@ -2400,10 +2413,10 @@ export default function Canvas({
                           ? "text-text-tertiary/45 bg-bg-hover/40 cursor-not-allowed"
                           : "text-red-400 hover:bg-red-500/12 hover:text-red-500"
                       }`}
-                      title={isLocked ? "已锁定" : "删除"}
+                      title={t(isLocked ? "已锁定" : "删除")}
                     >
                       <Trash2 size={12} />
-                      <span>删除</span>
+                      <span>{t("删除")}</span>
                     </button>}
                   </div>
                   {!isSvgImage && (
@@ -2414,7 +2427,7 @@ export default function Canvas({
                         {isVideo ? "Video" : "Image"}
                       </span>
                     </div>
-                    <div className="px-1.5 py-0.5 shrink-0" title="原图像素尺寸">
+                    <div className="px-1.5 py-0.5 shrink-0" title={t("原图像素尺寸")}>
                       {sizeLabel}
                     </div>
                   </div>
@@ -2464,7 +2477,7 @@ export default function Canvas({
                         <path d="m21 15-3.5-3.5L9 20" />
                         <path d="m2 2 20 20" />
                       </svg>
-                      <span className="text-xs">图片已失效</span>
+                      <span className="text-xs">{t("图片已失效")}</span>
                       {img.prompt ? (
                         <span className="max-w-[80%] truncate text-[10px] opacity-70">{img.prompt}</span>
                       ) : null}
@@ -2512,10 +2525,10 @@ export default function Canvas({
                       className={`absolute left-2 bottom-2 z-10 inline-flex items-center gap-1.5 rounded-lg bg-black/62 px-2.5 py-1.5 text-[11px] font-medium text-white shadow-lg backdrop-blur-sm transition-opacity hover:bg-black/78 ${
                         isHighlighted ? "opacity-100" : "opacity-0 group-hover:opacity-100"
                       }`}
-                      title={playingVideoIds.includes(img.id) ? "暂停视频" : "播放视频"}
+                      title={t(playingVideoIds.includes(img.id) ? "暂停视频" : "播放视频")}
                     >
                       {playingVideoIds.includes(img.id) ? <Pause size={12} /> : <Play size={12} />}
-                      {playingVideoIds.includes(img.id) ? "暂停" : "播放"}
+                      {t(playingVideoIds.includes(img.id) ? "暂停" : "播放")}
                     </button>
                   )}
                   {semanticForImage?.maskDataUrl && (
@@ -2529,7 +2542,7 @@ export default function Canvas({
                   {semanticSelectingImageId === img.id && (
                     <div className="absolute inset-0 flex items-center justify-center bg-black/20 backdrop-blur-[1px] pointer-events-none">
                       <div className="px-2.5 py-1 rounded-lg bg-black/60 text-[11px] text-white">
-                        正在识别对象...
+                        {t("正在识别对象...")}
                       </div>
                     </div>
                   )}
@@ -2664,8 +2677,8 @@ export default function Canvas({
                     <button
                       type="button"
                       data-color-picker-trigger
-                      title="打开颜色选择器"
-                      aria-label="打开颜色选择器"
+                      title={t("打开颜色选择器")}
+                      aria-label={t("打开颜色选择器")}
                       className="h-6 w-6 rounded-full border-2 border-accent shadow-sm transition-transform hover:scale-105"
                       style={{ backgroundColor: fill }}
                       onClick={() => setActiveShapeColorPickerId((current) => (current === s.id ? null : s.id))}
@@ -2693,7 +2706,7 @@ export default function Canvas({
                     )}
                     <button
                       type="button"
-                      title="删除形状"
+                      title={t("删除形状")}
                       className="flex h-7 w-7 items-center justify-center rounded-md text-text-secondary transition-colors hover:bg-red-500/15 hover:text-red-400"
                       onClick={() => {
                         onDeleteShape?.(s.id);
@@ -2719,8 +2732,8 @@ export default function Canvas({
                     <button
                       key={handle}
                       type="button"
-                      title="调整大小"
-                      aria-label="调整大小"
+                      title={t("调整大小")}
+                      aria-label={t("调整大小")}
                       className={`absolute h-3 w-3 rounded-full border border-accent bg-bg-secondary shadow-md ${cursor}`}
                       style={{ left, top }}
                       onPointerDown={(e) => {
@@ -2752,21 +2765,21 @@ export default function Canvas({
           );
         })}
 
-        {textItems.map((t) => {
+        {textItems.map((txt) => {
           const isHighlighted =
-            selectedTextId === t.id || multiSelectedTextIds.includes(t.id);
-          const isEditing = editingTextId === t.id || (isTextTool && t.isDraft);
-          const fontPx = Math.min(MAX_TEXT_FONT, Math.max(MIN_TEXT_FONT, t.fontSize ?? DEFAULT_TEXT_FONT));
-          const textColor = t.color || "";
-          const boxWidth = Math.min(900, Math.max(80, t.width ?? 240));
+            selectedTextId === txt.id || multiSelectedTextIds.includes(txt.id);
+          const isEditing = editingTextId === txt.id || (isTextTool && txt.isDraft);
+          const fontPx = Math.min(MAX_TEXT_FONT, Math.max(MIN_TEXT_FONT, txt.fontSize ?? DEFAULT_TEXT_FONT));
+          const textColor = txt.color || "";
+          const boxWidth = Math.min(900, Math.max(80, txt.width ?? 240));
           const bumpFont = (delta) => {
             const next = Math.min(MAX_TEXT_FONT, Math.max(MIN_TEXT_FONT, fontPx + delta));
-            onUpdateText?.(t.id, { fontSize: next });
+            onUpdateText?.(txt.id, { fontSize: next });
           };
-          const finishTextEditing = (nextText = t.text) => {
+          const finishTextEditing = (nextText = txt.text) => {
             const textValue = String(nextText || "").trim();
             if (!textValue) {
-              onDeleteText?.(t.id);
+              onDeleteText?.(txt.id);
               setSelectedTextId(null);
             }
             setEditingTextId(null);
@@ -2778,15 +2791,15 @@ export default function Canvas({
             multiSelectedImageIds.length + multiSelectedTextIds.length <= 1;
           return (
             <div
-              key={t.id}
-              data-text-item={t.id}
+              key={txt.id}
+              data-text-item={txt.id}
               className={`absolute z-[25] ${
                 isHighlighted && !isEditing ? "outline outline-1 outline-accent/70 outline-offset-2 rounded-sm" : ""
               } ${(isSelectTool || isTextTool) && !isEditing ? "cursor-move" : ""}`}
-              style={{ left: t.x, top: t.y, width: boxWidth, opacity: textEditorOverlay?.id === t.id ? 0 : 1 }}
+              style={{ left: txt.x, top: txt.y, width: boxWidth, opacity: textEditorOverlay?.id === txt.id ? 0 : 1 }}
               onPointerDown={(e) => {
                 if (isEditing) return;
-                handleTextItemPointerDown(e, t);
+                handleTextItemPointerDown(e, txt);
               }}
             >
               {showSelectBar && (
@@ -2796,7 +2809,7 @@ export default function Canvas({
                 >
                   <button
                     type="button"
-                    title="缩小字号"
+                    title={t("缩小字号")}
                     className="w-7 h-7 rounded-md flex items-center justify-center text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors"
                     onClick={() => bumpFont(-2)}
                   >
@@ -2805,7 +2818,7 @@ export default function Canvas({
                   <span className="text-[10px] text-text-tertiary tabular-nums min-w-[2.25rem] text-center">{fontPx}px</span>
                   <button
                     type="button"
-                    title="放大字号"
+                    title={t("放大字号")}
                     className="w-7 h-7 rounded-md flex items-center justify-center text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors"
                     onClick={() => bumpFont(2)}
                   >
@@ -2817,25 +2830,25 @@ export default function Canvas({
                       <button
                         key={color}
                         type="button"
-                        title="文字颜色"
-                        aria-label="文字颜色"
+                        title={t("文字颜色")}
+                        aria-label={t("文字颜色")}
                         className={`h-5 w-5 rounded-full border transition-all ${
                           textColor && textColor.toLowerCase() === color.toLowerCase()
                             ? "border-accent ring-2 ring-accent/30"
                             : "border-border-primary hover:border-text-secondary"
                         }`}
                         style={{ backgroundColor: color }}
-                        onClick={() => onUpdateText?.(t.id, { color })}
+                        onClick={() => onUpdateText?.(txt.id, { color })}
                       />
                     ))}
                   </div>
                   <div className="w-px h-5 bg-border-primary mx-0.5" />
                   <button
                     type="button"
-                    title="删除文案"
+                    title={t("删除文案")}
                     className="w-7 h-7 rounded-md flex items-center justify-center text-text-secondary hover:text-red-400 hover:bg-red-500/15 transition-colors"
                     onClick={() => {
-                      onDeleteText?.(t.id);
+                      onDeleteText?.(txt.id);
                       setSelectedTextId(null);
                       setEditingTextId(null);
                     }}
@@ -2846,11 +2859,11 @@ export default function Canvas({
               )}
               {isEditing ? (
                 <textarea
-                  data-text-editor={t.id}
+                  data-text-editor={txt.id}
                   ref={(node) => {
                     if (!node || !isEditing) return;
                     if (document.activeElement === node) return;
-                    requestAnimationFrame(() => focusTextEditor(t.id, { select: Boolean(t.isDraft) }));
+                    requestAnimationFrame(() => focusTextEditor(txt.id, { select: Boolean(txt.isDraft) }));
                   }}
                   value={editingTextDraft}
                   onChange={(e) => {
@@ -2861,7 +2874,7 @@ export default function Canvas({
                   onPointerDown={(e) => e.stopPropagation()}
                   onBlur={(e) => {
                     const nextText = e.currentTarget.value.replace(/\n$/, "");
-                    onUpdateText?.(t.id, {
+                    onUpdateText?.(txt.id, {
                       text: nextText,
                       isDraft: false,
                     });
@@ -2884,33 +2897,33 @@ export default function Canvas({
                     setMultiSelectedImageIds([]);
                     setMultiSelectedTextIds([]);
                     setSelectedShapeId(null);
-                    setSelectedTextId(t.id);
-                    openTextEditorOverlay(t);
+                    setSelectedTextId(txt.id);
+                    openTextEditorOverlay(txt);
                   }}
                   style={{ fontSize: fontPx, color: textColor || undefined, width: boxWidth }}
                   className={`whitespace-pre-wrap leading-snug ${
                     isSelectTool && !isEditing ? "cursor-move" : "cursor-text"
                   } ${
-                    t.text.trim()
+                    txt.text.trim()
                       ? `text-text-primary ${isLightTheme ? "" : "[text-shadow:0_1px_3px_rgba(0,0,0,0.85),0_0_12px_rgba(0,0,0,0.35)]"}`
                       : `text-text-tertiary/90 ${isLightTheme ? "" : "[text-shadow:0_1px_2px_rgba(0,0,0,0.6)]"}`
                   }`}
                 >
-                  {t.text.trim() ? t.text : "输入文字"}
+                  {txt.text.trim() ? txt.text : t("输入文字")}
                 </div>
               )}
               {isHighlighted && !isEditing && multiSelectedImageIds.length + multiSelectedTextIds.length <= 1 && (
                 <button
                   type="button"
-                  title="拖拽调整文字框宽度"
-                  aria-label="拖拽调整文字框宽度"
+                  title={t("拖拽调整文字框宽度")}
+                  aria-label={t("拖拽调整文字框宽度")}
                   className="absolute -bottom-2 -right-2 h-4 w-4 rounded-full border border-accent bg-bg-secondary shadow-md cursor-ew-resize"
                   onPointerDown={(e) => {
                     e.preventDefault();
                     e.stopPropagation();
                     setAction({
                       type: "text_resize",
-                      id: t.id,
+                      id: txt.id,
                       startX: e.clientX,
                       origWidth: boxWidth,
                     });

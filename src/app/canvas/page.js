@@ -14,7 +14,8 @@ import { useAuthSessionGuard } from "@/lib/useAuthSessionGuard";
 import { CLOUD_STATE_RESTORED_EVENT, useCloudLocalStorageSync } from "@/lib/useCloudLocalStorageSync";
 import { CLOUD_STATE_DELETIONS_KEY, normalizeCloudStateDeletions, recordCloudDeletions } from "@/lib/cloudStateDeletions";
 import { MAX_GEN_COUNT } from "@/lib/genLimits";
-import { ChevronsLeft, Home as HomeIcon, Layers, Loader2, Plus } from "lucide-react";
+import { useCanvasT } from "@/lib/canvasI18n";
+import { ChevronsLeft, Globe, Home as HomeIcon, Layers, Loader2, Plus } from "lucide-react";
 
 const FLOATING_ENTRY_DRAFT_KEY = "lovart-floating-entry-draft";
 const CANVAS_REF_IMAGES_STORAGE_KEY = "lovart-canvas-ref-images";
@@ -1468,7 +1469,19 @@ ${instructions}
 }
 
 function HomeInner() {
-  const toast = useToast();
+  const rawToast = useToast();
+  const { t, language, toggleLanguage } = useCanvasT();
+  const tRef = useRef(null);
+  tRef.current = t;
+  // 包装 toast：所有气泡文案先过翻译表，命中不了（如服务端错误）原样展示。
+  const toastRef = useRef(null);
+  if (!toastRef.current || toastRef.current._raw !== rawToast) {
+    const wrapped = (message, ...rest) => rawToast(tRef.current ? tRef.current(message) : message, ...rest);
+    wrapped.dismiss = rawToast.dismiss;
+    wrapped._raw = rawToast;
+    toastRef.current = wrapped;
+  }
+  const toast = toastRef.current;
   const { theme, toggleTheme } = useTheme("dark");
   const initialConversationRef = useRef(createConversation());
   const [activeTool, setActiveTool] = useState("select");
@@ -4021,7 +4034,7 @@ function HomeInner() {
             type="button"
             onClick={() => setShowLogoMenu((value) => !value)}
             className="flex items-center gap-0.5 rounded-lg px-0.5 py-0.5 transition-opacity hover:opacity-80"
-            title="菜单"
+            title={t("菜单")}
           >
             <BrandLogo
               className="h-6 w-auto"
@@ -4043,8 +4056,20 @@ function HomeInner() {
                 onClick={() => setShowLogoMenu(false)}
               >
                 <HomeIcon size={14} className="shrink-0" />
-                返回首页
+                {t("返回首页")}
               </Link>
+              <button
+                type="button"
+                onClick={toggleLanguage}
+                className={`flex w-full items-center gap-2 rounded-lg px-3 py-2 text-[13px] font-medium transition-colors ${
+                  theme === "light"
+                    ? "text-black/75 hover:bg-black/[0.06] hover:text-black"
+                    : "text-white/75 hover:bg-white/[0.08] hover:text-white"
+                }`}
+              >
+                <Globe size={14} className="shrink-0" />
+                {language === "zh" ? "English" : "中文"}
+              </button>
             </div>
           )}
         </div>
@@ -4060,12 +4085,12 @@ function HomeInner() {
                 ? "text-black/50 hover:bg-black/[0.05] hover:text-black/80"
                 : "text-white/50 hover:bg-white/[0.06] hover:text-white"
           }`}
-          title={isInspirationMode ? "收起项目列表" : "展开项目列表 · 管理画布"}
+          title={isInspirationMode ? t("收起项目列表") : t("展开项目列表 · 管理画布")}
         >
           <Layers size={15} className="shrink-0" />
-          {activeCanvasBoard?.title || "项目层"}
+          {t(activeCanvasBoard?.title || "项目层")}
           {hasOtherBoardTaskNotice && (
-            <span className="h-1.5 w-1.5 rounded-full bg-green-500" aria-label="其它画布有新结果" />
+            <span className="h-1.5 w-1.5 rounded-full bg-green-500" aria-label={t("其它画布有新结果")} />
           )}
         </button>
       </div>
@@ -4078,7 +4103,7 @@ function HomeInner() {
             <div className={`flex h-12 shrink-0 items-center justify-between gap-3 border-b px-4 ${theme === "light" ? "border-black/8" : "border-white/8"}`}>
               <div className="min-w-0">
                 <div className={`inline-flex items-center gap-1.5 text-sm font-semibold ${theme === "light" ? "text-[#111]" : "text-white"}`}>
-                  项目列表
+                  {t("项目列表")}
                 </div>
               </div>
               <button
@@ -4089,8 +4114,8 @@ function HomeInner() {
                     ? "text-black/55 hover:bg-black/[0.05] hover:text-black"
                     : "text-white/55 hover:bg-white/[0.06] hover:text-white"
                 }`}
-                title="新建画布"
-                aria-label="新建画布"
+                title={t("新建画布")}
+                aria-label={t("新建画布")}
               >
                 <Plus size={16} />
               </button>
@@ -4099,7 +4124,7 @@ function HomeInner() {
             <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 pr-5 scrollbar-thin">
               {projectBoards.length === 0 ? (
                 <div className={`flex h-full items-center justify-center px-8 text-center text-xs leading-relaxed ${theme === "light" ? "text-black/35" : "text-white/30"}`}>
-                  暂无项目
+                  {t("暂无项目")}
                 </div>
               ) : (
                 projectBoards.map((board) => {
@@ -4210,8 +4235,8 @@ function HomeInner() {
                             {generatingCount > 0 && (
                               <span
                                 className="relative inline-flex h-5 w-5 items-center justify-center rounded-full bg-black/45 text-green-300 backdrop-blur-sm"
-                                title={generatingCount > 1 ? `生成中 ${generatingCount}` : "生成中"}
-                                aria-label={generatingCount > 1 ? `生成中 ${generatingCount}` : "生成中"}
+                                title={t(generatingCount > 1 ? `生成中 ${generatingCount}` : "生成中")}
+                                aria-label={t(generatingCount > 1 ? `生成中 ${generatingCount}` : "生成中")}
                               >
                                 <Loader2 size={12} className="animate-spin" />
                                 {generatingCount > 1 && (
@@ -4223,12 +4248,12 @@ function HomeInner() {
                             )}
                             {showCompletedNotice && (
                               <span className="rounded-md bg-green-500/85 px-1.5 py-0.5 text-[10px] text-white backdrop-blur-sm">
-                                完成
+                                {t("完成")}
                               </span>
                             )}
                             {showFailedNotice && (
                               <span className="rounded-md bg-red-500/85 px-1.5 py-0.5 text-[10px] text-white backdrop-blur-sm">
-                                失败
+                                {t("失败")}
                               </span>
                             )}
                           </div>
@@ -4257,21 +4282,21 @@ function HomeInner() {
                               onDoubleClick={() => {
                                 if (canRenameBoard) startProjectRename(board);
                               }}
-                              title={canRenameBoard ? "双击重命名" : "默认画布不能重命名"}
+                              title={t(canRenameBoard ? "双击重命名" : "默认画布不能重命名")}
                               className="min-w-0 flex-1 truncate text-left text-sm font-medium"
                             >
-                              {board.title || "默认画布"}
+                              {t(board.title || "默认画布")}
                             </span>
                           )}
                           {isActive && !isRenaming && (
                             <span className="shrink-0 rounded-md bg-green-500/15 px-1.5 py-0.5 text-[10px] text-green-600">
-                              当前
+                              {t("当前")}
                             </span>
                           )}
                         </div>
                         {boardUpdatedLabel && !isRenaming && (
                           <div className={`px-1 pt-0.5 text-[10px] ${theme === "light" ? "text-black/35" : "text-white/35"}`}>
-                            更新于 {boardUpdatedLabel}
+                            {t("更新于")} {boardUpdatedLabel}
                           </div>
                         )}
                       </div>
@@ -4304,7 +4329,7 @@ function HomeInner() {
                       theme === "light" ? "hover:bg-black/[0.05]" : "hover:bg-white/[0.06]"
                     }`}
                   >
-                    重命名
+                    {t("重命名")}
                   </button>
                 )}
                 {canDeleteContextProjectBoard && (
@@ -4320,7 +4345,7 @@ function HomeInner() {
                         : "text-red-300 hover:bg-red-500/10"
                     }`}
                   >
-                    删除
+                    {t("删除")}
                   </button>
                 )}
               </div>
@@ -4328,7 +4353,7 @@ function HomeInner() {
           </aside>
           <button
             type="button"
-            aria-label="调整项目层面板宽度"
+            aria-label={t("调整项目层面板宽度")}
             onPointerDown={handleInspirationResizeStart}
             className={`absolute right-0 top-0 h-full w-2 translate-x-1/2 cursor-col-resize transition-colors ${theme === "light" ? "hover:bg-black/10" : "hover:bg-white/12"}`}
           />
@@ -4378,9 +4403,9 @@ function HomeInner() {
             onChange={handleTextEditBlocksChange}
             onCancel={handleCancelTextEditPanel}
             onApply={handleApplyTextEditPanel}
-            title="编辑文字"
-            subtitle="填写替换内容后，可直接取消或立即发送修改"
-            applyLabel="立即使用"
+            title={t("编辑文字")}
+            subtitle={t("填写替换内容后，可直接取消或立即发送修改")}
+            applyLabel={t("立即使用")}
             isApplying={isTextEditing}
           />
         </div>
@@ -4449,8 +4474,8 @@ function HomeInner() {
               ? "border-black/10 bg-white text-black/55 hover:text-black"
               : "border-white/12 bg-[#1a1a1c] text-white/55 hover:text-white"
           }`}
-          title="展开对话面板"
-          aria-label="展开对话面板"
+          title={t("展开对话面板")}
+          aria-label={t("展开对话面板")}
         >
           <ChevronsLeft size={16} />
         </button>

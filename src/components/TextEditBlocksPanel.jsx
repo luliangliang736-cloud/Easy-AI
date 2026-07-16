@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCanvasT } from "@/lib/canvasI18n";
 
 export default function TextEditBlocksPanel({
   blocks = [],
@@ -9,10 +10,12 @@ export default function TextEditBlocksPanel({
   onCancel,
   title = "识别到的文字",
   subtitle = "直接填写“替换为”内容，发送时会自动带入编辑指令",
-  applyLabel = "立即使用",
+  applyLabel,
   isApplying = false,
   className = "",
 }) {
+  const { t } = useCanvasT();
+  const resolvedApplyLabel = applyLabel || t("立即使用");
   const [draftBlocks, setDraftBlocks] = useState(blocks);
 
   useEffect(() => {
@@ -42,8 +45,8 @@ export default function TextEditBlocksPanel({
       <div className="p-3 border-b border-border-primary">
         <div className="flex items-center justify-between gap-2">
           <div>
-            <p className="text-sm font-medium text-text-primary">{title}</p>
-            <p className="text-[10px] text-text-tertiary mt-0.5">{subtitle}</p>
+            <p className="text-sm font-medium text-text-primary">{t(title)}</p>
+            <p className="text-[10px] text-text-tertiary mt-0.5">{t(subtitle)}</p>
           </div>
           <button
             type="button"
@@ -51,7 +54,7 @@ export default function TextEditBlocksPanel({
             disabled={isApplying}
             className="text-[10px] px-2 py-1 rounded-md border border-border-primary text-text-tertiary hover:text-text-primary hover:bg-bg-hover transition-colors shrink-0"
           >
-            清空
+            {t("清空")}
           </button>
         </div>
       </div>
@@ -69,11 +72,11 @@ export default function TextEditBlocksPanel({
               <p className="text-xs text-text-secondary truncate">{block.text}</p>
             </div>
             <div className="grid grid-cols-[52px_1fr] gap-2 items-start">
-              <span className="text-[10px] text-text-tertiary pt-1">替换为</span>
+              <span className="text-[10px] text-text-tertiary pt-1">{t("替换为")}</span>
               <input
                 value={block.replacement || ""}
                 onChange={(e) => updateBlock(block.id, { replacement: e.target.value })}
-                placeholder="输入新文案"
+                placeholder={t("输入新文案")}
                 className="w-full rounded-lg bg-bg-secondary border border-border-primary px-2.5 py-2 text-xs text-text-primary placeholder-text-tertiary outline-none focus:border-accent/40"
               />
             </div>
@@ -90,7 +93,7 @@ export default function TextEditBlocksPanel({
           disabled={isApplying}
           className="flex-1 rounded-xl border border-border-primary px-3 py-2 text-sm text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
         >
-          取消
+          {t("取消")}
         </button>
         <button
           type="button"
@@ -101,7 +104,7 @@ export default function TextEditBlocksPanel({
           className="flex-1 rounded-xl bg-text-primary px-3 py-2 text-sm text-bg-primary hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
           disabled={activeCount === 0 || isApplying}
         >
-          {isApplying ? "处理中..." : applyLabel}
+          {isApplying ? t("处理中...") : t(resolvedApplyLabel)}
         </button>
       </div>
     </div>

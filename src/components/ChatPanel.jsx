@@ -32,6 +32,7 @@ import {
 } from "lucide-react";
 import { compressImage } from "@/lib/imageUtils";
 import { MAX_GEN_COUNT } from "@/lib/genLimits";
+import { useCanvasT } from "@/lib/canvasI18n";
 import TextEditBlocksPanel from "@/components/TextEditBlocksPanel";
 const CANVAS_IMAGE_MIME = "application/x-easy-ai-canvas-image";
 
@@ -346,6 +347,7 @@ function isVideoReferenceSource(src) {
 }
 
 function ReferenceThumb({ src, index, sizeClass = "h-14 w-14", onClick }) {
+  const { t } = useCanvasT();
   const isVideo = isVideoReferenceSource(src);
   const commonClass = `${sizeClass} rounded-lg object-cover border border-border-primary`;
 
@@ -354,7 +356,7 @@ function ReferenceThumb({ src, index, sizeClass = "h-14 w-14", onClick }) {
       type="button"
       onClick={onClick}
       className={`relative block overflow-hidden rounded-lg bg-bg-hover ${onClick ? "cursor-pointer hover:opacity-80 transition-opacity" : ""}`}
-      title={isVideo ? `参考视频 ${index + 1}` : `参考图 ${index + 1}`}
+      title={t(isVideo ? `参考视频 ${index + 1}` : `参考图 ${index + 1}`)}
     >
       {isVideo ? (
         <>
@@ -399,6 +401,7 @@ function ImageLightbox({ src, onClose }) {
 }
 
 function MessageBubble({ message, onRetry, onDownload, onImageClick, onPreview, onPauseGenerate, onDelete }) {
+  const { t } = useCanvasT();
   const isVideoMessage = message.mediaType === "video";
   const [playingVideoUrls, setPlayingVideoUrls] = useState([]);
   const handleGeneratedImageDragStart = useCallback((e, url, index) => {
@@ -422,7 +425,7 @@ function MessageBubble({ message, onRetry, onDownload, onImageClick, onPreview, 
               type="button"
               onClick={() => onDelete?.(message.id)}
               className="w-7 h-7 rounded-lg flex items-center justify-center text-text-tertiary hover:text-red-400 hover:bg-red-500/10 transition-all opacity-0 group-hover/message:opacity-100"
-              title="删除记录"
+              title={t("删除记录")}
             >
               <Trash2 size={13} />
             </button>
@@ -439,14 +442,14 @@ function MessageBubble({ message, onRetry, onDownload, onImageClick, onPreview, 
                   onClick={() => isVideoReferenceSource(src) ? window.open(src, "_blank") : onPreview?.(src)}
                 />
               ))}
-              <span className="text-[10px] text-text-tertiary self-end">{message.refImages.length}个参考素材</span>
+              <span className="text-[10px] text-text-tertiary self-end">{message.refImages.length}{t("个参考素材")}</span>
             </div>
           )}
           <p className="text-sm text-text-primary leading-relaxed">{message.text}</p>
           <div className="flex items-center gap-2 mt-1.5 flex-wrap">
             <span className="text-[10px] text-text-tertiary">
               {message.modelLabel} · {message.params?.image_size}
-              {message.params?.num > 1 && ` · ${message.params.num}张`}
+              {message.params?.num > 1 && ` · ${message.params.num}${t("张")}`}
             </span>
           </div>
         </div>
@@ -461,15 +464,15 @@ function MessageBubble({ message, onRetry, onDownload, onImageClick, onPreview, 
         <div className="flex items-center gap-1.5 mb-2 min-w-0">
           <Eye size={13} className="flex-shrink-0 text-text-tertiary" />
           <span className="truncate text-[11px] text-text-tertiary">
-            {message.modelLabel || "生成结果"}
+            {message.modelLabel || t("生成结果")}
             {message.params?.image_size ? ` · ${message.params.image_size}` : ""}
-            {message.params?.num > 1 ? ` · ${message.params.num}张` : ""}
+            {message.params?.num > 1 ? ` · ${message.params.num}${t("张")}` : ""}
           </span>
           <button
             type="button"
             onClick={() => onDelete?.(message.id)}
             className="ml-auto w-7 h-7 rounded-lg flex items-center justify-center flex-shrink-0 text-text-tertiary hover:text-red-400 hover:bg-red-500/10 transition-all opacity-0 group-hover/message:opacity-100"
-            title="删除记录"
+            title={t("删除记录")}
           >
             <Trash2 size={13} />
           </button>
@@ -478,42 +481,42 @@ function MessageBubble({ message, onRetry, onDownload, onImageClick, onPreview, 
         {message.status === "generating" && message.tasks?.length > 0 && (
           <div className="bg-bg-tertiary border border-border-primary rounded-2xl rounded-tl-md px-4 py-4">
             <p className="text-sm text-text-primary mb-2">
-              生成中{" "}
-              {message.tasks.filter((t) => t.status === "completed").length}/
+              {t("生成中")}{" "}
+              {message.tasks.filter((task) => task.status === "completed").length}/
               {message.tasks.length}
             </p>
             <div className="grid grid-cols-2 gap-2">
-              {message.tasks.map((t) => (
+              {message.tasks.map((task) => (
                 <div
-                  key={t.id}
+                  key={task.id}
                   className="rounded-lg border border-border-primary overflow-hidden bg-bg-secondary/50 min-h-[100px] flex flex-col"
                 >
-                  {t.status === "pending" && (
+                  {task.status === "pending" && (
                     <div className="flex-1 flex items-center justify-center text-[10px] text-text-tertiary py-6">
-                      等待中
+                      {t("等待中")}
                     </div>
                   )}
-                  {t.status === "generating" && (
+                  {task.status === "generating" && (
                     <div className="flex-1 flex items-center justify-center py-6">
                       <Loader2 size={20} className="text-accent animate-spin" />
                     </div>
                   )}
-                  {t.status === "completed" && t.url && (
+                  {task.status === "completed" && task.url && (
                     <button
                       type="button"
                       className="relative w-full cursor-pointer"
-                      onClick={() => onPreview?.(t.url)}
+                      onClick={() => onPreview?.(task.url)}
                     >
-                      {t.type === "video" || isVideoMessage ? (
-                        <video src={t.url} className="w-full object-cover" muted playsInline />
+                      {task.type === "video" || isVideoMessage ? (
+                        <video src={task.url} className="w-full object-cover" muted playsInline />
                       ) : (
-                        <img src={t.url} alt="" className="w-full object-cover" />
+                        <img src={task.url} alt="" className="w-full object-cover" />
                       )}
                     </button>
                   )}
-                  {t.status === "failed" && (
+                  {task.status === "failed" && (
                     <div className="p-2 text-[10px] text-error leading-snug">
-                      {t.error || "失败"}
+                      {t(task.error || "失败")}
                     </div>
                   )}
                 </div>
@@ -524,7 +527,7 @@ function MessageBubble({ message, onRetry, onDownload, onImageClick, onPreview, 
                 onClick={onPauseGenerate}
                 className="mt-3 px-3 py-1.5 rounded-lg bg-bg-hover text-xs text-text-secondary hover:text-text-primary border border-border-primary transition-all flex items-center gap-1.5"
               >
-                <PauseCircle size={12} /> 暂停全部
+                <PauseCircle size={12} /> {t("暂停全部")}
               </button>
             )}
           </div>
@@ -535,11 +538,11 @@ function MessageBubble({ message, onRetry, onDownload, onImageClick, onPreview, 
             <div className="flex items-center gap-3">
               <Loader2 size={18} className="text-accent animate-spin" />
               <div>
-                <p className="text-sm text-text-primary">正在生成{isVideoMessage ? "视频" : "图片"}...</p>
+                <p className="text-sm text-text-primary">{t(isVideoMessage ? "正在生成视频..." : "正在生成图片...")}</p>
                 <p className="text-xs text-text-tertiary mt-0.5">
                   {isVideoMessage
-                    ? "预计 1-4 分钟"
-                    : `${message.params?.num > 1 ? `共 ${message.params.num} 张，` : ""}预计 10-30 秒`}
+                    ? t("预计 1-4 分钟")
+                    : t(`${message.params?.num > 1 ? `共 ${message.params.num} 张，` : ""}预计 10-30 秒`)}
                 </p>
               </div>
             </div>
@@ -552,7 +555,7 @@ function MessageBubble({ message, onRetry, onDownload, onImageClick, onPreview, 
                 onClick={onPauseGenerate}
                 className="mt-3 px-3 py-1.5 rounded-lg bg-bg-hover text-xs text-text-secondary hover:text-text-primary border border-border-primary transition-all flex items-center gap-1.5"
               >
-                <PauseCircle size={12} /> 暂停生成
+                <PauseCircle size={12} /> {t("暂停生成")}
               </button>
             )}
           </div>
@@ -562,16 +565,16 @@ function MessageBubble({ message, onRetry, onDownload, onImageClick, onPreview, 
           <div className="bg-bg-tertiary border border-warning/20 rounded-2xl rounded-tl-md px-4 py-3">
             <div className="flex items-center gap-2 text-warning mb-1">
               <PauseCircle size={16} />
-              <span className="text-sm font-medium">已暂停</span>
+              <span className="text-sm font-medium">{t("已暂停")}</span>
             </div>
             <p className="text-xs text-text-tertiary mb-3">
-              当前生成已手动暂停，你可以修改提示词或参数后重新生成。
+              {t("当前生成已手动暂停，你可以修改提示词或参数后重新生成。")}
             </p>
             <button
               onClick={() => onRetry?.(message)}
               className="px-3 py-1.5 rounded-lg bg-bg-hover text-xs text-text-secondary hover:text-text-primary border border-border-primary transition-all flex items-center gap-1.5"
             >
-              <RotateCw size={12} /> 重新生成
+              <RotateCw size={12} /> {t("重新生成")}
             </button>
           </div>
         )}
@@ -587,7 +590,7 @@ function MessageBubble({ message, onRetry, onDownload, onImageClick, onPreview, 
                   onClick={() => {
                     if (!isVideoMessage) onPreview?.(url);
                   }}
-                  title={isVideoMessage ? "可直接拖入左侧画布" : "可直接拖入左侧画布，点击预览"}
+                  title={t(isVideoMessage ? "可直接拖入左侧画布" : "可直接拖入左侧画布，点击预览")}
                 >
                   {isVideoMessage ? (
                     <>
@@ -619,10 +622,10 @@ function MessageBubble({ message, onRetry, onDownload, onImageClick, onPreview, 
                           }
                         }}
                         className="absolute left-2 bottom-2 inline-flex items-center gap-1.5 rounded-lg bg-black/62 px-2.5 py-1.5 text-[11px] font-medium text-white shadow-lg backdrop-blur-sm transition-colors hover:bg-black/78"
-                        title={playingVideoUrls.includes(url) ? "暂停视频" : "播放视频"}
+                        title={t(playingVideoUrls.includes(url) ? "暂停视频" : "播放视频")}
                       >
                         {playingVideoUrls.includes(url) ? <Pause size={12} /> : <Play size={12} />}
-                        {playingVideoUrls.includes(url) ? "暂停" : "播放"}
+                        {t(playingVideoUrls.includes(url) ? "暂停" : "播放")}
                       </button>
                     </>
                   ) : (
@@ -647,7 +650,7 @@ function MessageBubble({ message, onRetry, onDownload, onImageClick, onPreview, 
                       onDownload?.({ ...message, image_url: url });
                     }}
                     className="absolute right-2 bottom-2 text-white opacity-0 drop-shadow-[0_1px_3px_rgba(0,0,0,0.7)] transition-opacity hover:scale-110 group-hover/result:opacity-100"
-                    title="下载"
+                    title={t("下载")}
                   >
                     <Download size={15} />
                   </button>
@@ -661,14 +664,14 @@ function MessageBubble({ message, onRetry, onDownload, onImageClick, onPreview, 
           <div className="bg-bg-tertiary border border-error/20 rounded-2xl rounded-tl-md px-4 py-3">
             <div className="flex items-center gap-2 text-error mb-1">
               <AlertCircle size={16} />
-              <span className="text-sm font-medium">生成失败</span>
+              <span className="text-sm font-medium">{t("生成失败")}</span>
             </div>
             <p className="text-xs text-text-tertiary mb-3">
-              {typeof message.error === "string" ? message.error : message.error?.message || JSON.stringify(message.error) || "未知错误"}
+              {t(typeof message.error === "string" ? message.error : message.error?.message || JSON.stringify(message.error) || "未知错误")}
             </p>
             <button onClick={() => onRetry?.(message)}
               className="px-3 py-1.5 rounded-lg bg-bg-hover text-xs text-text-secondary hover:text-text-primary border border-border-primary transition-all flex items-center gap-1.5">
-              <RotateCw size={12} /> 重试
+              <RotateCw size={12} /> {t("重试")}
             </button>
           </div>
         )}
@@ -726,6 +729,7 @@ export default function ChatPanel({
   onCanvasHistorySearchChange,
   onCollapse,
 }) {
+  const { t } = useCanvasT();
   const messagesEndRef = useRef(null);
   const fileInputRef = useRef(null);
   const conversationMenuRef = useRef(null);
@@ -1178,8 +1182,8 @@ export default function ChatPanel({
                     ? "text-green-600 bg-green-500/10"
                     : "text-text-tertiary hover:text-text-primary hover:bg-bg-hover"
                 }`}
-                title="历史结果"
-                aria-label="历史结果"
+                title={t("历史结果")}
+                aria-label={t("历史结果")}
               >
                 <ImageIcon size={16} />
               </button>
@@ -1190,9 +1194,9 @@ export default function ChatPanel({
                     <div>
                       <div className="flex items-center gap-2">
                         <Clock size={14} className="text-text-tertiary" />
-                        <span className="text-sm font-medium text-text-primary">历史结果</span>
+                        <span className="text-sm font-medium text-text-primary">{t("历史结果")}</span>
                       </div>
-                      <div className="mt-0.5 text-[11px] text-text-tertiary">点击缩略图可预览结果</div>
+                      <div className="mt-0.5 text-[11px] text-text-tertiary">{t("点击缩略图可预览结果")}</div>
                     </div>
                     <div className="flex items-center gap-2">
                       {canvasCompletedHistory.length > 0 && (
@@ -1206,7 +1210,7 @@ export default function ChatPanel({
                           onClick={onClearCanvasHistory}
                           className="rounded-lg px-2 py-1 text-[11px] text-text-tertiary transition-all hover:bg-red-500/10 hover:text-red-400"
                         >
-                          清空
+                          {t("清空")}
                         </button>
                       )}
                     </div>
@@ -1220,7 +1224,7 @@ export default function ChatPanel({
                           type="text"
                           value={canvasHistorySearch}
                           onChange={(event) => onCanvasHistorySearchChange?.(event.target.value)}
-                          placeholder="搜索历史..."
+                          placeholder={t("搜索历史...")}
                           className="flex-1 bg-transparent text-[11px] text-text-primary outline-none placeholder-text-tertiary"
                         />
                         {canvasHistorySearch && (
@@ -1241,7 +1245,7 @@ export default function ChatPanel({
                       <div className="flex flex-col items-center justify-center px-4 py-10 text-center">
                         <ImageIcon size={24} className="mb-2 text-text-tertiary opacity-30" />
                         <p className="text-[11px] text-text-tertiary opacity-60">
-                          {canvasHistorySearch ? "没有匹配的记录" : "暂无生成记录"}
+                          {t(canvasHistorySearch ? "没有匹配的记录" : "暂无生成记录")}
                         </p>
                       </div>
                     )}
@@ -1283,7 +1287,7 @@ export default function ChatPanel({
                                 ) : (
                                   <img
                                     src={url}
-                                    alt={`历史图片 ${i + 1}`}
+                                    alt={t(`历史图片 ${i + 1}`)}
                                     className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
                                     loading="lazy"
                                   />
@@ -1299,8 +1303,8 @@ export default function ChatPanel({
                           <div className="mt-1 flex items-center gap-1.5 text-[10px] text-text-tertiary">
                             <span className="truncate">{message.modelLabel}</span>
                             {message.mediaType === "video"
-                              ? <span className="text-accent">视频</span>
-                              : message.urls?.length > 1 && <span className="text-accent">{message.urls.length}张</span>}
+                              ? <span className="text-accent">{t("视频")}</span>
+                              : message.urls?.length > 1 && <span className="text-accent">{message.urls.length}{t("张")}</span>}
                             <span className="ml-auto flex-shrink-0">{time}</span>
                           </div>
                           <button
@@ -1311,7 +1315,7 @@ export default function ChatPanel({
                             }}
                             className="mt-2 w-full rounded-lg border border-border-primary bg-bg-tertiary px-2.5 py-1.5 text-[11px] font-medium text-text-secondary transition-all hover:border-accent/30 hover:bg-accent/10 hover:text-text-primary"
                           >
-                            一键填入
+                            {t("一键填入")}
                           </button>
                         </div>
                       );
@@ -1328,7 +1332,7 @@ export default function ChatPanel({
                   setShowCanvasHistoryMenu(false);
                 }}
                 className="w-8 h-8 rounded-lg flex items-center justify-center text-text-tertiary hover:text-text-primary hover:bg-bg-hover transition-all"
-                title={activeConversation?.title || "当前对话"}
+                title={activeConversation?.title || t("当前对话")}
               >
                 <Plus size={16} />
                 <ChevronDown size={12} className={`ml-0.5 transition-transform ${showConversationMenu ? "rotate-180" : ""}`} />
@@ -1337,7 +1341,7 @@ export default function ChatPanel({
               {showConversationMenu && (
                 <div className="absolute right-0 top-[calc(100%+8px)] w-[280px] rounded-2xl border border-border-primary bg-bg-secondary/95 backdrop-blur-xl shadow-2xl p-3 space-y-3 z-30 animate-fade-in">
                   <div className="flex items-center justify-between gap-2">
-                    <span className="text-sm font-medium text-text-primary">历史对话</span>
+                    <span className="text-sm font-medium text-text-primary">{t("历史对话")}</span>
                     <button
                       type="button"
                       onClick={() => {
@@ -1347,7 +1351,7 @@ export default function ChatPanel({
                       className="h-9 px-3 rounded-xl bg-accent text-white hover:bg-accent-hover transition-all flex items-center gap-1.5 text-xs font-medium"
                     >
                       <Plus size={14} />
-                      新建对话
+                      {t("新建对话")}
                     </button>
                   </div>
 
@@ -1357,7 +1361,7 @@ export default function ChatPanel({
                       type="text"
                       value={conversationSearch}
                       onChange={(e) => setConversationSearch(e.target.value)}
-                      placeholder="请输入搜索关键词"
+                      placeholder={t("请输入搜索关键词")}
                       className="flex-1 bg-transparent text-sm text-text-primary placeholder-text-tertiary outline-none"
                     />
                   </div>
@@ -1365,7 +1369,7 @@ export default function ChatPanel({
                   <div className="max-h-64 overflow-y-auto space-y-1.5 scrollbar-thin pr-1">
                     {filteredConversations.length === 0 && (
                       <div className="px-3 py-6 text-center text-sm text-text-tertiary">
-                        没有匹配的历史对话
+                        {t("没有匹配的历史对话")}
                       </div>
                     )}
                     {filteredConversations.map((conversation) => {
@@ -1387,7 +1391,7 @@ export default function ChatPanel({
                         >
                           <div className="flex items-start gap-2">
                             <p className={`text-sm font-medium truncate flex-1 ${isActive ? "text-text-primary" : "text-text-secondary"}`}>
-                              {conversation.title || "新建对话"}
+                              {conversation.title || t("新建对话")}
                             </p>
                             <div className="flex items-center gap-1.5 flex-shrink-0">
                               <span className="text-[10px] text-text-tertiary">
@@ -1400,14 +1404,14 @@ export default function ChatPanel({
                                   onDeleteConversation?.(conversation.id);
                                 }}
                                 className="w-7 h-7 rounded-lg flex items-center justify-center text-text-tertiary hover:text-red-400 hover:bg-red-500/10 transition-all"
-                                title="删除对话"
+                                title={t("删除对话")}
                               >
                                 <Trash2 size={13} />
                               </button>
                             </div>
                           </div>
                           <p className="text-[11px] text-text-tertiary mt-1 line-clamp-2">
-                            {lastMessage?.text || "暂无消息"}
+                            {lastMessage?.text || t("暂无消息")}
                           </p>
                         </button>
                       );
@@ -1420,7 +1424,7 @@ export default function ChatPanel({
               <button
                 onClick={onToggleTheme}
                 className="w-8 h-8 rounded-lg flex items-center justify-center text-text-tertiary hover:text-text-primary hover:bg-bg-hover transition-all"
-                title={theme === "dark" ? "切换到浅色" : "切换到深色"}
+                title={t(theme === "dark" ? "切换到浅色" : "切换到深色")}
               >
                 {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
               </button>
@@ -1430,8 +1434,8 @@ export default function ChatPanel({
                 type="button"
                 onClick={onCollapse}
                 className="w-8 h-8 rounded-lg flex items-center justify-center text-text-tertiary hover:text-text-primary hover:bg-bg-hover transition-all"
-                title="收起对话面板"
-                aria-label="收起对话面板"
+                title={t("收起对话面板")}
+                aria-label={t("收起对话面板")}
               >
                 <ChevronsRight size={16} />
               </button>
@@ -1443,20 +1447,20 @@ export default function ChatPanel({
         <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4 min-h-0">
           {messages.length === 0 && (
             <div className="flex flex-col items-center justify-center h-full text-center px-4">
-              <h3 className="text-sm font-medium text-text-primary mb-2">快速制作好想法</h3>
+              <h3 className="text-sm font-medium text-text-primary mb-2">{t("快速制作好想法")}</h3>
               <p className="text-xs text-text-tertiary leading-relaxed mb-4">
-                支持拖拽多张图片进行参考或编辑
+                {t("支持拖拽多张图片进行参考或编辑")}
               </p>
               {!isQuickEntryMode && (
                 <div className="w-full space-y-1.5 text-left">
-                  {MODEL_TIERS.map((t) => {
-                    const Icon = t.icon;
+                  {MODEL_TIERS.map((tierItem) => {
+                    const Icon = tierItem.icon;
                     return (
-                      <div key={t.id} className="flex items-center gap-2 px-3 py-2 rounded-lg bg-bg-tertiary border border-border-primary">
+                      <div key={tierItem.id} className="flex items-center gap-2 px-3 py-2 rounded-lg bg-bg-tertiary border border-border-primary">
                         <Icon size={14} className={MODEL_ICON_CLASS} />
                         <div>
-                          <p className="text-[11px] text-text-primary font-medium">{t.name}</p>
-                          <p className="text-[10px] text-text-tertiary">{t.desc} · 最多{t.maxInputImages}张参考图</p>
+                          <p className="text-[11px] text-text-primary font-medium">{tierItem.name}</p>
+                          <p className="text-[10px] text-text-tertiary">{t(tierItem.desc)} · {t(`最多${tierItem.maxInputImages}张参考图`)}</p>
                         </div>
                       </div>
                     );
@@ -1494,7 +1498,7 @@ export default function ChatPanel({
                       : "text-text-secondary hover:text-text-primary"
                   }`}
                 >
-                  自动
+                  {t("自动")}
                 </button>
                 <button
                   type="button"
@@ -1505,14 +1509,14 @@ export default function ChatPanel({
                       : "text-text-secondary hover:text-text-primary"
                   }`}
                 >
-                  手动
+                  {t("手动")}
                 </button>
               </div>
               {composerMode === "manual" && (
                 <button onClick={onToggleParams}
                   className="flex items-center gap-1.5 text-[11px] text-text-tertiary hover:text-text-secondary transition-colors flex-1">
                   <Settings2 size={12} />
-                  <span>生成参数</span>
+                  <span>{t("生成参数")}</span>
                   <ChevronDown size={12} className={`ml-auto transition-transform ${showParams ? "rotate-180" : ""}`} />
                 </button>
               )}
@@ -1522,7 +1526,7 @@ export default function ChatPanel({
           {!isQuickEntryMode && composerMode === "manual" && showParams && (
             <div className="space-y-3 py-2 animate-fade-in">
               <div>
-                <span className="block text-[11px] text-text-tertiary mb-1.5">模型</span>
+                <span className="block text-[11px] text-text-tertiary mb-1.5">{t("模型")}</span>
                 <div className="relative" data-model-menu-root>
                   {(() => {
                     const Icon = currentTier.icon;
@@ -1535,14 +1539,14 @@ export default function ChatPanel({
                         <Icon size={14} className={PARAM_ACTIVE_ICON_CLASS} />
                         <div className="min-w-0 flex-1">
                           <p className="text-[11px] font-medium text-white">{currentTier.name}</p>
-                          <p className={`text-[10px] truncate ${PARAM_ACTIVE_MUTED_TEXT_CLASS}`}>{currentTier.desc}</p>
+                          <p className={`text-[10px] truncate ${PARAM_ACTIVE_MUTED_TEXT_CLASS}`}>{t(currentTier.desc)}</p>
                         </div>
                         <ChevronDown size={14} className={`text-white/75 transition-transform ${showModelMenu ? "rotate-180" : ""}`} />
                       </button>
                     );
                   })()}
                   {showModelMenu && (
-                    <div className="absolute left-0 right-0 top-[calc(100%+6px)] z-40 space-y-1 rounded-xl border border-border-primary bg-bg-secondary/98 p-1.5 shadow-2xl backdrop-blur-xl">
+                    <div className="absolute left-0 right-0 bottom-[calc(100%+6px)] z-40 space-y-1 rounded-xl border border-border-primary bg-bg-secondary/98 p-1.5 shadow-2xl backdrop-blur-xl">
                       {MODEL_TIERS.map((tier) => {
                         const Icon = tier.icon;
                         const active = currentTier.id === tier.id;
@@ -1567,7 +1571,7 @@ export default function ChatPanel({
                             <Icon size={14} className={active ? PARAM_ACTIVE_ICON_CLASS : MODEL_ICON_CLASS} />
                             <div className="min-w-0 flex-1">
                               <p className={`text-[11px] font-medium ${active ? "text-white" : "text-text-secondary"}`}>{tier.name}</p>
-                              <p className={`text-[10px] truncate ${active ? PARAM_ACTIVE_MUTED_TEXT_CLASS : "text-text-tertiary"}`}>{tier.desc}</p>
+                              <p className={`text-[10px] truncate ${active ? PARAM_ACTIVE_MUTED_TEXT_CLASS : "text-text-tertiary"}`}>{t(tier.desc)}</p>
                             </div>
                           </button>
                         );
@@ -1578,12 +1582,12 @@ export default function ChatPanel({
               </div>
               {currentTier.variants.length > 1 && (
                 <div>
-                  <span className="block text-[11px] text-text-tertiary mb-1.5">模型规格</span>
+                  <span className="block text-[11px] text-text-tertiary mb-1.5">{t("模型规格")}</span>
                   <div className="flex gap-1.5 flex-wrap">
                     {currentTier.variants.map((v) => (
                       <button key={v.model} onClick={() => onParamsChange({ ...params, model: v.model })}
                         className={`px-2.5 py-1.5 rounded-lg text-[11px] font-medium transition-all ${params.model === v.model ? PARAM_ACTIVE_CLASS : "bg-bg-tertiary text-text-secondary hover:bg-bg-hover border border-border-primary"}`}>
-                        {v.label}
+                        {t(v.label)}
                         {!isKlingVideoTier && (
                           <span className="block text-[9px] opacity-60">{getVariantCredits(v, currentServiceTier)} credits</span>
                         )}
@@ -1594,7 +1598,7 @@ export default function ChatPanel({
               )}
               {showServiceTierOptions && (
                 <div>
-                  <span className="block text-[11px] text-text-tertiary mb-1.5">线路</span>
+                  <span className="block text-[11px] text-text-tertiary mb-1.5">{t("线路")}</span>
                   <div className="grid grid-cols-2 gap-1.5">
                     {SERVICE_TIERS.map((tier) => (
                       <button
@@ -1607,8 +1611,8 @@ export default function ChatPanel({
                             : "bg-bg-tertiary border-border-primary text-text-secondary hover:bg-bg-hover"
                         }`}
                       >
-                        <span className="block text-[11px] font-medium">{tier.label}</span>
-                        <span className={`block text-[10px] mt-0.5 ${params.service_tier === tier.id ? PARAM_ACTIVE_MUTED_TEXT_CLASS : "text-text-tertiary"}`}>{tier.desc}</span>
+                        <span className="block text-[11px] font-medium">{t(tier.label)}</span>
+                        <span className={`block text-[10px] mt-0.5 ${params.service_tier === tier.id ? PARAM_ACTIVE_MUTED_TEXT_CLASS : "text-text-tertiary"}`}>{t(tier.desc)}</span>
                       </button>
                     ))}
                   </div>
@@ -1616,20 +1620,20 @@ export default function ChatPanel({
               )}
               {isKlingVideoTier ? (
                 <CollapsibleParamSection
-                  title="Kling 视频参数"
+                  title={t("Kling 视频参数")}
                   summary={[
-                    `比例 ${params.image_size || "参考图"}`,
+                    `${t("比例")} ${params.image_size || t("参考图")}`,
                     `${params.duration || "5"}s`,
                     currentKlingModeLabel,
-                    (params.sound || "off") === "on" ? "有声" : "无声",
-                    isKlingFirstLastFrame ? "首尾帧" : klingRefCount === 1 ? "图生视频" : "文生视频",
+                    t((params.sound || "off") === "on" ? "有声" : "无声"),
+                    t(isKlingFirstLastFrame ? "首尾帧" : klingRefCount === 1 ? "图生视频" : "文生视频"),
                   ].join(" · ")}
                   open
                   onToggle={() => {}}
                 >
                   <div className="pt-2 space-y-3">
                     <div>
-                      <span className="block text-[11px] text-text-tertiary mb-1.5">视频比例</span>
+                      <span className="block text-[11px] text-text-tertiary mb-1.5">{t("视频比例")}</span>
                       <div className="flex gap-1 flex-wrap">
                         {availableRatios.map((r) => (
                           <button
@@ -1650,12 +1654,12 @@ export default function ChatPanel({
                         ))}
                       </div>
                       <p className="text-[10px] text-text-tertiary mt-1.5">
-                        再次点击已选比例可取消；有参考图时取消比例会优先按参考图比例生成。
+                        {t("再次点击已选比例可取消；有参考图时取消比例会优先按参考图比例生成。")}
                       </p>
                     </div>
                     <div>
                       <div className="mb-2 flex items-center justify-between">
-                        <span className="block text-[11px] text-text-tertiary">生成时长</span>
+                        <span className="block text-[11px] text-text-tertiary">{t("生成时长")}</span>
                         <span className="text-[11px] font-medium text-text-secondary">{params.duration || "5"}s</span>
                       </div>
                       {isKlingV26 ? (
@@ -1691,11 +1695,11 @@ export default function ChatPanel({
                         </div>
                       )}
                       <p className="text-[10px] text-text-tertiary mt-1.5">
-                        {klingDurationHint}
+                        {t(klingDurationHint)}
                       </p>
                     </div>
                     <div>
-                      <span className="block text-[11px] text-text-tertiary mb-1.5">分辨率模式</span>
+                      <span className="block text-[11px] text-text-tertiary mb-1.5">{t("分辨率模式")}</span>
                       <div className="flex gap-1.5 flex-wrap">
                         {availableKlingModes.map((item) => (
                           <button
@@ -1713,11 +1717,11 @@ export default function ChatPanel({
                         ))}
                       </div>
                       <p className="text-[10px] text-text-tertiary mt-1.5">
-                        {klingModeHint}
+                        {t(klingModeHint)}
                       </p>
                     </div>
                     <div>
-                      <span className="block text-[11px] text-text-tertiary mb-1.5">声音</span>
+                      <span className="block text-[11px] text-text-tertiary mb-1.5">{t("声音")}</span>
                       <div className="grid grid-cols-2 gap-1.5">
                         {KLING_SOUND_OPTIONS.map((item) => (
                           <button
@@ -1740,31 +1744,31 @@ export default function ChatPanel({
                                 : "border-border-primary bg-bg-tertiary text-text-secondary hover:bg-bg-hover"
                             }`}
                           >
-                            <span className="block text-[11px] font-medium">{item.label}</span>
+                            <span className="block text-[11px] font-medium">{t(item.label)}</span>
                             <span className={`mt-0.5 block text-[10px] ${
                               String(params.sound || "off") === item.value
                                 ? PARAM_ACTIVE_MUTED_TEXT_CLASS
                                 : "text-text-tertiary"
                             }`}>
-                              {item.value === "on" && !canUseKlingSound ? "当前模型/首尾帧不支持" : item.desc}
+                              {t(item.value === "on" && !canUseKlingSound ? "当前模型/首尾帧不支持" : item.desc)}
                             </span>
                           </button>
                         ))}
                       </div>
                       <p className="text-[10px] text-text-tertiary mt-1.5">
-                        {klingSoundHint} 0 张参考图为文生视频，1 张为图生视频，2 张为首尾帧生视频。
+                        {t(klingSoundHint)} {t("0 张参考图为文生视频，1 张为图生视频，2 张为首尾帧生视频。")}
                       </p>
                     </div>
                   </div>
                 </CollapsibleParamSection>
               ) : isSeedanceVideoTier ? (
                 <CollapsibleParamSection
-                  title="Seedance 视频参数"
+                  title={t("Seedance 视频参数")}
                   summary={[
-                    `比例 ${params.image_size || "16:9"}`,
+                    `${t("比例")} ${params.image_size || "16:9"}`,
                     `${params.duration || "5"}s`,
                     params.resolution || (String(params.model || "").includes("fast") ? "720p" : "1080p"),
-                    (refImages?.length || 0) === 0 ? "文生视频" : (refImages?.length || 0) === 1 ? "图生视频" : "首尾帧视频",
+                    t((refImages?.length || 0) === 0 ? "文生视频" : (refImages?.length || 0) === 1 ? "图生视频" : "首尾帧视频"),
                   ].join(" · ")}
                   open
                   onToggle={() => {}}
@@ -1778,7 +1782,7 @@ export default function ChatPanel({
                     return (
                       <div className="pt-2 space-y-3">
                         <div>
-                          <span className="block text-[11px] text-text-tertiary mb-1.5">视频比例</span>
+                          <span className="block text-[11px] text-text-tertiary mb-1.5">{t("视频比例")}</span>
                           <div className="flex gap-1 flex-wrap">
                             {availableRatios.map((r) => (
                               <button
@@ -1798,7 +1802,7 @@ export default function ChatPanel({
                         </div>
                         <div>
                           <div className="mb-2 flex items-center justify-between">
-                            <span className="block text-[11px] text-text-tertiary">生成时长</span>
+                            <span className="block text-[11px] text-text-tertiary">{t("生成时长")}</span>
                             <span className="text-[11px] font-medium text-text-secondary">{params.duration || "5"}s</span>
                           </div>
                           <div className="grid grid-cols-[28px_1fr_32px] items-center gap-2">
@@ -1814,10 +1818,10 @@ export default function ChatPanel({
                             />
                             <span className="text-right text-[11px] text-text-tertiary">15s</span>
                           </div>
-                          <p className="text-[10px] text-text-tertiary mt-1">支持 4–15 秒。</p>
+                          <p className="text-[10px] text-text-tertiary mt-1">{t("支持 4–15 秒。")}</p>
                         </div>
                         <div>
-                          <span className="block text-[11px] text-text-tertiary mb-1.5">分辨率</span>
+                          <span className="block text-[11px] text-text-tertiary mb-1.5">{t("分辨率")}</span>
                           <div className="flex gap-1.5 flex-wrap">
                             {seedanceResolutions.map((item) => (
                               <button
@@ -1835,8 +1839,8 @@ export default function ChatPanel({
                             ))}
                           </div>
                           <p className="text-[10px] text-text-tertiary mt-1.5">
-                            {isSeedanceFast ? "快速版最高 720p。" : "标准版支持最高 2K，分辨率越高消耗 token 越多。"}
-                            {" "}0 张参考图为文生视频，1 张为图生视频（首帧），2 张为首尾帧生视频。
+                            {t(isSeedanceFast ? "快速版最高 720p。" : "标准版支持最高 2K，分辨率越高消耗 token 越多。")}
+                            {" "}{t("0 张参考图为文生视频，1 张为图生视频（首帧），2 张为首尾帧生视频。")}
                           </p>
                         </div>
                       </div>
@@ -1845,16 +1849,14 @@ export default function ChatPanel({
                 </CollapsibleParamSection>
               ) : isGptImage2Tier ? (
                 <CollapsibleParamSection
-                  title="GPT 高级参数"
+                  title={t("GPT 高级参数")}
                   summary={[
-                    currentGptRatio === "auto"
-                      ? `宽高比 Auto`
-                      : `宽高比 ${currentGptRatio}`,
-                    exactSize ? `精确 ${exactSize.width}x${exactSize.height}` : null,
-                    `分辨率 ${currentGptResolution === "auto" ? "Auto" : currentGptResolution}`,
-                    `质量 ${currentGptQualityLabel}`,
-                    `格式 ${currentGptFormatLabel}`,
-                    `审核 ${currentGptModerationLabel}`,
+                    `${t("宽高比")} ${currentGptRatio === "auto" ? "Auto" : currentGptRatio}`,
+                    exactSize ? `${t("精确")} ${exactSize.width}x${exactSize.height}` : null,
+                    `${t("分辨率")} ${currentGptResolution === "auto" ? "Auto" : currentGptResolution}`,
+                    `${t("质量")} ${t(currentGptQualityLabel)}`,
+                    `${t("格式")} ${currentGptFormatLabel}`,
+                    `${t("审核")} ${t(currentGptModerationLabel)}`,
                   ].filter(Boolean).join(" · ")}
                   open={gptAdvancedOpen}
                   onToggle={() => setGptAdvancedOpen((prev) => !prev)}
@@ -1862,7 +1864,7 @@ export default function ChatPanel({
                   <div className="pt-2 space-y-3">
                     <div>
                       <span className="block text-[11px] text-text-tertiary mb-1.5">
-                        宽高比{currentTier.extendedRatios && <span className="text-text-tertiary ml-1">+ 扩展</span>}
+                        {t("宽高比")}{currentTier.extendedRatios && <span className="text-text-tertiary ml-1">{t("+ 扩展")}</span>}
                       </span>
                       <div className="flex gap-1 flex-wrap">
                         {availableRatios.map((r) => (
@@ -1874,17 +1876,17 @@ export default function ChatPanel({
                       </div>
                       {params.image_size === "auto" && params._autoDimensions && (
                         <p className="text-[10px] text-emerald-400 mt-1.5">
-                          已识别: {params._autoDimensions} px
+                          {t("已识别:")} {params._autoDimensions} px
                         </p>
                       )}
                       {params.image_size === "auto" && !params._autoDimensions && (
                         <p className="text-[10px] text-text-tertiary mt-1.5">
-                          GPT Image 2 将交给 API 自动决定尺寸
+                          {t("GPT Image 2 将交给 API 自动决定尺寸")}
                         </p>
                       )}
                     </div>
                     <div>
-                      <span className="block text-[11px] text-text-tertiary mb-1.5">渲染质量</span>
+                      <span className="block text-[11px] text-text-tertiary mb-1.5">{t("渲染质量")}</span>
                       <div className="flex gap-1.5 flex-wrap">
                         {GPT_IMAGE_2_QUALITY_OPTIONS.map((item) => (
                           <button
@@ -1897,16 +1899,16 @@ export default function ChatPanel({
                                 : "bg-bg-tertiary text-text-secondary hover:bg-bg-hover border border-border-primary"
                             }`}
                           >
-                            {item.label}
+                            {t(item.label)}
                           </button>
                         ))}
                       </div>
                       <p className="text-[10px] text-text-tertiary mt-1.5">
-                        `auto` 让 API 自动取舍速度和画质，`low` 更快，`high` 更适合最终成图。
+                        {t("`auto` 让 API 自动取舍速度和画质，`low` 更快，`high` 更适合最终成图。")}
                       </p>
                     </div>
                     <div>
-                      <span className="block text-[11px] text-text-tertiary mb-1.5">输出格式</span>
+                      <span className="block text-[11px] text-text-tertiary mb-1.5">{t("输出格式")}</span>
                       <div className="flex gap-1.5 flex-wrap">
                         {GPT_IMAGE_2_FORMAT_OPTIONS.map((item) => (
                           <button
@@ -1952,11 +1954,11 @@ export default function ChatPanel({
                         </div>
                       )}
                       <p className="text-[10px] text-text-tertiary mt-1.5">
-                        PNG 画质最好；JPEG / WebP 支持压缩，通常下载更小、返回更快。
+                        {t("PNG 画质最好；JPEG / WebP 支持压缩，通常下载更小、返回更快。")}
                       </p>
                     </div>
                     <div>
-                      <span className="block text-[11px] text-text-tertiary mb-1.5">审核强度</span>
+                      <span className="block text-[11px] text-text-tertiary mb-1.5">{t("审核强度")}</span>
                       <div className="flex gap-1.5 flex-wrap">
                         {GPT_IMAGE_2_MODERATION_OPTIONS.map((item) => (
                           <button
@@ -1969,12 +1971,12 @@ export default function ChatPanel({
                                 : "bg-bg-tertiary text-text-secondary hover:bg-bg-hover border border-border-primary"
                             }`}
                           >
-                            {item.label}
+                            {t(item.label)}
                           </button>
                         ))}
                       </div>
                       <p className="text-[10px] text-text-tertiary mt-1.5">
-                        `low` 会更宽松，但仍然会受到平台内容策略限制。
+                        {t("`low` 会更宽松，但仍然会受到平台内容策略限制。")}
                       </p>
                     </div>
                   </div>
@@ -1982,7 +1984,7 @@ export default function ChatPanel({
               ) : (
                 <div>
                   <span className="block text-[11px] text-text-tertiary mb-1.5">
-                    宽高比{currentTier.extendedRatios && <span className="text-text-tertiary ml-1">+ 扩展</span>}
+                    {t("宽高比")}{currentTier.extendedRatios && <span className="text-text-tertiary ml-1">{t("+ 扩展")}</span>}
                   </span>
                   <div className="flex gap-1 flex-wrap">
                     {availableRatios.map((r) => (
@@ -1994,12 +1996,12 @@ export default function ChatPanel({
                   </div>
                   {params.image_size === "auto" && params._autoDimensions && (
                     <p className="text-[10px] text-emerald-400 mt-1">
-                      已识别: {params._autoDimensions} px
+                      {t("已识别:")} {params._autoDimensions} px
                     </p>
                   )}
                   {params.image_size === "auto" && !params._autoDimensions && (
                     <p className="text-[10px] text-text-tertiary mt-1">
-                      上传参考图后显示具体宽高（像素）
+                      {t("上传参考图后显示具体宽高（像素）")}
                     </p>
                   )}
                 </div>
@@ -2007,7 +2009,7 @@ export default function ChatPanel({
               {!isKlingVideoTier && (
               <div>
                 <span className="block text-[11px] text-text-tertiary mb-1.5">
-                  生成数量（1–{MAX_GEN_COUNT}）
+                  {t(`生成数量（1–${MAX_GEN_COUNT}）`)}
                 </span>
                 <div className="flex items-center gap-2">
                   <input
@@ -2030,7 +2032,7 @@ export default function ChatPanel({
                     }}
                     className="w-20 px-2 py-1.5 rounded-lg text-[11px] font-medium bg-bg-tertiary border border-border-primary text-text-primary tabular-nums"
                   />
-                  <span className="text-[10px] text-text-tertiary">张 · 提示词里写「3张」等会与该数取较大值</span>
+                  <span className="text-[10px] text-text-tertiary">{t("张 · 提示词里写「3张」等会与该数取较大值")}</span>
                 </div>
               </div>
               )}
@@ -2083,7 +2085,7 @@ export default function ChatPanel({
           >
             <button onClick={() => fileInputRef.current?.click()}
               className="flex-shrink-0 p-1.5 rounded-lg text-text-tertiary hover:text-text-primary hover:bg-bg-hover transition-all"
-              title={`上传参考图 (最多${maxImages}张)`}>
+              title={t(`上传参考图 (最多${maxImages}张)`)}>
               <ImagePlus size={18} />
             </button>
             <input ref={fileInputRef} type="file" accept="image/*" multiple className="hidden" onChange={handleFileSelect} />
@@ -2092,7 +2094,7 @@ export default function ChatPanel({
               value={prompt}
               onChange={(e) => onPromptChange(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder={
+              placeholder={t(
                 dragOver ? "松手添加图片..."
                 : isQuickEntryMode
                   ? (refImages?.length > 0
@@ -2104,7 +2106,7 @@ export default function ChatPanel({
                       : "直接描述你想要的结果，系统会自动处理参数...")
                   : refImages?.length > 0 ? "描述你想对图片做的处理..."
                   : "描述你想生成的图片，可拖入参考图..."
-              }
+              )}
               rows={1}
               className="flex-1 bg-transparent text-text-primary placeholder-text-tertiary resize-none outline-none text-sm leading-5 max-h-24 overflow-y-auto"
               style={{ fieldSizing: "content" }}
@@ -2114,7 +2116,7 @@ export default function ChatPanel({
               <button
                 onClick={onPauseGenerate}
                 className="flex-shrink-0 p-2 rounded-lg transition-all bg-warning/15 text-warning hover:bg-warning/25"
-                title="暂停生成"
+                title={t("暂停生成")}
               >
                 <PauseCircle size={16} />
               </button>

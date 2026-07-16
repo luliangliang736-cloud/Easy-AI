@@ -1,0 +1,256 @@
+export const HOME_LANGUAGE_STORAGE_KEY = "easyai-home-language";
+
+export const HOME_COPY = {
+  zh: {
+    nav: {
+      modeMenuTitle: "选择模式",
+      oneClickMode: "一键创作模式",
+      professionalMode: "专业创作模式",
+      themeToLight: "切换到浅色",
+      themeToDark: "切换到深色",
+      profileTitle: "个人信息",
+      login: "登录",
+      accountManage: "账户管理",
+      logout: "退出登录",
+      languageToggle: "English",
+    },
+    account: {
+      defaultUserName: "EasyAI 内测用户",
+      displayNameLabel: "显示名称",
+      displayNamePlaceholder: "填写你的显示名称",
+      avatarLabel: "头像",
+      avatarHint: "支持上传 JPG / PNG 图片，仅保存在当前浏览器。",
+      uploadAvatar: "上传头像",
+      resetDefault: "恢复默认",
+      sessionHint: "登录状态保留 30 天，仅用于团队内测访问控制。",
+      back: "返回",
+    },
+    login: {
+      title: "内测登录",
+      subtitle: "登录后可使用创作功能",
+      closeAria: "关闭登录",
+      emailLabel: "公司邮箱",
+      emailPlaceholder: "请输入公司邮箱",
+      passwordLabel: "内测密码",
+      passwordPlaceholder: "请输入统一内测密码",
+      submitting: "登录中...",
+      submit: "登录并进入",
+      failed: "登录失败",
+    },
+    hero: {
+      titleLine: "让设计迈入自动化时代",
+      description:
+        "Easy AI 将海报生成、品牌资产、IP 角色、专业画布和出图质检整合成一套高质量出图设计工作流，帮助团队高效产出稳定、可交付、低成本的设计内容",
+      carouselAria: "切换到首页轮播",
+    },
+    demos: {
+      fullscreen: "全屏",
+      oneClickDesc: "面向未来 AI 出图，输入需求AI自动完成可交付商业内容",
+      professionalDesc: "面向当下真实生产环境，AI 快速辅助提效",
+    },
+    painPoints: {
+      title: "商业设计市场核心痛点",
+      desc: "高频、分散、反复修改的设计需求，正在吞噬团队的创意时间",
+      items: [
+        { title: "高频物料消耗时间", desc: "活动、海报、社媒图等都要快速迭代" },
+        { title: "品牌一致性难维护", desc: "多人协作时 Logo、色彩、IP、版式容易跑偏" },
+        { title: "重复设计占用人力", desc: "大量时间花在改尺寸、换文案、套模板上" },
+      ],
+    },
+    features: {
+      title: "Easy AI 核心产品能力",
+      desc: "围绕设计生产、品牌一致性和低成本交付构建完整工作流",
+      items: [
+        { title: "AI 设计生产线", desc: "一句话完成之前耗费时间的重复设计" },
+        { title: "品牌资产控制台", desc: "统一管理 Logo、品牌色、IP 角色与出图规范" },
+        { title: "营销内容生成引擎", desc: "批量生成海报、活动图与业务宣传等高频物料" },
+        { title: "可编辑交付画布", desc: "生成结果可继续精修、排版、组合并沉淀复用" },
+        { title: "智能出图质检", desc: "一键利用AI评分和建议系统检测出图质量" },
+        { title: "低成本规模化供给", desc: "Easy AI单图平均成本低于市面平台十倍以上" },
+      ],
+    },
+    oneStop: {
+      title: "一站式创作",
+      desc: "一句话就是一张可交付的设计图，一键/专业两种模式任你选择，把更多时间留给创意和判断",
+    },
+    value: {
+      title: "从出图工具，到企业设计生产系统",
+      desc: "成本、效率、品牌一致性和交付在Easy AI形成闭环",
+      metrics: [
+        { value: "10x+", title: "成本优势", desc: "单图平均成本低于市面平台十倍以上" },
+        { value: "分钟级", title: "设计启动", desc: "从需求到首版设计图，大幅缩短启动时间" },
+        { value: "稳定", title: "品牌输出", desc: "品牌资产、IP 角色与模板规范可持续复用" },
+        { value: "闭环", title: "可交付流程", desc: "生成、编辑、质检、再优化形成完整工作流" },
+      ],
+      comparison: [
+        {
+          label: "传统设计流程",
+          title: "沟通、修改、质检、交付反复消耗",
+          points: ["多人沟通", "反复改稿", "人工质检", "手动交付"],
+        },
+        {
+          label: "Easy AI 自动化流程",
+          title: "一句需求驱动完整设计生产闭环",
+          points: ["AI 生成", "品牌约束", "专业画布", "质检优化"],
+        },
+      ],
+    },
+    effect: {
+      title: "艺术效果展示",
+      desc: "覆盖品牌、角色、产品等多种创作场景",
+      enterAria: "进入效果展示无线画布",
+    },
+    business: {
+      title: "业务效果展示",
+      desc: "向活动营销、业务宣传和品牌物料的批量设计输出",
+      enterAria: "进入业务效果展示",
+    },
+    models: {
+      title: "模型选择",
+      desc: "超低价格，三档算力，灵活匹配你的创作需求",
+      items: [
+        { desc: "推荐 · 高性价比 · 最高4K", cost: "平均一张图 0.12-0.15元" },
+        { desc: "专业画质 · Thinking · 最高4K", cost: "平均一张图 0.25-0.30元" },
+        { desc: "灵活尺寸 · 高保真输入 · 图像编辑", cost: "平均一张图 0.08-0.10元" },
+      ],
+    },
+    summary: {
+      line1: "Easy AI 致力于成为企业级 AI 视觉生产基础设施，",
+      line2: "帮助品牌以更低成本、更高效率，持续规模化地完成商业视觉内容交付",
+    },
+    footer: {
+      tagline: "Easy AI产品持续优化中",
+      contactTitle: "联系我",
+      email: "邮箱：15638439536@163.com",
+      wechat: "微信：15638439536",
+    },
+  },
+  en: {
+    nav: {
+      modeMenuTitle: "Select mode",
+      oneClickMode: "One-Click Creation",
+      professionalMode: "Professional Creation",
+      themeToLight: "Switch to light mode",
+      themeToDark: "Switch to dark mode",
+      profileTitle: "Profile",
+      login: "Log In",
+      accountManage: "Account Settings",
+      logout: "Log Out",
+      languageToggle: "中文",
+    },
+    account: {
+      defaultUserName: "EasyAI Beta User",
+      displayNameLabel: "Display Name",
+      displayNamePlaceholder: "Enter your display name",
+      avatarLabel: "Avatar",
+      avatarHint: "JPG / PNG supported, stored only in this browser.",
+      uploadAvatar: "Upload Avatar",
+      resetDefault: "Reset to Default",
+      sessionHint: "Login stays valid for 30 days, used only for internal beta access control.",
+      back: "Back",
+    },
+    login: {
+      title: "Internal Beta Login",
+      subtitle: "Log in to use creation features",
+      closeAria: "Close login",
+      emailLabel: "Company Email",
+      emailPlaceholder: "Enter your company email",
+      passwordLabel: "Beta Password",
+      passwordPlaceholder: "Enter the shared beta password",
+      submitting: "Logging in...",
+      submit: "Log In & Enter",
+      failed: "Login failed",
+    },
+    hero: {
+      titleLine: "Bringing Design into the Age of Automation",
+      description:
+        "Easy AI combines poster generation, brand assets, IP characters, a professional canvas and output QA into one high-quality design workflow, helping teams deliver stable, ready-to-ship designs at low cost",
+      carouselAria: "Go to slide",
+    },
+    demos: {
+      fullscreen: "Fullscreen",
+      oneClickDesc: "Built for the future of AI imaging: type a request and AI delivers ready-to-ship commercial content",
+      professionalDesc: "Built for today's real production environments, with fast AI assistance",
+    },
+    painPoints: {
+      title: "Core Pain Points of Commercial Design",
+      desc: "High-frequency, scattered and endlessly revised design requests are eating your team's creative time",
+      items: [
+        { title: "High-Frequency Assets Drain Time", desc: "Campaigns, posters and social images all need rapid iteration" },
+        { title: "Brand Consistency Is Hard to Keep", desc: "Logos, colors, IP and layouts drift when many people collaborate" },
+        { title: "Repetitive Design Wastes Manpower", desc: "Hours go into resizing, swapping copy and filling templates" },
+      ],
+    },
+    features: {
+      title: "Easy AI Core Capabilities",
+      desc: "A complete workflow built around design production, brand consistency and low-cost delivery",
+      items: [
+        { title: "AI Design Production Line", desc: "One sentence replaces hours of repetitive design work" },
+        { title: "Brand Asset Console", desc: "Manage logos, brand colors, IP characters and output specs in one place" },
+        { title: "Marketing Content Engine", desc: "Batch-generate posters, campaign visuals and other high-frequency assets" },
+        { title: "Editable Delivery Canvas", desc: "Refine, lay out, combine and reuse generated results" },
+        { title: "Smart Output QA", desc: "One-click AI scoring and suggestions for output quality" },
+        { title: "Low-Cost Scale Supply", desc: "Average cost per image is 10x+ lower than mainstream platforms" },
+      ],
+    },
+    oneStop: {
+      title: "One-Stop Creation",
+      desc: "One sentence becomes a deliverable design. Choose One-Click or Professional mode and keep your time for creativity and judgment",
+    },
+    value: {
+      title: "From an Image Tool to an Enterprise Design Production System",
+      desc: "Cost, efficiency, brand consistency and delivery form a closed loop in Easy AI",
+      metrics: [
+        { value: "10x+", title: "Cost Advantage", desc: "Average cost per image is 10x+ lower than mainstream platforms" },
+        { value: "Minutes", title: "Design Kickoff", desc: "From request to first draft in dramatically less time" },
+        { value: "Stable", title: "Brand Output", desc: "Brand assets, IP characters and templates stay reusable" },
+        { value: "Closed Loop", title: "Deliverable Workflow", desc: "Generation, editing, QA and refinement form a complete workflow" },
+      ],
+      comparison: [
+        {
+          label: "Traditional Design Process",
+          title: "Endless communication, revisions, QA and handoff",
+          points: ["Multi-party comms", "Repeated revisions", "Manual QA", "Manual delivery"],
+        },
+        {
+          label: "Easy AI Automated Process",
+          title: "One request drives a full design production loop",
+          points: ["AI generation", "Brand constraints", "Pro canvas", "QA & refinement"],
+        },
+      ],
+    },
+    effect: {
+      title: "Art Showcase",
+      desc: "Covering brand, character, product and more creative scenarios",
+      enterAria: "Enter the effect showcase canvas",
+    },
+    business: {
+      title: "Business Showcase",
+      desc: "Batch design output for campaign marketing, business promotion and brand assets",
+      enterAria: "Open the business showcase",
+    },
+    models: {
+      title: "Model Options",
+      desc: "Ultra-low prices across three tiers to match your creative needs",
+      items: [
+        { desc: "Recommended · Best value · Up to 4K", cost: "≈ ¥0.12–0.15 per image" },
+        { desc: "Pro quality · Thinking · Up to 4K", cost: "≈ ¥0.25–0.30 per image" },
+        { desc: "Flexible sizes · High-fidelity input · Image editing", cost: "≈ ¥0.08–0.10 per image" },
+      ],
+    },
+    summary: {
+      line1: "Easy AI is building the enterprise-grade AI visual production infrastructure,",
+      line2: "helping brands deliver commercial visual content at scale, with lower cost and higher efficiency",
+    },
+    footer: {
+      tagline: "Easy AI is continuously improving",
+      contactTitle: "Contact",
+      email: "Email: 15638439536@163.com",
+      wechat: "WeChat: 15638439536",
+    },
+  },
+};
+
+export function getHomeCopy(language) {
+  return HOME_COPY[language] || HOME_COPY.zh;
+}

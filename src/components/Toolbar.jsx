@@ -12,6 +12,7 @@ import {
   LayoutGrid,
   Scan,
 } from "lucide-react";
+import { useCanvasT } from "@/lib/canvasI18n";
 
 const TOOLS = [
   { id: "select", icon: MousePointer2, label: "选择：框选多图/文案 · 拖拽 · 图片缩放角 · 双击编辑文案" },
@@ -32,6 +33,7 @@ export default function Toolbar({
   onAutoAlign,
   onFitView,
 }) {
+  const { t } = useCanvasT();
   return (
     <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-20 flex items-center gap-1 px-2 py-1.5 rounded-2xl bg-bg-secondary/90 backdrop-blur-xl border border-border-primary shadow-2xl shadow-black/40">
       {TOOLS.map((tool) => {
@@ -42,7 +44,7 @@ export default function Toolbar({
             type="button"
             key={tool.id}
             onClick={() => onToolChange(tool.id)}
-            title={tool.label}
+            title={t(tool.label)}
             className={`w-9 h-9 rounded-xl flex items-center justify-center transition-all ${
               isActive
                 ? "bg-accent text-white shadow-lg shadow-accent/30"
@@ -58,7 +60,7 @@ export default function Toolbar({
         <div className="flex items-center gap-0.5 pl-1 ml-0.5 border-l border-border-primary">
           <button
             type="button"
-            title="矩形"
+            title={t("矩形")}
             onClick={() => onShapeModeChange("rect")}
             className={`w-8 h-8 rounded-lg flex items-center justify-center transition-all ${
               shapeMode === "rect"
@@ -70,7 +72,7 @@ export default function Toolbar({
           </button>
           <button
             type="button"
-            title="圆形（椭圆）"
+            title={t("圆形（椭圆）")}
             onClick={() => onShapeModeChange("ellipse")}
             className={`w-8 h-8 rounded-lg flex items-center justify-center transition-all ${
               shapeMode === "ellipse"
@@ -88,7 +90,7 @@ export default function Toolbar({
         data-color-picker-trigger
         onClick={onToggleCanvasColorPicker}
         className="w-8 h-8 rounded-lg flex items-center justify-center text-text-tertiary hover:text-text-primary hover:bg-bg-hover transition-all"
-        title="画布颜色"
+        title={t("画布颜色")}
       >
         <span className="relative flex h-4 w-4 items-center justify-center">
           <Palette size={16} />
@@ -106,7 +108,7 @@ export default function Toolbar({
             type="button"
             onClick={onAutoAlign}
             className="w-8 h-8 rounded-lg flex items-center justify-center text-text-tertiary hover:text-text-primary hover:bg-bg-hover transition-all"
-            title="一键整理图片（重新网格对齐）"
+            title={t("一键整理图片（重新网格对齐）")}
           >
             <LayoutGrid size={15} />
           </button>
@@ -120,7 +122,7 @@ export default function Toolbar({
           type="button"
           onClick={onFitView}
           className="w-8 h-8 rounded-lg flex items-center justify-center text-text-tertiary hover:text-text-primary hover:bg-bg-hover transition-all"
-          title="适应画布 (Shift+1)：缩放至能看到全部内容"
+          title={t("适应画布 (Shift+1)：缩放至能看到全部内容")}
         >
           <Scan size={15} />
         </button>
@@ -129,7 +131,7 @@ export default function Toolbar({
             type="button"
         onClick={() => onZoomChange((z) => Math.max(z - 10, 1))}
         className="w-8 h-8 rounded-lg flex items-center justify-center text-text-tertiary hover:text-text-primary hover:bg-bg-hover transition-all"
-        title="缩小"
+        title={t("缩小")}
       >
         <Minus size={14} />
       </button>
@@ -137,7 +139,7 @@ export default function Toolbar({
         type="button"
         onClick={() => onZoomChange(100)}
         className="px-1.5 h-8 rounded-lg flex items-center justify-center text-[11px] text-text-tertiary hover:text-text-primary hover:bg-bg-hover font-mono transition-all min-w-[42px]"
-        title="重置缩放"
+        title={t("重置缩放")}
       >
         {Math.round(zoom)}%
       </button>
@@ -145,7 +147,7 @@ export default function Toolbar({
         type="button"
         onClick={() => onZoomChange((z) => Math.min(z + 10, 800))}
         className="w-8 h-8 rounded-lg flex items-center justify-center text-text-tertiary hover:text-text-primary hover:bg-bg-hover transition-all"
-        title="放大"
+        title={t("放大")}
       >
         <Plus size={14} />
       </button>
