@@ -1,7 +1,7 @@
 @import "tailwindcss";
 
 :root {
-  --bg-primary: #000000;
+  --bg-primary: #060606;
   --bg-secondary: #141414;
   --bg-tertiary: #1a1a1a;
   --bg-elevated: #222222;
@@ -21,7 +21,7 @@
 }
 
 html[data-theme="light"] {
-  --bg-primary: #f6f7f9;
+  --bg-primary: #ffffff;
   --bg-secondary: #ffffff;
   --bg-tertiary: #f1f3f5;
   --bg-elevated: #e9edf1;
@@ -58,6 +58,40 @@ html[data-theme="light"] {
 body {
   background: var(--bg-primary);
   color: var(--text-primary);
+}
+
+/* 创作台右侧对话面板（仅深色模式）：底色比默认 #141414 提亮约 10%，避免与画布底色融在一起 */
+html:not([data-theme="light"]) .chat-panel-surface {
+  background-color: #202021;
+}
+
+/* 首页输入框下方的滚动信任名单 */
+.trusted-marquee {
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(to right, transparent, black 14%, black 86%, transparent);
+  mask-image: linear-gradient(to right, transparent, black 14%, black 86%, transparent);
+}
+
+.trusted-marquee-track {
+  display: flex;
+  width: max-content;
+  align-items: center;
+  animation: trusted-marquee-scroll 36s linear infinite;
+}
+
+.trusted-marquee:hover .trusted-marquee-track {
+  animation-play-state: paused;
+}
+
+@keyframes trusted-marquee-scroll {
+  from { transform: translateX(0); }
+  to { transform: translateX(-50%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .trusted-marquee-track {
+    animation: none;
+  }
 }
 
 .login-input,

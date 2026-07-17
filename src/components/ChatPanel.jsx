@@ -1165,7 +1165,7 @@ export default function ChatPanel({
       </div>
 
       {/* Panel content */}
-      <div className="flex-1 bg-bg-secondary border-l border-border-primary flex flex-col h-full min-w-0">
+      <div className="chat-panel-surface flex-1 bg-bg-secondary border-l border-border-primary flex flex-col h-full min-w-0">
         {/* Header */}
         <div className="h-12 px-4 flex items-center justify-between border-b border-border-primary flex-shrink-0">
           <div className="flex items-center gap-2 min-w-0" />

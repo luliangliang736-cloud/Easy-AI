@@ -2111,7 +2111,7 @@ export default function Canvas({
           const h = Math.abs(a.cy - a.sy);
           return (
             <div
-              className="absolute pointer-events-none z-[5] border border-accent/70 bg-accent/15 rounded-sm"
+              className="absolute pointer-events-none z-[5] border border-[#0D99FF] bg-[#0D99FF]/10 rounded-sm"
               style={{ left: x, top: y, width: w, height: h }}
             />
           );
@@ -2161,7 +2161,7 @@ export default function Canvas({
               >
                 <div
                   className={`rounded-xl overflow-hidden border-2 bg-bg-secondary/80 transition-colors ${
-                    isHighlighted ? "border-accent" : "border-border-primary hover:border-border-secondary"
+                    isHighlighted ? "border-[#0D99FF]" : "border-border-primary hover:border-border-secondary"
                   }`}
                   style={{ height: placeholderHeight }}
                 >
@@ -2437,8 +2437,12 @@ export default function Canvas({
 
               {/* 选区手柄相对图片线框定位，避免与下方标题栏错位 */}
               <div className="relative w-full">
+                {/* 选中时叠一层半透明蓝色蒙版，让选中项一眼可辨（仿 Figma） */}
+                {isHighlighted && (
+                  <div className="pointer-events-none absolute inset-0 z-[8] bg-[#0D99FF]/25" />
+                )}
                 <div className={`overflow-hidden border transition-colors ${
-                  isHighlighted ? "border-accent" : "border-transparent hover:border-border-secondary"
+                  isHighlighted ? "border-[#0D99FF] ring-1 ring-[#0D99FF]" : "border-transparent hover:border-border-secondary"
                 }`}>
                   {isVideo ? (
                     <video
@@ -2589,7 +2593,7 @@ export default function Canvas({
                     ].map(([handle, positionClass, resizeCursor]) => (
                       <div
                         key={handle}
-                        className={`absolute h-1.5 w-1.5 border border-accent bg-white ${
+                        className={`absolute h-1.5 w-1.5 border border-[#0D99FF] bg-white ${
                           isLocked ? "pointer-events-none" : resizeCursor
                         } ${positionClass}`}
                         onPointerDown={(e) => {
@@ -2656,7 +2660,7 @@ export default function Canvas({
               key={s.id}
               data-shape-item={s.id}
               className={`absolute z-[15] pointer-events-auto border-2 transition-colors ${
-                selected ? "shadow-[0_0_0_1px_rgba(63,202,88,0.35)]" : "border-transparent hover:border-accent/35"
+                selected ? "shadow-[0_0_0_1px_rgba(13,153,255,0.45)]" : "border-transparent hover:border-[#0D99FF]/35"
               }`}
               style={{
                 left: s.x,
@@ -2664,7 +2668,7 @@ export default function Canvas({
                 width: s.w,
                 height: s.h,
                 background: fill,
-                borderColor: selected ? "var(--accent)" : "transparent",
+                borderColor: selected ? "#0D99FF" : "transparent",
                 borderRadius: s.kind === "ellipse" ? "50%" : `${shapeRadius}px`,
               }}
             >
@@ -2734,7 +2738,7 @@ export default function Canvas({
                       type="button"
                       title={t("调整大小")}
                       aria-label={t("调整大小")}
-                      className={`absolute h-3 w-3 rounded-full border border-accent bg-bg-secondary shadow-md ${cursor}`}
+                      className={`absolute h-3 w-3 rounded-full border border-[#0D99FF] bg-bg-secondary shadow-md ${cursor}`}
                       style={{ left, top }}
                       onPointerDown={(e) => {
                         e.preventDefault();
@@ -2794,7 +2798,7 @@ export default function Canvas({
               key={txt.id}
               data-text-item={txt.id}
               className={`absolute z-[25] ${
-                isHighlighted && !isEditing ? "outline outline-1 outline-accent/70 outline-offset-2 rounded-sm" : ""
+                isHighlighted && !isEditing ? "outline outline-2 outline-[#0D99FF] outline-offset-2 rounded-sm" : ""
               } ${(isSelectTool || isTextTool) && !isEditing ? "cursor-move" : ""}`}
               style={{ left: txt.x, top: txt.y, width: boxWidth, opacity: textEditorOverlay?.id === txt.id ? 0 : 1 }}
               onPointerDown={(e) => {

@@ -24,14 +24,13 @@ const client = new OSS({
 
 // 要上传的文件列表：[本地相对路径, OSS 目标路径]（全部是压缩后的版本）
 const FILES = [
-  // Hero 轮播视频（已用 ffmpeg 压缩）+ 图片（已转 WebP）
-  ["images/home-hero-carousel/1.mp4",   "home-assets/home-hero-carousel/1.mp4"],
-  ["images/home-hero-carousel/2.webp",  "home-assets/home-hero-carousel/2.webp"],
-  ["images/home-hero-carousel/3.mp4",   "home-assets/home-hero-carousel/3.mp4"],
-  ["images/home-hero-carousel/4.mp4",   "home-assets/home-hero-carousel/4.mp4"],
-  ["images/home-hero-carousel/5.webp",  "home-assets/home-hero-carousel/5.webp"],
-  ["images/home-hero-carousel/6.mp4",   "home-assets/home-hero-carousel/6.mp4"],
-  ["images/home-hero-carousel/7.webp",  "home-assets/home-hero-carousel/7.webp"],
+  // Hero 五卡扇形轮播素材（2026-07 更新）
+  ["images/home-hero-carousel/1.jpg",   "home-assets/home-hero-carousel/1.jpg"],
+  ["images/home-hero-carousel/2.mp4",   "home-assets/home-hero-carousel/2.mp4"],
+  ["images/home-hero-carousel/3.jpg",   "home-assets/home-hero-carousel/3.jpg"],
+  ["images/home-hero-carousel/4.webp",  "home-assets/home-hero-carousel/4.webp"],
+  ["images/home-hero-carousel/5.png",   "home-assets/home-hero-carousel/5.png"],
+  ["images/home-hero-carousel/6.jpg",   "home-assets/home-hero-carousel/6.jpg"],
   // 首页大图 / 视频（均已压缩）
   ["images/home-scroll-person-3.webp",  "home-assets/home-scroll-person-3.webp"],
   ["images/home-bottom-summary.mp4",    "home-assets/home-bottom-summary.mp4"],

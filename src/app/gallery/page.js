@@ -372,9 +372,6 @@ export default function GalleryPage() {
             <Link href="/" className="rounded-xl px-3 py-2 transition-colors hover:bg-white/10 hover:text-[#3FCA58]">
               首页
             </Link>
-            <Link href="/chat" className="rounded-xl px-3 py-2 transition-colors hover:bg-white/10 hover:text-[#3FCA58]">
-              一键创作
-            </Link>
             <Link href="/canvas" className="flex items-center gap-1 rounded-xl px-3 py-2 transition-colors hover:bg-white/10 hover:text-[#3FCA58]">
               工作台
               <ArrowRight size={13} />

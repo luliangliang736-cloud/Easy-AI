@@ -1,13 +1,13 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
   Sparkles, ArrowRight, Wand2, Image as ImageIcon,
   Layers, Zap, Crown, Rocket, PenTool, Factory, Library, Megaphone, PanelTop, ShieldCheck, Coins,
-  Palette, RefreshCw, Download, MousePointer2, Sun, Moon, Bot, LayoutGrid, Clock3, Palette as PaletteIcon, Users,
-  Mail, LockKeyhole, LogIn, LogOut, Play, Maximize2, Globe,
+  Palette, RefreshCw, Download, MousePointer2, Sun, Moon, Bot, Clock3, Palette as PaletteIcon, Users,
+  Mail, LockKeyhole, LogIn, LogOut, Play, Maximize2, Globe, ArrowUp, ImagePlus, X, Eye,
 } from "lucide-react";
 import { useTheme } from "@/lib/useTheme";
 import { getHomeCopy, HOME_LANGUAGE_STORAGE_KEY } from "@/lib/homeI18n";
@@ -316,41 +316,6 @@ async function waitForRecoveredGenerationResult(clientRequestId) {
   if (recovered) return { data: recovered, recovered: true };
   return new Promise(() => {});
 }
-
-const HERO_LAYOUT_PRESETS = {
-  desktop: {
-    container: "pb-10 lg:pb-14",
-    title: "text-4xl lg:text-6xl leading-tight mb-5",
-    description: "text-base lg:text-lg max-w-2xl mb-10",
-    actions: "gap-4",
-    primaryButton: "h-12 px-8",
-    secondaryButton: "h-12 px-8",
-  },
-  mac13: {
-    container: "pb-8 sm:pb-9 lg:pb-10",
-    title: "text-3xl sm:text-[34px] lg:text-[44px] leading-[1.06] mb-3.5",
-    description: "text-sm sm:text-[15px] lg:text-base max-w-lg mb-7",
-    actions: "gap-3",
-    primaryButton: "h-10 px-6 text-sm",
-    secondaryButton: "h-10 px-6 text-sm",
-  },
-  mac14: {
-    container: "pb-8 sm:pb-10 lg:pb-12",
-    title: "text-3xl sm:text-4xl lg:text-5xl leading-[1.08] mb-4",
-    description: "text-sm sm:text-base lg:text-[17px] max-w-xl mb-8",
-    actions: "gap-3 sm:gap-4",
-    primaryButton: "h-11 px-7 text-sm",
-    secondaryButton: "h-11 px-7 text-sm",
-  },
-  mac16: {
-    container: "pb-10 sm:pb-12 lg:pb-14",
-    title: "text-[34px] sm:text-[40px] lg:text-[54px] leading-[1.08] mb-[18px]",
-    description: "text-base lg:text-lg max-w-xl mb-9",
-    actions: "gap-4",
-    primaryButton: "h-11 px-[30px] text-sm",
-    secondaryButton: "h-11 px-[30px] text-sm",
-  },
-};
 
 function createFloatingMessage(role, text = "", extra = {}) {
   return {
@@ -994,7 +959,7 @@ const EFFECT_SHOWCASE_CARDS = [
   },
 ];
 
-const HERO_CAROUSEL_FILES = ["4.mp4", "7.webp"];
+const HERO_CAROUSEL_FILES = ["1.jpg", "2.mp4", "3.jpg", "4.webp", "5.png", "6.jpg"];
 const HERO_CAROUSEL_PUBLIC_BASE_URL = String(
   process.env.NEXT_PUBLIC_HOME_HERO_ASSET_BASE_URL
     || (HOME_ASSET_PUBLIC_BASE_URL ? `${HOME_ASSET_PUBLIC_BASE_URL}/home-hero-carousel` : ""),
@@ -1021,15 +986,66 @@ const DEFAULT_PROFILE_AVATAR_SRC = getHomeAssetSrc("internal-user-avatar.png");
 const HOME_SCROLL_PERSON_SRC = getHomeAssetSrc("home-scroll-person-3.webp");
 const HOME_BOTTOM_SUMMARY_SRC = getHomeAssetSrc("home-bottom-summary.mp4");
 const FOOTER_BOTTOM_SRC = getHomeAssetSrc("footer-bottom.webp");
-const HERO_CAROUSEL_INTERVAL_MS = 3000;
+const HERO_CAROUSEL_INTERVAL_MS = 4000;
+
+// 输入框下方的滚动信任名单。直接改这份列表即可增删；
+// 纯文字字标用 { name }，有 logo 图片时换成 { name, src: "/images/trusted-logos/xxx.svg" }。
+const TRUSTED_BRANDS = [
+  { name: "陆78" },
+  { name: "小羊" },
+  { name: "张爽" },
+  { name: "刘蓓蕾" },
+  { name: "楠Nan" },
+  { name: "ORRY" },
+  { name: "JUNIOR" },
+  { name: "GAFI" },
+  { name: "PRAJANTI" },
+  { name: "WANDITA" },
+  { name: "OY" },
+];
+
+// 首页欣赏板块：大家在 EasyAI 上创作的作品展示（当前为 UI 占位，封面沿用作品广场素材）。
+// 卡片标题在 homeI18n 的 explore.items 里按顺序对应。
+const EXPLORE_SHOWCASE_ITEMS = [
+  { cover: "/images/showcase-gallery/showcase-1.webp" },
+  { cover: "/images/showcase-gallery/showcase-2.webp" },
+  { cover: "/images/showcase-gallery/showcase-3.webp" },
+  { cover: "/images/showcase-gallery/showcase-4.webp" },
+  { cover: "/images/showcase-gallery/showcase-5.webp" },
+  { cover: "/images/showcase-gallery/showcase-6.webp" },
+  { cover: "/images/showcase-gallery/showcase-7.webp" },
+  { cover: "/images/showcase-gallery/showcase-8.webp" },
+];
+const EXPLORE_AUTHOR_AVATAR_SRC = "/images/easyai-smile.svg";
+
+// 首屏创作输入卡片：草稿写入该键后跳转创作台，创作台加载时会自动填入提示词与参考图
+const CANVAS_ENTRY_DRAFT_KEY = "lovart-floating-entry-draft";
+const PROMPT_REF_IMAGE_LIMIT = 3;
+const PLACEHOLDER_ROTATE_MS = 3500;
+
+function getGreetingText(hour, firstScreenCopy) {
+  if (hour === null) return null;
+  if (hour >= 5 && hour < 11) return firstScreenCopy.greetingMorning;
+  if (hour >= 11 && hour < 14) return firstScreenCopy.greetingNoon;
+  if (hour >= 14 && hour < 18) return firstScreenCopy.greetingAfternoon;
+  if (hour >= 18 && hour < 23) return firstScreenCopy.greetingEvening;
+  return firstScreenCopy.greetingNight;
+}
 
 export default function HomePage() {
   const router = useRouter();
   const [mounted, setMounted] = useState(false);
-  const [heroLayoutPreset, setHeroLayoutPreset] = useState("desktop");
   const [heroSlideIndex, setHeroSlideIndex] = useState(0);
   const [heroCarouselItems, setHeroCarouselItems] = useState(HERO_CAROUSEL_FALLBACK_ITEMS);
   const heroVideoRefs = useRef([]);
+  // 首屏问候语：挂载后取本地时间并随机选一条文案，避免与服务端渲染不一致
+  const [greetingHour, setGreetingHour] = useState(null);
+  const [greetingLineIndex, setGreetingLineIndex] = useState(0);
+  // 首屏创作输入卡片
+  const [promptText, setPromptText] = useState("");
+  const [promptRefImages, setPromptRefImages] = useState([]);
+  const [placeholderIndex, setPlaceholderIndex] = useState(0);
+  const promptImageInputRef = useRef(null);
   const [effectCardSpread, setEffectCardSpread] = useState(0);
   const [businessCardSpread, setBusinessCardSpread] = useState(0);
   const [bottomSummaryParallax, setBottomSummaryParallax] = useState(0);
@@ -1042,7 +1058,6 @@ export default function HomePage() {
   const [floatingMessages, setFloatingMessages] = useState([]);
   const [floatingHistory, setFloatingHistory] = useState([]);
   const [floatingRuntimeMode, setFloatingRuntimeMode] = useState("quick");
-  const [isModeMenuOpen, setIsModeMenuOpen] = useState(false);
   const [authUser, setAuthUser] = useState(null);
   const [isAuthLoading, setIsAuthLoading] = useState(true);
   const [isLoginModalOpen, setIsLoginModalOpen] = useState(false);
@@ -1333,62 +1348,58 @@ export default function HomePage() {
     };
   }, []);
 
+  // 五卡扇形布局需要至少 5 张卡片，素材不足时复制凑满
+  const heroSlides = useMemo(() => {
+    let list = heroCarouselItems;
+    while (list.length > 0 && list.length < 5) {
+      list = [...list, ...heroCarouselItems];
+    }
+    return list.map((item, index) => ({ ...item, slideKey: `${item.src}-${index}` }));
+  }, [heroCarouselItems]);
+  const totalHeroSlides = heroSlides.length;
+
   useEffect(() => {
-    if (heroCarouselItems.length <= 1) return undefined;
+    if (totalHeroSlides <= 1) return undefined;
 
     const timer = window.setInterval(() => {
-      setHeroSlideIndex((index) => (index + 1) % heroCarouselItems.length);
+      setHeroSlideIndex((index) => (index + 1) % totalHeroSlides);
     }, HERO_CAROUSEL_INTERVAL_MS);
 
     return () => window.clearInterval(timer);
-  }, [heroCarouselItems.length]);
+  }, [totalHeroSlides]);
 
   useEffect(() => {
     heroVideoRefs.current.forEach((video, index) => {
       if (!video) return;
       if (index === heroSlideIndex) {
+        video.currentTime = 0;
         const playPromise = video.play();
         if (playPromise?.catch) playPromise.catch(() => {});
       } else {
         video.pause();
       }
     });
-  }, [heroSlideIndex, heroCarouselItems]);
+  }, [heroSlideIndex, heroSlides]);
+
+  // 记录上一帧的轮播索引：卡片从一侧绕回另一侧时禁用过渡动画，避免横穿画面
+  const prevHeroSlideIndexRef = useRef(0);
+  useEffect(() => {
+    prevHeroSlideIndexRef.current = heroSlideIndex;
+  }, [heroSlideIndex]);
 
   useEffect(() => {
-    if (typeof window === "undefined") return;
-
-    const updateMacHeroLayout = () => {
-      const platform = String(window.navigator.platform || "").toLowerCase();
-      const userAgent = String(window.navigator.userAgent || "").toLowerCase();
-      const isMac = platform.includes("mac") || userAgent.includes("macintosh");
-
-      if (!isMac) {
-        setHeroLayoutPreset("desktop");
-        return;
-      }
-
-      const { innerWidth: width, innerHeight: height } = window;
-      if (width <= 1512 || height <= 900) {
-        setHeroLayoutPreset("mac13");
-        return;
-      }
-      if (width <= 1728 || height <= 1040) {
-        setHeroLayoutPreset("mac14");
-        return;
-      }
-      if (width <= 2056 || height <= 1180) {
-        setHeroLayoutPreset("mac16");
-        return;
-      }
-
-      setHeroLayoutPreset("desktop");
-    };
-
-    updateMacHeroLayout();
-    window.addEventListener("resize", updateMacHeroLayout);
-    return () => window.removeEventListener("resize", updateMacHeroLayout);
+    setGreetingHour(new Date().getHours());
+    setGreetingLineIndex(Math.floor(Math.random() * getHomeCopy("zh").firstScreen.lines.length));
   }, []);
+
+  // 占位符轮换：输入为空时每隔几秒换一条示例
+  useEffect(() => {
+    if (promptText) return undefined;
+    const timer = window.setInterval(() => {
+      setPlaceholderIndex((index) => (index + 1) % getHomeCopy("zh").firstScreen.placeholders.length);
+    }, PLACEHOLDER_ROTATE_MS);
+    return () => window.clearInterval(timer);
+  }, [promptText]);
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -1450,7 +1461,62 @@ export default function HomePage() {
     }
   }, [floatingAttachments, floatingMessages, floatingPrompt, floatingRefImages, floatingRuntimeMode]);
 
-  const heroPreset = HERO_LAYOUT_PRESETS[heroLayoutPreset] || HERO_LAYOUT_PRESETS.desktop;
+  const canSubmitPrompt = promptText.trim().length > 0 || promptRefImages.length > 0;
+
+  const handlePromptSubmit = useCallback(
+    (event) => {
+      event?.preventDefault?.();
+      const text = promptText.trim();
+      if (!text && promptRefImages.length === 0) return;
+      try {
+        localStorage.setItem(
+          CANVAS_ENTRY_DRAFT_KEY,
+          JSON.stringify(
+            promptRefImages.length > 0 ? { prompt: text, images: promptRefImages } : { prompt: text },
+          ),
+        );
+      } catch {}
+      router.push("/canvas");
+    },
+    [promptText, promptRefImages, router],
+  );
+
+  const handlePromptTextareaInput = useCallback((event) => {
+    const el = event.target;
+    el.style.height = "auto";
+    el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+  }, []);
+
+  async function handlePromptImagesChange(event) {
+    const files = Array.from(event.target.files || []).filter((file) => file.type.startsWith("image/"));
+    event.target.value = "";
+    if (files.length === 0) return;
+    const remaining = PROMPT_REF_IMAGE_LIMIT - promptRefImages.length;
+    const selected = files.slice(0, Math.max(0, remaining));
+    const compressed = await Promise.all(
+      selected.map(
+        (file) =>
+          new Promise((resolve) => {
+            const reader = new FileReader();
+            reader.onload = () => {
+              compressImage(String(reader.result || ""))
+                .then(resolve)
+                .catch(() => resolve(null));
+            };
+            reader.onerror = () => resolve(null);
+            reader.readAsDataURL(file);
+          }),
+      ),
+    );
+    const valid = compressed.filter(Boolean);
+    if (valid.length > 0) {
+      setPromptRefImages((prev) => [...prev, ...valid].slice(0, PROMPT_REF_IMAGE_LIMIT));
+    }
+  }
+
+  const handleRemovePromptImage = useCallback((index) => {
+    setPromptRefImages((prev) => prev.filter((_, i) => i !== index));
+  }, []);
 
   const resetFloatingConversation = () => {
     setFloatingPrompt("");
@@ -2195,42 +2261,28 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
           />
         </div>
         <div className="flex items-center gap-2">
-          <div className="relative">
-            <button
-              type="button"
-              onClick={() => setIsModeMenuOpen((prev) => !prev)}
-              className={`w-9 h-9 rounded-xl backdrop-blur-md transition-all flex items-center justify-center ${
-                theme === "light"
-                  ? "bg-black/[0.14] text-black/70 hover:bg-black/[0.20] hover:text-[#3FCA58]"
-                  : "bg-white/[0.32] text-white/85 hover:bg-white/[0.40] hover:text-[#3FCA58]"
-              }`}
-              title={copy.nav.modeMenuTitle}
-              aria-label={copy.nav.modeMenuTitle}
-            >
-              <LayoutGrid size={16} />
-            </button>
-            {isModeMenuOpen && (
-              <div
-                className="absolute right-0 top-[calc(100%+16px)] z-50 w-44 overflow-hidden rounded-2xl border border-border-primary bg-bg-secondary/95 p-1.5 shadow-2xl backdrop-blur-xl"
-                onMouseLeave={() => setIsModeMenuOpen(false)}
-              >
-                <Link
-                  href="/chat"
-                  className="flex items-center justify-between rounded-xl px-3 py-2.5 text-sm text-text-secondary transition-all hover:text-[#3FCA58]"
-                >
-                  {copy.nav.oneClickMode}
-                  <ArrowRight size={14} />
-                </Link>
-                <Link
-                  href="/canvas"
-                  className="mt-1 flex items-center justify-between rounded-xl px-3 py-2.5 text-sm text-text-secondary transition-all hover:text-[#3FCA58]"
-                >
-                  {copy.nav.professionalMode}
-                  <ArrowRight size={14} />
-                </Link>
-              </div>
-            )}
-          </div>
+          <Link
+            href="/canvas"
+            className="group h-9 px-4 rounded-xl backdrop-blur-md transition-all flex items-center text-sm font-medium bg-[#3FCA58] text-white hover:bg-[#36b34c] hover:scale-[1.03] active:scale-[0.98]"
+          >
+            {copy.nav.workbench}
+            <span className="w-0 overflow-hidden opacity-0 transition-all duration-200 group-hover:ml-1.5 group-hover:w-3.5 group-hover:opacity-100">
+              <ArrowRight size={14} />
+            </span>
+          </Link>
+          <button
+            type="button"
+            onClick={handleToggleLanguage}
+            className={`w-9 h-9 rounded-xl backdrop-blur-md transition-all flex items-center justify-center ${
+              theme === "light"
+                ? "bg-black/[0.14] text-black/70 hover:bg-black/[0.20] hover:text-[#3FCA58]"
+                : "bg-white/[0.32] text-white/85 hover:bg-white/[0.40] hover:text-[#3FCA58]"
+            }`}
+            title={copy.nav.languageToggle}
+            aria-label={copy.nav.languageToggle}
+          >
+            <Globe size={16} />
+          </button>
           <button
             onClick={toggleTheme}
             className={`w-9 h-9 rounded-xl backdrop-blur-md transition-all flex items-center justify-center ${
@@ -2383,18 +2435,6 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
                       </button>
                       <button
                         type="button"
-                        onClick={handleToggleLanguage}
-                        className={`mt-1 flex w-full items-center justify-between rounded-xl px-3 py-2.5 text-sm font-medium transition-all ${
-                          theme === "light"
-                            ? "text-black/75 hover:bg-black/[0.06]"
-                            : "text-white/75 hover:bg-white/[0.08]"
-                        }`}
-                      >
-                        {copy.nav.languageToggle}
-                        <Globe size={15} />
-                      </button>
-                      <button
-                        type="button"
                         onClick={handleLogout}
                         className={`mt-1 flex w-full items-center justify-between rounded-xl px-3 py-2.5 text-sm font-medium transition-all ${
                           theme === "light"
@@ -2521,53 +2561,84 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
         </div>
       )}
 
-      {/* Hero */}
-      <section className="relative w-full h-screen min-h-[600px] overflow-hidden">
-        {heroCarouselItems.map((item, index) => {
-          const isActive = index === heroSlideIndex;
-          const nextSlideIndex = heroCarouselItems.length > 1
-            ? (heroSlideIndex + 1) % heroCarouselItems.length
-            : heroSlideIndex;
-          const prevSlideIndex = heroCarouselItems.length > 1
-            ? (heroSlideIndex - 1 + heroCarouselItems.length) % heroCarouselItems.length
-            : heroSlideIndex;
-          const shouldWarmNextVideo = index === nextSlideIndex;
-          // Only keep active + adjacent slides rendered; hide the rest to avoid
-          // simultaneous multi-track video decoding and wasted GPU/memory.
-          const isNearby = isActive || index === nextSlideIndex || index === prevSlideIndex;
-          const sharedClassName = `absolute inset-0 h-full w-full object-cover transition-opacity duration-1000 ease-out ${
-            isActive ? "opacity-100" : "opacity-0"
-          }`;
+      {/* 首屏：五卡扇形轮播 */}
+      <section className="relative pt-24 lg:pt-28">
+        <div
+          className="relative mx-auto h-[37vh] min-h-[256px] max-h-[448px] w-full overflow-hidden"
+          style={{ perspective: "1600px" }}
+        >
+          {heroSlides.map((item, index) => {
+            // 相对当前卡片的位置：0 居中，±1 / ±2 向两侧透视翻转排开，其余隐藏
+            const normalizeOffset = (raw) => {
+              let value = raw;
+              if (value > totalHeroSlides / 2) value -= totalHeroSlides;
+              if (value <= -totalHeroSlides / 2) value += totalHeroSlides;
+              return value;
+            };
+            const offset = normalizeOffset(index - heroSlideIndex);
+            // 相比上一帧跨越了半圈，说明是从一侧绕回另一侧，直接跳位不做动画
+            const prevOffset = normalizeOffset(index - prevHeroSlideIndexRef.current);
+            const wrapped = Math.abs(offset - prevOffset) > totalHeroSlides / 2;
+            const distance = Math.abs(offset);
+            const isActive = offset === 0;
+            const isVisible = distance <= 2;
+            const direction = offset < 0 ? 1 : -1;
+            const translateX = offset * (distance === 1 ? 76 : 65);
+            // 最外层卡片反向翻转，形成屏风式折叠效果
+            const rotateY = isActive ? 0 : distance === 1 ? direction * 32 : -direction * 28;
+            const scale = isActive ? 1 : distance === 1 ? 0.86 : 0.76;
+            const media = item.type === "video" ? (
+              <video
+                ref={(node) => {
+                  heroVideoRefs.current[index] = node;
+                }}
+                src={item.src}
+                aria-label={item.label}
+                className="h-full w-full object-cover"
+                autoPlay={isActive}
+                muted
+                loop
+                playsInline
+                preload={isVisible ? "auto" : "none"}
+              />
+            ) : (
+              <img
+                src={item.src}
+                alt={item.label}
+                className="h-full w-full object-cover"
+                loading={isVisible ? "eager" : "lazy"}
+                decoding="async"
+              />
+            );
 
-          return item.type === "video" ? (
-            <video
-              key={item.src}
-              ref={(node) => {
-                heroVideoRefs.current[index] = node;
-              }}
-              src={item.src}
-              aria-label={item.label}
-              style={isNearby ? undefined : { display: "none" }}
-              className={sharedClassName}
-              autoPlay={isActive}
-              muted
-              loop
-              playsInline
-              preload={isActive ? "auto" : shouldWarmNextVideo ? "metadata" : "none"}
-            />
-          ) : (
-            <img
-              key={item.src}
-              src={item.src}
-              alt={item.label}
-              style={isNearby ? undefined : { display: "none" }}
-              className={sharedClassName}
-              loading={index === 0 ? "eager" : "lazy"}
-              decoding="async"
-            />
-          );
-        })}
-        <div className="absolute bottom-8 left-1/2 z-10 flex -translate-x-1/2 items-center gap-2">
+            return (
+              <div
+                key={item.slideKey}
+                onClick={() => !isActive && setHeroSlideIndex(index)}
+                className={`absolute left-1/2 top-1/2 h-full w-[46%] md:w-[38%] lg:w-[32%] overflow-hidden rounded-3xl ${
+                  wrapped ? "transition-none" : "transition-all duration-700 ease-out"
+                } ${
+                  isActive ? "cursor-default" : isVisible ? "cursor-pointer" : "pointer-events-none"
+                }`}
+                style={{
+                  transform: `translate(calc(-50% + ${translateX}%), -50%) rotateY(${rotateY}deg) scale(${scale})`,
+                  opacity: isVisible ? 1 : 0,
+                  zIndex: 20 - distance * 5,
+                }}
+              >
+                {media}
+                {!isActive && (
+                  <div
+                    className={`absolute inset-0 rounded-3xl ring-1 ring-inset ring-white/12 transition-opacity duration-700 ${
+                      distance === 1 ? "bg-black/15" : "bg-black/35"
+                    }`}
+                  />
+                )}
+              </div>
+            );
+          })}
+        </div>
+        <div className="mt-5 flex items-center justify-center gap-2">
           {heroCarouselItems.map((item, index) => (
             <button
               key={item.src}
@@ -2575,48 +2646,224 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
               onClick={() => setHeroSlideIndex(index)}
               aria-label={`${copy.hero.carouselAria} ${index + 1}`}
               className={`h-1.5 rounded-full transition-all ${
-                index === heroSlideIndex ? "w-7 bg-[#3FCA58]" : "w-1.5 bg-white/45 hover:bg-white/75"
+                index === heroSlideIndex % heroCarouselItems.length
+                  ? "w-7 bg-[#3FCA58]"
+                  : "w-1.5 bg-text-tertiary/40 hover:bg-text-tertiary/70"
               }`}
             />
           ))}
         </div>
       </section>
 
-      {/* Hero copy */}
-      <section className={`relative z-10 px-6 lg:px-12 max-w-5xl mx-auto pt-32 lg:pt-40 pb-24 lg:pb-32 text-center transition-all duration-700 ${mounted ? "opacity-100 translate-y-0" : "opacity-0 translate-y-8"}`}>
-        <h1 className={`font-bold text-text-primary tracking-tight ${heroPreset.title}`}>
+      {/* 首屏：问候语 + 创作输入卡片 */}
+      <section className={`relative z-10 mx-auto max-w-[55.2rem] px-6 pt-14 lg:pt-20 pb-[26px] lg:pb-[74px] transition-all duration-700 ${mounted ? "opacity-100 translate-y-0" : "opacity-0 translate-y-8"}`}>
+        <div className="text-center">
+          <h1 className="text-xl lg:text-3xl font-medium tracking-tight text-text-primary">
+            {(() => {
+              const greeting = getGreetingText(greetingHour, copy.firstScreen);
+              const name = authUser ? profileDisplayName.trim() : "";
+              const line = copy.firstScreen.lines[greetingLineIndex] || copy.firstScreen.lines[0];
+              if (homeLanguage === "en") {
+                return (
+                  <>
+                    {greeting ? `${greeting}${name ? "," : "."} ` : ""}
+                    {name ? <span style={{ color: "#3FCA58" }}>{name}</span> : null}
+                    {name ? ". " : ""}
+                    {line}
+                  </>
+                );
+              }
+              return (
+                <>
+                  {greeting ? `${greeting}，` : ""}
+                  {name ? (
+                    <>
+                      <span style={{ color: "#3FCA58" }}>{name}</span>
+                      ，
+                    </>
+                  ) : null}
+                  {line}
+                </>
+              );
+            })()}
+          </h1>
+        </div>
+        <div className="relative mt-8">
+          <div
+            aria-hidden="true"
+            className="pointer-events-none absolute -inset-x-10 -inset-y-8 rounded-[3rem] bg-[#3FCA58]/[0.06] blur-3xl"
+          />
+          <form
+            onSubmit={handlePromptSubmit}
+            className={`relative rounded-3xl p-4 shadow-2xl backdrop-blur-xl transition-all duration-300 ease-out ${
+              theme === "light"
+                ? "bg-white ring-1 ring-black/[0.08] shadow-[0_4px_16px_rgba(0,0,0,0.08)]"
+                : "bg-white/[0.05] shadow-black/40"
+            }`}
+          >
+            <div className="flex items-start gap-3">
+              <textarea
+                value={promptText}
+                onChange={(event) => setPromptText(event.target.value)}
+                onInput={handlePromptTextareaInput}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && !event.shiftKey) {
+                    event.preventDefault();
+                    handlePromptSubmit();
+                  }
+                }}
+                rows={2}
+                placeholder={copy.firstScreen.placeholders[placeholderIndex] || copy.firstScreen.placeholders[0]}
+                className="max-h-40 min-h-[3.2rem] flex-1 resize-none bg-transparent text-sm leading-6 text-text-primary outline-none placeholder:text-text-tertiary"
+              />
+            </div>
+            {promptRefImages.length > 0 && (
+              <div className="mt-2 flex items-center gap-2">
+                {promptRefImages.map((src, index) => (
+                  <div key={index} className="group/thumb relative h-14 w-14 overflow-hidden rounded-xl border border-border-primary">
+                    <img src={src} alt={`${copy.firstScreen.addReference} ${index + 1}`} className="h-full w-full object-cover" />
+                    <button
+                      type="button"
+                      onClick={() => handleRemovePromptImage(index)}
+                      aria-label={`${copy.firstScreen.removeReference} ${index + 1}`}
+                      className="absolute right-0.5 top-0.5 flex h-5 w-5 items-center justify-center rounded-full bg-black/60 text-white opacity-0 transition-opacity group-hover/thumb:opacity-100"
+                    >
+                      <X size={11} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="mt-3 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => promptImageInputRef.current?.click()}
+                  disabled={promptRefImages.length >= PROMPT_REF_IMAGE_LIMIT}
+                  className="flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-xs text-text-secondary transition-colors hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-40"
+                  title={promptRefImages.length >= PROMPT_REF_IMAGE_LIMIT
+                    ? copy.firstScreen.maxReferenceTitle
+                    : copy.firstScreen.addReferenceTitle}
+                >
+                  <ImagePlus size={14} />
+                  {copy.firstScreen.addReference}
+                </button>
+                <input
+                  ref={promptImageInputRef}
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  className="hidden"
+                  onChange={handlePromptImagesChange}
+                />
+              </div>
+              <button
+                type="submit"
+                disabled={!canSubmitPrompt}
+                aria-label={copy.firstScreen.submitAria}
+                className="flex h-10 w-10 shrink-0 items-center justify-center rounded-2xl bg-[#3FCA58] text-white transition-all hover:bg-[#36b34c] disabled:cursor-not-allowed disabled:bg-bg-tertiary disabled:text-text-tertiary"
+              >
+                <ArrowUp size={18} />
+              </button>
+            </div>
+          </form>
+        </div>
+
+        {/* 输入框下方：滚动信任名单（低对比灰度字标，hover 暂停并提亮） */}
+        <div className="mt-14 lg:mt-16">
+          <p className={`text-center text-[11px] font-medium tracking-[0.28em] ${
+            theme === "light" ? "text-black/35" : "text-white/30"
+          }`}>
+            {copy.firstScreen.trustedTitle}
+          </p>
+          <div className="trusted-marquee mt-6">
+            <div className="trusted-marquee-track">
+              {[...TRUSTED_BRANDS, ...TRUSTED_BRANDS].map((brand, index) => (
+                <span
+                  key={`${brand.name}-${index}`}
+                  className={`flex shrink-0 items-center px-7 transition-opacity duration-300 lg:px-9 ${
+                    theme === "light"
+                      ? "opacity-40 hover:opacity-90"
+                      : "opacity-35 hover:opacity-90"
+                  }`}
+                  aria-hidden={index >= TRUSTED_BRANDS.length}
+                >
+                  {brand.src ? (
+                    <img
+                      src={brand.src}
+                      alt={brand.name}
+                      className={`h-6 w-auto object-contain lg:h-7 ${theme === "light" ? "" : "brightness-0 invert"}`}
+                      loading="lazy"
+                    />
+                  ) : (
+                    <span className={`whitespace-nowrap text-[15px] font-bold tracking-tight lg:text-base ${
+                      theme === "light" ? "text-black" : "text-white"
+                    }`}>
+                      {brand.name}
+                    </span>
+                  )}
+                </span>
+              ))}
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* 欣赏板块：大家在 EasyAI 上创作的作品（UI 展示，封面 4:3） */}
+      <section className={`relative z-10 mx-auto max-w-7xl px-6 lg:px-12 pt-[50px] transition-all duration-700 delay-100 ${mounted ? "opacity-100 translate-y-0" : "opacity-0 translate-y-8"}`}>
+        <div className="mb-10 flex flex-col items-start gap-2">
+          <span className="flex h-9 items-center gap-1.5 rounded-xl bg-[#3FCA58] px-4 text-sm font-semibold text-white">
+            <Eye size={14} className="shrink-0" />
+            {copy.explore.title}
+          </span>
+          <p className="px-0.5 text-xs text-text-tertiary">{copy.explore.subtitle}</p>
+        </div>
+        <div className="grid grid-cols-2 gap-x-4 gap-y-6 md:grid-cols-3 lg:grid-cols-4">
+          {EXPLORE_SHOWCASE_ITEMS.map((item, index) => {
+            const title = copy.explore.items[index] || "";
+            return (
+              <div key={item.cover} className="group">
+                <div className="relative aspect-[4/3] overflow-hidden rounded-2xl bg-bg-secondary">
+                  <img
+                    src={item.cover}
+                    alt={title}
+                    loading="lazy"
+                    decoding="async"
+                    className="h-full w-full object-cover transition-transform duration-500 ease-out group-hover:scale-[1.04]"
+                  />
+                  <div className="pointer-events-none absolute inset-0 rounded-2xl ring-1 ring-inset ring-white/10 opacity-0 transition-opacity duration-300 group-hover:opacity-100" />
+                </div>
+                <div className="mt-2.5 flex items-center gap-2 px-0.5">
+                  <img
+                    src={EXPLORE_AUTHOR_AVATAR_SRC}
+                    alt=""
+                    aria-hidden="true"
+                    className="h-6 w-6 shrink-0 rounded-full object-cover"
+                  />
+                  <span className="truncate text-sm font-medium text-text-primary">{copy.explore.author}</span>
+                </div>
+                <p className="mt-1 truncate px-0.5 text-[13px] text-text-secondary">{title}</p>
+              </div>
+            );
+          })}
+        </div>
+      </section>
+
+      {/* Hero copy：保留原品牌文案区，跟随在新首屏下方 */}
+      <section className={`relative z-10 px-6 lg:px-12 max-w-5xl mx-auto pt-[196px] lg:pt-[228px] pb-24 lg:pb-32 text-center transition-all duration-700 delay-100 ${mounted ? "opacity-100 translate-y-0" : "opacity-0 translate-y-8"}`}>
+        <h1 className="font-bold text-text-primary tracking-tight text-4xl lg:text-6xl leading-tight mb-5">
             Easy <span style={{ color: "#3FCA58" }}>AI</span>
             <br />{copy.hero.titleLine}
         </h1>
-        <p className={`text-text-secondary mx-auto leading-relaxed ${heroPreset.description}`}>
+        <p className="text-text-secondary mx-auto leading-relaxed text-base lg:text-lg max-w-2xl">
           {copy.hero.description}
         </p>
-        <div className={`flex flex-wrap items-center justify-center ${heroPreset.actions}`}>
-          <Link
-            href="/chat"
-            className={`rounded-full bg-[#3FCA58] text-white font-medium flex items-center gap-2.5 transition-all animate-[hero-button-breathe_2.4s_ease-in-out_infinite] hover:bg-[#3FCA58]/90 hover:scale-[1.04] hover:[animation-play-state:paused] active:scale-[0.98] ${heroPreset.primaryButton}`}
-          >
-            {copy.nav.oneClickMode}
-            <ArrowRight size={16} />
-          </Link>
-          <Link
-            href="/canvas"
-            className={`rounded-full font-medium flex items-center gap-2.5 transition-all hover:scale-[1.04] active:scale-[0.98] ${heroPreset.secondaryButton} ${
-              theme === "light"
-                ? "bg-black/[0.07] text-black/75 hover:bg-black/[0.12] hover:text-black"
-                : "bg-white/[0.12] text-white/80 hover:bg-white/[0.18] hover:text-white"
-            }`}
-          >
-            {copy.nav.professionalMode}
-            <ArrowRight size={16} />
-          </Link>
-        </div>
       </section>
 
       {/* Mode demos */}
       <section className={`relative z-10 px-6 lg:px-12 max-w-5xl mx-auto pt-4 pb-32 lg:pb-40 transition-all duration-700 delay-150 ${mounted ? "opacity-100 translate-y-0" : "opacity-0 translate-y-8"}`}>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          {/* 一键创作模式 demo */}
+          {/* 一键创作模式 demo（仅视频展示，不带入口链接） */}
           <div className={`rounded-2xl border overflow-hidden ${theme === "light" ? "border-black/[0.06] bg-white shadow-[0_10px_30px_rgba(15,23,42,0.04)]" : "border-white/[0.06] bg-bg-secondary"}`}>
             <div className={`relative aspect-video ${theme === "light" ? "bg-slate-50" : "bg-bg-tertiary"}`}>
               <video src="https://easyai-hero.oss-cn-beijing.aliyuncs.com/home-demos/demo-one-click.mp4" className="absolute inset-0 w-full h-full object-cover" autoPlay loop muted playsInline />
@@ -3042,6 +3289,7 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
             <span>HOME</span>
             <span>CANVAS</span>
             <span>DESIGN</span>
+            <Link href="/chat">一键创作</Link>
           </div>
         </div>
       </footer>

@@ -4099,7 +4099,7 @@ function HomeInner() {
           className="relative hidden shrink-0 lg:block"
           style={{ width: inspirationPanelWidth }}
         >
-          <aside className={`flex h-full flex-col border-r ${theme === "light" ? "border-black/8 bg-white/72" : "border-white/8 bg-white/[0.025]"}`}>
+          <aside className={`flex h-full flex-col border-r ${theme === "light" ? "border-black/8 bg-white/72" : "border-white/8 bg-white/[0.10]"}`}>
             <div className={`flex h-12 shrink-0 items-center justify-between gap-3 border-b px-4 ${theme === "light" ? "border-black/8" : "border-white/8"}`}>
               <div className="min-w-0">
                 <div className={`inline-flex items-center gap-1.5 text-sm font-semibold ${theme === "light" ? "text-[#111]" : "text-white"}`}>
