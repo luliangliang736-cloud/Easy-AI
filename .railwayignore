@@ -29,7 +29,6 @@ public/ip-assets/EZfamily
 # 但以下是代码里本地路径直引的资源，必须随包上传，否则线上 404（logo 就吃过这个亏）
 public/images/*
 !public/images/materials
-!public/images/ip-scenes
 !public/images/showcase-gallery
 !public/images/business-gallery
 !public/images/trusted-logos
