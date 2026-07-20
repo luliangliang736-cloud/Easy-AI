@@ -1,5 +1,6 @@
 "use client";
 
+import { useCallback, useEffect, useState } from "react";
 import {
   MousePointer2,
   Hand,
@@ -9,10 +10,15 @@ import {
   Minus,
   Plus,
   Palette,
+  Grip,
   LayoutGrid,
   Scan,
+  SwatchBook,
 } from "lucide-react";
 import { useCanvasT } from "@/lib/canvasI18n";
+
+/* 创意工具箱的一次性新手引导，点掉后不再出现 */
+const TOOLBOX_HINT_KEY = "lovart-creative-toolbox-hint-dismissed";
 
 const TOOLS = [
   { id: "select", icon: MousePointer2, label: "选择：框选多图/文案 · 拖拽 · 图片缩放角 · 双击编辑文案" },
@@ -30,12 +36,38 @@ export default function Toolbar({
   onShapeModeChange,
   canvasColor,
   onToggleCanvasColorPicker,
+  onToggleMaterialPicker,
+  isMaterialPickerOpen = false,
+  onToggleCreativeTools,
+  isCreativeToolsOpen = false,
   onAutoAlign,
   onFitView,
 }) {
   const { t } = useCanvasT();
+  const hasToolbox = Boolean(onToggleMaterialPicker || onToggleCreativeTools);
+  const [showToolboxHint, setShowToolboxHint] = useState(false);
+
+  useEffect(() => {
+    if (!hasToolbox) return;
+    try {
+      if (!localStorage.getItem(TOOLBOX_HINT_KEY)) setShowToolboxHint(true);
+    } catch {}
+  }, [hasToolbox]);
+
+  const dismissToolboxHint = useCallback(() => {
+    setShowToolboxHint(false);
+    try {
+      localStorage.setItem(TOOLBOX_HINT_KEY, "1");
+    } catch {}
+  }, []);
+
+  const capsuleClassName =
+    "flex items-center gap-1 px-2 py-1.5 rounded-2xl bg-bg-secondary/90 backdrop-blur-xl border border-border-primary shadow-2xl shadow-black/40";
+
   return (
-    <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-20 flex items-center gap-1 px-2 py-1.5 rounded-2xl bg-bg-secondary/90 backdrop-blur-xl border border-border-primary shadow-2xl shadow-black/40">
+    <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-20 flex items-stretch gap-2">
+      {/* 胶囊 1：画布工具 + 视图控制（原工具栏） */}
+      <div className={capsuleClassName}>
       {TOOLS.map((tool) => {
         const Icon = tool.icon;
         const isActive = activeTool === tool.id;
@@ -151,6 +183,83 @@ export default function Toolbar({
       >
         <Plus size={14} />
       </button>
+      </div>
+
+      {/* 胶囊 2：创意工具箱（一键换材质常驻 + 其它创意工具入口） */}
+      {hasToolbox && (
+        <div className={`relative ${capsuleClassName}`}>
+          {showToolboxHint && (
+            <div className="absolute bottom-[calc(100%+12px)] left-1/2 z-30 -translate-x-1/2 animate-fade-in">
+              <div className="relative flex w-max max-w-[260px] items-center gap-2 rounded-xl bg-bg-secondary/95 py-2 pl-3 pr-2 text-xs text-text-primary shadow-md shadow-black/10 backdrop-blur-xl">
+                {/* 提示文案：深色模式用品牌绿，浅色模式保持黑色 */}
+                <span className="text-accent [html[data-theme=light]_&]:text-[#111827]">
+                  创意工具箱：一键换材质/风格等创意玩法都在这里
+                </span>
+                <button
+                  type="button"
+                  onClick={dismissToolboxHint}
+                  className="shrink-0 rounded-lg bg-bg-hover px-2 py-1 text-[11px] text-text-secondary transition-colors hover:text-text-primary"
+                >
+                  知道了
+                </button>
+                <span
+                  aria-hidden="true"
+                  className="absolute -bottom-1 left-1/2 h-2 w-2 -translate-x-1/2 rotate-45 bg-bg-secondary"
+                />
+              </div>
+            </div>
+          )}
+          {isCreativeToolsOpen && (
+            <div
+              data-creative-tools-root
+              className="absolute bottom-[calc(100%+10px)] right-0 z-30 w-56 rounded-2xl border border-border-primary bg-bg-secondary/95 p-3 shadow-2xl shadow-black/40 backdrop-blur-xl animate-fade-in"
+              onPointerDown={(e) => e.stopPropagation()}
+            >
+              <div className="mb-2 text-xs font-semibold text-text-primary">创意工具</div>
+              <div className="rounded-xl bg-bg-tertiary/60 px-3 py-4 text-center text-[11px] leading-relaxed text-text-tertiary">
+                更多创意玩法即将上线，敬请期待
+              </div>
+            </div>
+          )}
+          {onToggleMaterialPicker && (
+            <button
+              type="button"
+              data-material-picker-trigger
+              title={t("一键替换选中图片的材质或风格")}
+              onClick={() => {
+                dismissToolboxHint();
+                onToggleMaterialPicker();
+              }}
+              className={`h-9 px-2.5 rounded-xl flex items-center justify-center gap-1.5 transition-all ${
+                isMaterialPickerOpen
+                  ? "bg-accent text-white shadow-lg shadow-accent/30"
+                  : `text-accent hover:bg-accent/12 [html[data-theme=light]_&]:text-[#111827] ${showToolboxHint ? "material-swap-attention" : ""}`
+              }`}
+            >
+              <SwatchBook size={16} strokeWidth={isMaterialPickerOpen ? 2 : 1.75} />
+              <span className="text-[11px] font-medium whitespace-nowrap">{t("风格迁移")}</span>
+            </button>
+          )}
+          {onToggleCreativeTools && (
+            <button
+              type="button"
+              data-creative-tools-trigger
+              title={t("更多创意玩法")}
+              onClick={() => {
+                dismissToolboxHint();
+                onToggleCreativeTools();
+              }}
+              className={`w-9 h-9 rounded-xl flex items-center justify-center transition-all ${
+                isCreativeToolsOpen
+                  ? "bg-accent text-white shadow-lg shadow-accent/30"
+                  : "text-text-tertiary hover:text-text-primary hover:bg-bg-hover"
+              }`}
+            >
+              <Grip size={16} strokeWidth={isCreativeToolsOpen ? 2 : 1.5} />
+            </button>
+          )}
+        </div>
+      )}
     </div>
   );
 }

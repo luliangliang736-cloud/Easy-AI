@@ -79,10 +79,26 @@ function isEmptyCanvasBoardsValue(key, value = "") {
   return Array.isArray(parsed) && parsed.length === 0;
 }
 
+// 材质库偏好（收藏 / DIY 配色 / 组合预设 / DIY 材质）：新设备首次打开面板时本地是
+// 空数组，绝不能拿空数组去覆盖云端已有数据，否则换设备登录会"丢收藏"。
+const EMPTY_LIST_PROTECTED_KEYS = new Set([
+  "lovart-material-favorites",
+  "lovart-custom-palettes",
+  "lovart-combo-presets",
+  "lovart-custom-materials",
+]);
+
+function isEmptyProtectedListValue(key, value = "") {
+  if (!EMPTY_LIST_PROTECTED_KEYS.has(key)) return false;
+  const parsed = safeJsonParse(value, null);
+  return Array.isArray(parsed) && parsed.length === 0;
+}
+
 function shouldSkipCloudStateItem(item) {
   // A valid canvas workspace always has at least one board. Never sync an
   // accidental empty board list, otherwise one stale tab can wipe every project.
-  return isEmptyCanvasBoardsValue(item?.key, item?.value);
+  return isEmptyCanvasBoardsValue(item?.key, item?.value)
+    || isEmptyProtectedListValue(item?.key, item?.value);
 }
 
 function getItemId(item) {

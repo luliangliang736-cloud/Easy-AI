@@ -29,6 +29,9 @@ import {
   Trash2,
   Video,
   Zap,
+  Maximize2,
+  Minimize2,
+  SwatchBook,
 } from "lucide-react";
 import { compressImage } from "@/lib/imageUtils";
 import { MAX_GEN_COUNT } from "@/lib/genLimits";
@@ -400,7 +403,7 @@ function ImageLightbox({ src, onClose }) {
   );
 }
 
-function MessageBubble({ message, onRetry, onDownload, onImageClick, onPreview, onPauseGenerate, onDelete }) {
+function MessageBubble({ message, onRetry, onDownload, onImageClick, onPreview, onPauseGenerate, onDelete, onTryMaterial }) {
   const { t } = useCanvasT();
   const isVideoMessage = message.mediaType === "video";
   const [playingVideoUrls, setPlayingVideoUrls] = useState([]);
@@ -655,6 +658,21 @@ function MessageBubble({ message, onRetry, onDownload, onImageClick, onPreview, 
                     <Download size={15} />
                   </button>
                 </div>
+                {/* 主打能力顺势引导：生成完成 → 选中画布上这张图并打开材质库 */}
+                {!isVideoMessage && onTryMaterial && (
+                  <button
+                    type="button"
+                    onPointerDown={(event) => event.stopPropagation()}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onTryMaterial(url);
+                    }}
+                    className="flex w-full items-center justify-center gap-1.5 border-t border-border-primary px-3 py-2 text-[11px] text-accent transition-colors hover:bg-accent/10 [html[data-theme=light]_&]:text-[#111827]"
+                  >
+                    <SwatchBook size={12} />
+                    {t("试试一键换材质")}
+                  </button>
+                )}
               </div>
             ))}
           </div>
@@ -717,6 +735,7 @@ export default function ChatPanel({
   textEditBlocks = [], onTextEditBlocksChange,
   showTextEditPanelInline = true,
   onRetry, onDownload, onImageClick,
+  onTryMaterial,
   onPauseGenerate,
   entryMode = "agent",
   composerMode = "agent", onComposerModeChange,
@@ -734,7 +753,19 @@ export default function ChatPanel({
   const fileInputRef = useRef(null);
   const conversationMenuRef = useRef(null);
   const canvasHistoryMenuRef = useRef(null);
+  const composerInputRef = useRef(null);
   const [dragOver, setDragOver] = useState(false);
+  // 输入框扩大：长提示词编辑费劲，提供加高开关（文案折行后才出现按钮）
+  const [isComposerExpanded, setIsComposerExpanded] = useState(false);
+  const [isComposerMultiline, setIsComposerMultiline] = useState(false);
+
+  // 文案一旦折行（内容高度超过单行）就亮出扩大按钮；清空/删回一行则收起
+  useEffect(() => {
+    const el = composerInputRef.current;
+    if (!el) return;
+    // 单行高度 = 行高 20px，超过即折行
+    setIsComposerMultiline(el.scrollHeight > 24);
+  }, [prompt]);
   const [previewSrc, setPreviewSrc] = useState(null);
   const [showConversationMenu, setShowConversationMenu] = useState(false);
   const [showCanvasHistoryMenu, setShowCanvasHistoryMenu] = useState(false);
@@ -1479,6 +1510,7 @@ export default function ChatPanel({
               onPreview={setPreviewSrc}
               onPauseGenerate={msg.status === "generating" ? () => onPauseGenerate?.(msg.id) : null}
               onDelete={onDeleteMessage}
+              onTryMaterial={onTryMaterial}
             />
           ))}
           <div ref={messagesEndRef} />
@@ -2107,25 +2139,41 @@ export default function ChatPanel({
                   : refImages?.length > 0 ? "描述你想对图片做的处理..."
                   : "描述你想生成的图片，可拖入参考图..."
               )}
+              ref={composerInputRef}
               rows={1}
-              className="flex-1 bg-transparent text-text-primary placeholder-text-tertiary resize-none outline-none text-sm leading-5 max-h-24 overflow-y-auto"
+              className={`flex-1 bg-transparent text-text-primary placeholder-text-tertiary resize-none outline-none text-sm leading-5 overflow-y-auto ${
+                isComposerExpanded ? "max-h-[45vh]" : "max-h-24"
+              }`}
               style={{ fieldSizing: "content" }}
             />
 
-            {isGenerating ? (
-              <button
-                onClick={onPauseGenerate}
-                className="flex-shrink-0 p-2 rounded-lg transition-all bg-warning/15 text-warning hover:bg-warning/25"
-                title={t("暂停生成")}
-              >
-                <PauseCircle size={16} />
-              </button>
-            ) : (
-              <button onClick={onSubmit} disabled={!canSubmit}
-                className={`flex-shrink-0 p-2 rounded-lg transition-all ${!canSubmit ? "text-text-tertiary cursor-not-allowed" : "bg-accent hover:bg-accent-hover text-white"}`}>
-                <Send size={16} />
-              </button>
-            )}
+            <div className="flex flex-shrink-0 flex-col items-center gap-1 self-stretch">
+              {/* 长提示词编辑加高开关：固定在输入框右上角，文案折行后才出现 */}
+              {(isComposerExpanded || isComposerMultiline) && (
+                <button
+                  type="button"
+                  onClick={() => setIsComposerExpanded((v) => !v)}
+                  className="p-1.5 rounded-lg text-text-tertiary hover:text-text-primary hover:bg-bg-hover transition-all"
+                  title={t(isComposerExpanded ? "还原输入框高度" : "扩大输入框，方便编辑长提示词")}
+                >
+                  {isComposerExpanded ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+                </button>
+              )}
+              {isGenerating ? (
+                <button
+                  onClick={onPauseGenerate}
+                  className="mt-auto p-2 rounded-lg transition-all bg-warning/15 text-warning hover:bg-warning/25"
+                  title={t("暂停生成")}
+                >
+                  <PauseCircle size={16} />
+                </button>
+              ) : (
+                <button onClick={onSubmit} disabled={!canSubmit}
+                  className={`mt-auto p-2 rounded-lg transition-all ${!canSubmit ? "text-text-tertiary cursor-not-allowed" : "bg-accent hover:bg-accent-hover text-white"}`}>
+                  <Send size={16} />
+                </button>
+              )}
+            </div>
           </div>
         </div>
       </div>

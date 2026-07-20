@@ -2,14 +2,16 @@ import { randomUUID } from "crypto";
 import { mkdir, readdir, readFile, stat, unlink, writeFile } from "fs/promises";
 import { join } from "path";
 import { tmpdir } from "os";
-import { getOssClient, isOssConfigured } from "@/lib/server/ossClient";
+import { getOssClient, isOssConfigured, putOssObjectResilient } from "@/lib/server/ossClient";
 
 const STORE_DIR = join(tmpdir(), "easyai-generated-images");
 const MAX_FILE_AGE_MS = 6 * 60 * 60 * 1000;
 // 本地 temp 文件有 6 小时寿命且随重启丢失。写入时同步做一份 OSS 永久备份，
 // 读取时本地 miss 则回源 OSS，保证 /api/generated-images/ URL 永久有效。
 const OSS_BACKUP_PREFIX = "users/system-generated/generated-images/";
-const MAX_REMOTE_IMAGE_BYTES = Number(process.env.GENERATED_IMAGE_CACHE_MAX_BYTES || 25 * 1024 * 1024);
+// 上限要能覆盖 4K 高清放大的 PNG(可到 40MB+)。低于实际图片大小时,
+// 生成结果会保留服务商的临时外链,外链过期后图片就永久丢失(裂图)。
+const MAX_REMOTE_IMAGE_BYTES = Number(process.env.GENERATED_IMAGE_CACHE_MAX_BYTES || 60 * 1024 * 1024);
 const DATA_IMAGE_PATTERN = /^data:(image\/(?:png|jpe?g|webp|gif));base64,([\s\S]+)$/i;
 
 function getExtForMime(mimeType = "image/png") {
@@ -54,18 +56,24 @@ async function cleanupOldFiles() {
   }
 }
 
+// 备份彻底失败的文件名。之后任何一次成功读到本地文件时都会再补传一次，
+// 尽量在容器重部署（本地文件清空）之前把备份补上。
+const pendingOssBackups = new Set();
+
 function backupGeneratedImageToOss(filename, buffer, mimeType) {
   if (!isOssConfigured()) return;
-  // Fire-and-forget：备份不在生成请求的响应路径上，失败只影响过期后的回源兜底。
-  void getOssClient()
-    .put(`${OSS_BACKUP_PREFIX}${filename}`, buffer, {
-      headers: {
-        "Content-Type": mimeType || getMimeForFilename(filename),
-        "Cache-Control": "private, max-age=31536000, immutable",
-      },
+  // Fire-and-forget：备份不在生成请求的响应路径上。但备份一旦失败，容器重部署后
+  // 这张图就永久丢失，所以走"分片上传 + 多次重试"的加固通道（大图跨国单次 put 常超时）。
+  void putOssObjectResilient(`${OSS_BACKUP_PREFIX}${filename}`, buffer, {
+    "Content-Type": mimeType || getMimeForFilename(filename),
+    "Cache-Control": "private, max-age=31536000, immutable",
+  })
+    .then(() => {
+      pendingOssBackups.delete(filename);
     })
     .catch((error) => {
-      console.warn("[GeneratedImageStore] OSS backup failed:", filename, error?.message || error);
+      pendingOssBackups.add(filename);
+      console.error("[GeneratedImageStore] OSS backup failed after retries:", filename, error?.message || error);
     });
 }
 
@@ -143,6 +151,10 @@ export async function readGeneratedImage(filename = "") {
   }
   try {
     const buffer = await readFile(join(STORE_DIR, safeName));
+    if (pendingOssBackups.has(safeName)) {
+      pendingOssBackups.delete(safeName);
+      backupGeneratedImageToOss(safeName, buffer, getMimeForFilename(safeName));
+    }
     return {
       buffer,
       mimeType: getMimeForFilename(safeName),

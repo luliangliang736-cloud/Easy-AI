@@ -7,12 +7,17 @@ import {
 import {
   Maximize2, Download, Trash2, Copy,
   MessageSquare, Lock, Unlock, FileDown, Image as ImageIcon,
-  Minus, Plus, Scissors, Type, Play, Pause, Spline, FileText,
+  Minus, Plus, Scissors, Type, Play, Pause, Spline, FileText, SwatchBook,
 } from "lucide-react";
 import { flushSync } from "react-dom";
 import { useToast } from "@/components/Toast";
 import { useCanvasT } from "@/lib/canvasI18n";
 import Toolbar from "@/components/Toolbar";
+import MaterialPanel from "@/components/MaterialPanel";
+import { getQuickSwapMaterials } from "@/lib/materials";
+
+// 选中图片时快捷换材质条的推荐材质（官方静态数据，模块级取一次即可）
+const QUICK_SWAP_MATERIALS = getQuickSwapMaterials();
 
 const INITIAL_IMG_WIDTH = 280;
 const DEFAULT_TEXT_FONT = 24;
@@ -393,7 +398,7 @@ function getUpscalePreviewSize(meta, targetLongSide) {
 
 export default function Canvas({
   images, selectedImage, onSelectImage, onDeleteImage,
-  onUpdateImage, onSendToChat, onQuickEditImage, onQuickUpscaleImage, onDropImages, onDropGeneratedImage, onPasteImages,
+  onUpdateImage, onSendToChat, onQuickEditImage, onQuickUpscaleImage, onApplyMaterial, onApplyCombo, onDropImages, onDropGeneratedImage, onPasteImages,
   activeTool, onToolChange, zoom, onZoomChange,
   ref,
   generatingItems = [],
@@ -450,6 +455,8 @@ export default function Canvas({
   const [activeShapeColorPickerId, setActiveShapeColorPickerId] = useState(null);
   const [canvasBackgroundColor, setCanvasBackgroundColor] = useState("");
   const [isCanvasColorPickerOpen, setIsCanvasColorPickerOpen] = useState(false);
+  const [isMaterialPickerOpen, setIsMaterialPickerOpen] = useState(false);
+  const [isCreativeToolsOpen, setIsCreativeToolsOpen] = useState(false);
   const [semanticSelection, setSemanticSelection] = useState(null);
   const [semanticSelectingImageId, setSemanticSelectingImageId] = useState(null);
   const [semanticPickModifierHeld, setSemanticPickModifierHeld] = useState(false);
@@ -597,6 +604,12 @@ export default function Canvas({
       });
       forceRender();
     },
+    // 供父页从聊天面板等外部入口直接唤起材质库（如生成结果下的"试试一键换材质"）
+    openMaterialPicker: () => {
+      setIsCanvasColorPickerOpen(false);
+      setIsCreativeToolsOpen(false);
+      setIsMaterialPickerOpen(true);
+    },
   }), [images, toast]);
 
   useEffect(() => {
@@ -735,6 +748,53 @@ export default function Canvas({
     return () => window.removeEventListener("pointerdown", handlePointerDown);
   }, [activeShapeColorPickerId, isCanvasColorPickerOpen]);
 
+  /** 创意工具浮层：点击浮层与触发按钮以外的区域自动关闭 */
+  useEffect(() => {
+    if (!isCreativeToolsOpen) return undefined;
+    const handlePointerDown = (event) => {
+      const target = event.target;
+      if (
+        target?.closest?.("[data-creative-tools-root]") ||
+        target?.closest?.("[data-creative-tools-trigger]")
+      ) {
+        return;
+      }
+      setIsCreativeToolsOpen(false);
+    };
+    window.addEventListener("pointerdown", handlePointerDown);
+    return () => window.removeEventListener("pointerdown", handlePointerDown);
+  }, [isCreativeToolsOpen]);
+
+  /** 材质面板点选：校验选中目标后交给上层发起改图；面板保持打开方便连续测试；palette 可选 */
+  const handlePickMaterial = useCallback((material, palette) => {
+    const target = selectedImage;
+    if (!target?.image_url) {
+      toast("请先在画布选中一张图片", "info", 1800);
+      return;
+    }
+    const mediaType = target.media_type || "image";
+    if (mediaType === "video" || mediaType === "svg") {
+      toast("换材质暂只支持图片元素", "info", 1800);
+      return;
+    }
+    onApplyMaterial?.(material, palette || null, target);
+  }, [onApplyMaterial, selectedImage, toast]);
+
+  /** 组合探索点选：校验同单材质，交给上层发起一次多材质+配色改图 */
+  const handlePickCombo = useCallback((materials, palette) => {
+    const target = selectedImage;
+    if (!target?.image_url) {
+      toast("请先在画布选中一张图片", "info", 1800);
+      return;
+    }
+    const mediaType = target.media_type || "image";
+    if (mediaType === "video" || mediaType === "svg") {
+      toast("组合探索暂只支持图片元素", "info", 1800);
+      return;
+    }
+    onApplyCombo?.(materials, palette, target);
+  }, [onApplyCombo, selectedImage, toast]);
+
   /** 空格按住：可左键拖拽平移画布（输入框内不抢占空格） */
   useEffect(() => {
     const typing = () => {
@@ -872,6 +932,10 @@ export default function Canvas({
   /** 滚轮：指数缩放 + 光标锚点（世界坐标不变） */
   const handleWheel = useCallback(
     (e) => {
+      // 材质库等浮窗内的滚轮留给面板自身滚动（翻找材质），不触发画布缩放
+      if (e.target instanceof Element && e.target.closest("[data-material-picker-root], [data-canvas-wheel-ignore]")) {
+        return;
+      }
       e.preventDefault();
       const rect = containerRef.current?.getBoundingClientRect();
       if (!rect) return;
@@ -2419,6 +2483,48 @@ export default function Canvas({
                       <span>{t("删除")}</span>
                     </button>}
                   </div>
+                  {/* 快捷换材质条：主打能力的情境入口——选中图片即出现，点材质球直接生成，点"更多"打开材质库 */}
+                  {!isVideo && !isSvgImage && !img.isGeneratingPlaceholder && onApplyMaterial && QUICK_SWAP_MATERIALS.length > 0 && (
+                    <div className={`flex w-fit self-start items-center gap-1 px-2 py-1 rounded-xl border border-border-primary bg-bg-primary/92 backdrop-blur-xl pointer-events-auto ${
+                      isLightTheme ? "shadow-[0_10px_24px_rgba(15,23,42,0.08)]" : "shadow-lg"
+                    }`}>
+                      <span className={`inline-flex items-center gap-1 pl-0.5 pr-1 text-[11px] font-medium whitespace-nowrap ${
+                        isLightTheme ? "text-[#111827]" : "text-text-secondary"
+                      }`}>
+                        <SwatchBook size={12} className={isLightTheme ? "text-[#111827]" : "text-accent"} />
+                        {t("换材质")}
+                      </span>
+                      {QUICK_SWAP_MATERIALS.map((material) => (
+                        <button
+                          key={material.id}
+                          type="button"
+                          onPointerDown={(e) => e.stopPropagation()}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onApplyMaterial?.(material, null, img);
+                          }}
+                          className="h-6 w-6 shrink-0 overflow-hidden rounded-full border border-border-primary transition-all hover:scale-110 hover:border-accent"
+                          title={`一键换成「${material.name}」`}
+                        >
+                          <img src={material.thumb} alt={material.name} className="h-full w-full object-cover" draggable={false} />
+                        </button>
+                      ))}
+                      <button
+                        type="button"
+                        onPointerDown={(e) => e.stopPropagation()}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setIsCanvasColorPickerOpen(false);
+                          setIsCreativeToolsOpen(false);
+                          setIsMaterialPickerOpen(true);
+                        }}
+                        className="inline-flex items-center px-1.5 py-1 rounded-lg text-[11px] text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors whitespace-nowrap"
+                        title={t("打开材质库，浏览全部材质与配色")}
+                      >
+                        {t("更多")}
+                      </button>
+                    </div>
+                  )}
                   {!isSvgImage && (
                   <div className="flex w-full items-center justify-between gap-2 text-[10px] text-text-primary pointer-events-none">
                     <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden px-1.5 py-0.5">
@@ -2987,6 +3093,14 @@ export default function Canvas({
             />
           </div>
         )}
+        {isMaterialPickerOpen && (
+          <MaterialPanel
+            selectedImage={selectedImage}
+            onPick={handlePickMaterial}
+            onPickCombo={onApplyCombo ? handlePickCombo : undefined}
+            onClose={() => setIsMaterialPickerOpen(false)}
+          />
+        )}
         <Toolbar
           activeTool={activeTool}
           onToolChange={onToolChange}
@@ -2995,7 +3109,23 @@ export default function Canvas({
           shapeMode={shapeMode}
           onShapeModeChange={onShapeModeChange}
           canvasColor={resolvedCanvasColor}
-          onToggleCanvasColorPicker={() => setIsCanvasColorPickerOpen((open) => !open)}
+          onToggleCanvasColorPicker={() => {
+            setIsMaterialPickerOpen(false);
+            setIsCreativeToolsOpen(false);
+            setIsCanvasColorPickerOpen((open) => !open);
+          }}
+          onToggleMaterialPicker={onApplyMaterial ? () => {
+            setIsCanvasColorPickerOpen(false);
+            setIsCreativeToolsOpen(false);
+            setIsMaterialPickerOpen((open) => !open);
+          } : undefined}
+          isMaterialPickerOpen={isMaterialPickerOpen}
+          onToggleCreativeTools={() => {
+            setIsCanvasColorPickerOpen(false);
+            setIsMaterialPickerOpen(false);
+            setIsCreativeToolsOpen((open) => !open);
+          }}
+          isCreativeToolsOpen={isCreativeToolsOpen}
           onFitView={handleFitView}
           onAutoAlign={() => {
             const imgs = imagesRef.current;

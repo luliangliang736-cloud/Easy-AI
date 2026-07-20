@@ -87,3 +87,50 @@ export function recordCloudDeletions(records = {}) {
     // Deletion records must never block the user's actual delete/copy/paste action.
   }
 }
+
+// 检查给定的 id/URL 里有哪些命中了本地删除标记,返回命中的子集(没有命中返回 null)。
+// 用于"重新添加曾删除过的图片"场景:命中的标记必须先解除,否则新加的内容
+// 会在下一次加载/云同步过滤时被再次删掉(表现为图片莫名丢失)。
+export function findCloudDeletionMatches(records = {}) {
+  if (typeof window === "undefined") return null;
+  const current = normalizeCloudStateDeletions(window.localStorage.getItem(CLOUD_STATE_DELETIONS_KEY));
+  const hits = {};
+  let found = false;
+  for (const [scope, values] of Object.entries(records || {})) {
+    const list = Array.isArray(values) ? values : [values];
+    for (const raw of list) {
+      const value = String(raw || "").trim();
+      if (value && current[scope] && Object.prototype.hasOwnProperty.call(current[scope], value)) {
+        hits[scope] = hits[scope] || [];
+        hits[scope].push(value);
+        found = true;
+      }
+    }
+  }
+  return found ? hits : null;
+}
+
+// 解除删除标记时移除本地记录,否则恢复/重新添加的内容会在下一次
+// 本地加载/云同步过滤时被再次删掉。服务端标记由 /api/cloud-state/undelete 移除。
+export function removeCloudDeletions(records = {}) {
+  if (typeof window === "undefined") return;
+  const current = normalizeCloudStateDeletions(window.localStorage.getItem(CLOUD_STATE_DELETIONS_KEY));
+  let changed = false;
+  for (const [scope, values] of Object.entries(records || {})) {
+    const list = Array.isArray(values) ? values : [values];
+    for (const raw of list) {
+      const value = String(raw || "").trim();
+      if (value && current[scope] && Object.prototype.hasOwnProperty.call(current[scope], value)) {
+        delete current[scope][value];
+        changed = true;
+      }
+    }
+  }
+  if (!changed) return;
+  try {
+    window.localStorage.setItem(CLOUD_STATE_DELETIONS_KEY, JSON.stringify(normalizeCloudStateDeletions(current)));
+    window.dispatchEvent(new CustomEvent(CLOUD_STATE_DELETIONS_CHANGED_EVENT));
+  } catch {
+    // Marker cleanup is best-effort; the on-screen content must not be blocked.
+  }
+}

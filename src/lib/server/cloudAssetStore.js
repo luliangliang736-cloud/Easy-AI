@@ -1,7 +1,9 @@
-import { encodeCloudAssetUrl, getOssClient, isOssConfigured } from "@/lib/server/ossClient";
+import { encodeCloudAssetUrl, getOssClient, isOssConfigured, putOssObjectResilient } from "@/lib/server/ossClient";
 import { readGeneratedImage } from "@/lib/server/generatedImageStore";
 
-const MAX_UPLOAD_BYTES = Number(process.env.CLOUD_ASSET_MAX_UPLOAD_BYTES || 12 * 1024 * 1024);
+// 图片上限要能覆盖 4K 高清放大的 PNG(可到 40MB+),否则大图迁移 OSS 会失败,
+// 只能一直依赖容器本地缓存/服务商外链,重新部署或外链过期后图片丢失。
+const MAX_UPLOAD_BYTES = Number(process.env.CLOUD_ASSET_MAX_UPLOAD_BYTES || 60 * 1024 * 1024);
 const MAX_MEDIA_UPLOAD_BYTES = Number(process.env.CLOUD_MEDIA_MAX_UPLOAD_BYTES || 500 * 1024 * 1024);
 
 const contentTypeExt = new Map([
@@ -82,11 +84,10 @@ export async function uploadCloudAssetBuffer({ userEmail = "", buffer, contentTy
   const randomPart = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
   const objectKey = `users/${userPart}/${safeFilename(scope)}/${datePart}/${randomPart}-${safeFilename(filename)}.${ext}`;
 
-  await getOssClient().put(objectKey, buffer, {
-    headers: {
-      "Content-Type": normalizedContentType,
-      "Cache-Control": "private, max-age=31536000, immutable",
-    },
+  // 大图/视频分片上传 + 重试，避免跨国单次 put 超时导致迁移失败（迁移失败 = 重部署后图丢失）
+  await putOssObjectResilient(objectKey, buffer, {
+    "Content-Type": normalizedContentType,
+    "Cache-Control": "private, max-age=31536000, immutable",
   });
 
   return {

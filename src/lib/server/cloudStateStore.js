@@ -19,6 +19,11 @@ export const CLOUD_STATE_KEYS = [
   "lovart-canvas-boards",
   "lovart-active-canvas-board",
   "lovart-canvas-ref-images",
+  // 材质库（创意工具箱）：收藏 / DIY 配色 / 组合预设 / DIY 材质
+  "lovart-material-favorites",
+  "lovart-custom-palettes",
+  "lovart-combo-presets",
+  "lovart-custom-materials",
   CLOUD_STATE_DELETIONS_KEY,
 ];
 
@@ -583,4 +588,69 @@ export async function upsertUserCloudState(userEmail = "", rawItems = []) {
   }
 
   return { configured: true, saved: items.length };
+}
+
+// 解除删除标记时移除服务端记录。
+// 服务端合并删除标记是并集(mergeCloudStateDeletions),客户端只清本地标记
+// 无法让服务端标记消失,必须在这里从 DB 行中真正删掉对应记录,
+// 否则恢复/重新添加的内容会在下一次读取/写入时被 applyDeletionsToStateValue 再次过滤掉。
+const UNDELETABLE_SCOPES = new Set(["canvasImageIds", "imageUrls", "canvasTextIds", "canvasShapeIds"]);
+
+export async function removeUserCloudDeletions(userEmail = "", records = {}) {
+  if (!isCloudDbConfigured()) return { configured: false, removed: 0 };
+  const entries = [];
+  for (const [scope, values] of Object.entries(records || {})) {
+    if (!UNDELETABLE_SCOPES.has(scope)) continue;
+    const list = Array.isArray(values) ? values : [values];
+    for (const raw of list) {
+      const value = String(raw || "").trim();
+      if (value) entries.push([scope, value]);
+    }
+  }
+  if (entries.length === 0) return { configured: true, removed: 0 };
+
+  await ensureCloudDbSchema();
+  const pool = getCloudDbPool();
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const result = await client.query(
+      `
+        SELECT state_value
+        FROM user_cloud_state
+        WHERE user_email = $1 AND state_key = $2
+        FOR UPDATE
+      `,
+      [userEmail, CLOUD_STATE_DELETIONS_KEY],
+    );
+    const deletions = normalizeCloudStateDeletions(result.rows[0]?.state_value || "{}");
+    let removed = 0;
+    for (const [scope, value] of entries) {
+      if (deletions[scope] && Object.prototype.hasOwnProperty.call(deletions[scope], value)) {
+        delete deletions[scope][value];
+        removed += 1;
+      }
+    }
+    if (removed > 0) {
+      await client.query(
+        `
+          INSERT INTO user_cloud_state (user_email, state_key, state_value, client_updated_at, server_updated_at)
+          VALUES ($1, $2, $3, $4, NOW())
+          ON CONFLICT (user_email, state_key)
+          DO UPDATE SET
+            state_value = EXCLUDED.state_value,
+            client_updated_at = EXCLUDED.client_updated_at,
+            server_updated_at = NOW()
+        `,
+        [userEmail, CLOUD_STATE_DELETIONS_KEY, JSON.stringify(normalizeCloudStateDeletions(deletions)), Date.now()],
+      );
+    }
+    await client.query("COMMIT");
+    return { configured: true, removed };
+  } catch (error) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw error;
+  } finally {
+    client.release();
+  }
 }

@@ -12,10 +12,11 @@ import { useHistory } from "@/lib/useHistory";
 import { useTheme } from "@/lib/useTheme";
 import { useAuthSessionGuard } from "@/lib/useAuthSessionGuard";
 import { CLOUD_STATE_RESTORED_EVENT, useCloudLocalStorageSync } from "@/lib/useCloudLocalStorageSync";
-import { CLOUD_STATE_DELETIONS_KEY, normalizeCloudStateDeletions, recordCloudDeletions } from "@/lib/cloudStateDeletions";
+import { CLOUD_STATE_DELETIONS_KEY, findCloudDeletionMatches, normalizeCloudStateDeletions, recordCloudDeletions, removeCloudDeletions } from "@/lib/cloudStateDeletions";
 import { MAX_GEN_COUNT } from "@/lib/genLimits";
 import { useCanvasT } from "@/lib/canvasI18n";
 import { ChevronsLeft, Globe, Home as HomeIcon, Layers, Loader2, Plus } from "lucide-react";
+import { buildMaterialEditPrompt, buildComboEditPrompt } from "@/lib/materials";
 
 const FLOATING_ENTRY_DRAFT_KEY = "lovart-floating-entry-draft";
 const CANVAS_REF_IMAGES_STORAGE_KEY = "lovart-canvas-ref-images";
@@ -25,6 +26,11 @@ const CANVAS_CLOUD_STATE_KEYS = [
   "lovart-active-conversation",
   "lovart-canvas-boards",
   "lovart-active-canvas-board",
+  // 材质库（创意工具箱）：收藏 / DIY 配色 / 组合预设 / DIY 材质，跨设备同步
+  "lovart-material-favorites",
+  "lovart-custom-palettes",
+  "lovart-combo-presets",
+  "lovart-custom-materials",
 ];
 
 /**
@@ -1620,6 +1626,54 @@ function HomeInner() {
     canvasShapesRef.current = canvasShapes;
   }, [canvasBoards, canvasImages, refImages, canvasTexts, canvasShapes]);
 
+  // Ctrl+Z 撤销删除日志：只记录"删除"动作(图片/文案/形状)，恢复时把元素追加回对应历史栈，
+  // 不调用历史栈的 undo(避免与拖拽等其它 push 操作的栈序耦合,改动面最小)。
+  // 每条记录携带删除时写入的删除标记,恢复时同步清掉本地+云端标记,
+  // 否则恢复的内容会在下一次加载/云同步过滤时被再次删除。
+  // 切换/新建/删除画布、云端恢复重载时清空日志,防止把 A 画布的元素恢复进 B 画布。
+  const canvasUndoActionsRef = useRef([]);
+  const recordCanvasDeleteForUndo = useCallback((kind, item, deletions) => {
+    if (!item) return;
+    canvasUndoActionsRef.current = [...canvasUndoActionsRef.current, { kind, item, deletions }].slice(-50);
+  }, []);
+  const clearCanvasUndoActions = useCallback(() => {
+    canvasUndoActionsRef.current = [];
+  }, []);
+
+  // 解除本地+云端的删除标记。服务端标记是并集合并,只清本地不够,必须请求服务端真正移除。
+  const undeleteCloudMarkers = useCallback((records) => {
+    if (!records) return;
+    removeCloudDeletions(records);
+    void fetch("/api/cloud-state/undelete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ records }),
+    }).catch(() => {});
+  }, []);
+
+  // 收集所有画布(含当前画布最新状态)上仍在使用的图片 URL。
+  // ⚠️ 防丢图关键:删除标记按"id 或 URL 命中即删"过滤,而复制副本、对话里的生成图
+  // 和画布图共用同一个 URL。任何删除操作写 imageUrls 标记前,必须排除仍被
+  // 画布使用的 URL,否则同 URL 的其它图会在下一次云同步/刷新时被无声删掉。
+  const collectLiveCanvasImageUrls = useCallback((excludeImageId = "", excludeBoardId = "") => {
+    const urls = new Set();
+    const addItem = (item) => {
+      if (!item) return;
+      if (excludeImageId && item.id === excludeImageId) return;
+      const url = item?.image_url || item?.url || "";
+      if (url) urls.add(url);
+    };
+    (canvasBoardsRef.current || []).forEach((board) => {
+      if (excludeBoardId && board?.id === excludeBoardId) return;
+      (board?.images || []).forEach(addItem);
+    });
+    // 当前画布的最新图片可能还没镜像进 boards,单独并入
+    if (activeCanvasBoardIdRef.current !== excludeBoardId) {
+      (canvasImagesRef.current || []).forEach(addItem);
+    }
+    return urls;
+  }, []);
+
   useEffect(() => {
     if (!activeCanvasBoardId) return;
     setCanvasBoardTaskNotices((prev) => {
@@ -1640,6 +1694,8 @@ function HomeInner() {
   // Load from localStorage
   useEffect(() => {
     const loadCanvasStateFromStorage = () => {
+      // 重载会用 setState 整体重置各历史栈,旧的撤销日志已与栈内容脱钩,必须清空
+      canvasUndoActionsRef.current = [];
       try {
         const ver = localStorage.getItem("lovart-version");
         if (ver !== STORAGE_VERSION) {
@@ -2088,12 +2144,17 @@ function HomeInner() {
 
   const handleDeleteCanvasText = useCallback((id) => {
     const item = canvasTexts.find((t) => t.id === id);
+    const isRealText = Boolean(String(item?.text || "").trim() && !item?.isDraft);
     recordCloudDeletions({ canvasTextIds: id });
+    // 空文本/草稿的删除属于编辑器自动清理,不进撤销日志
+    if (isRealText) {
+      recordCanvasDeleteForUndo("texts", item, { canvasTextIds: [id] });
+    }
     canvasTextsHistory.push((prev) => prev.filter((t) => t.id !== id));
-    if (String(item?.text || "").trim() && !item?.isDraft) {
+    if (isRealText) {
       toast("已删除文案", "info", 1200);
     }
-  }, [canvasTexts, canvasTextsHistory, toast]);
+  }, [canvasTexts, canvasTextsHistory, recordCanvasDeleteForUndo, toast]);
 
   const handleAddCanvasShape = useCallback((item) => {
     canvasShapesHistory.push((prev) => [...prev, item]);
@@ -2106,10 +2167,45 @@ function HomeInner() {
   }, [canvasShapesHistory]);
 
   const handleDeleteCanvasShape = useCallback((id) => {
+    const item = canvasShapes.find((s) => s.id === id);
     recordCloudDeletions({ canvasShapeIds: id });
+    recordCanvasDeleteForUndo("shapes", item, { canvasShapeIds: [id] });
     canvasShapesHistory.push((prev) => prev.filter((s) => s.id !== id));
     toast("已删除形状", "info", 1200);
-  }, [canvasShapesHistory, toast]);
+  }, [canvasShapes, canvasShapesHistory, recordCanvasDeleteForUndo, toast]);
+
+  /** Ctrl+Z：恢复最近一次删除的画布元素（图片/文案/形状），并解除其删除标记 */
+  const handleCanvasUndo = useCallback(() => {
+    const actions = canvasUndoActionsRef.current;
+    if (!actions.length) return false;
+    const action = actions[actions.length - 1];
+    canvasUndoActionsRef.current = actions.slice(0, -1);
+    const restoreItem = (prev) => (
+      prev.some((entry) => entry?.id === action.item.id) ? prev : [...prev, action.item]
+    );
+    if (action.kind === "images") canvasHistory.push(restoreItem);
+    else if (action.kind === "texts") canvasTextsHistory.push(restoreItem);
+    else if (action.kind === "shapes") canvasShapesHistory.push(restoreItem);
+    if (action.deletions) {
+      // 清掉本地+云端删除标记,否则恢复的内容会在下一次加载/同步过滤时被再次删除
+      undeleteCloudMarkers(action.deletions);
+    }
+    toast("已恢复删除的内容", "success", 1500);
+    return true;
+  }, [canvasHistory, canvasShapesHistory, canvasTextsHistory, toast, undeleteCloudMarkers]);
+
+  useEffect(() => {
+    const onKeyDown = (e) => {
+      if (!(e.ctrlKey || e.metaKey) || e.shiftKey || e.altKey) return;
+      if (String(e.key || "").toLowerCase() !== "z") return;
+      const el = document.activeElement;
+      if (el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable)) return;
+      if (isTextEditing) return;
+      if (handleCanvasUndo()) e.preventDefault();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [handleCanvasUndo, isTextEditing]);
 
   const updateConversationMessages = useCallback((conversationId, updater) => {
     setConversations((prev) => prev.map((conversation) => {
@@ -2151,6 +2247,13 @@ function HomeInner() {
       ? items.filter(Boolean).map((item) => ({ ...item, canvasBoardId: item.canvasBoardId || boardId }))
       : [];
     if (!boardId || nextItems.length === 0) return;
+    // 曾删除过的图被重新添加(粘贴/从对话拖回/重新生成)时解除它的删除标记,
+    // 否则这张图本地能显示,但下一次刷新/云同步就会被过滤掉(表现为图片莫名丢失)
+    const staleMarks = findCloudDeletionMatches({
+      canvasImageIds: nextItems.map((item) => item?.id),
+      imageUrls: nextItems.map((item) => item?.image_url || item?.url),
+    });
+    if (staleMarks) undeleteCloudMarkers(staleMarks);
     let activeBoardImages = null;
     if (activeCanvasBoardIdRef.current === boardId) {
       const existingIds = new Set((canvasImagesRef.current || []).map((item) => item?.id).filter(Boolean));
@@ -2173,7 +2276,7 @@ function HomeInner() {
       persistCanvasBoardsToLocalStorage(nextBoards, activeCanvasBoardIdRef.current || boardId);
       return nextBoards;
     });
-  }, [canvasHistory]);
+  }, [canvasHistory, undeleteCloudMarkers]);
 
   const updateCanvasImageInBoard = useCallback((boardId, imageId, patch) => {
     if (!boardId || !imageId || !patch) return;
@@ -2274,9 +2377,28 @@ function HomeInner() {
     sourceUrl,
     mediaType,
   }) => {
-    if (!sourceUrl || !shouldUploadToCloudAsset(sourceUrl)) return;
+    // 超大图(如 4K 高清放大)可能超过本地缓存上限,结果 URL 仍是服务商的临时外链。
+    // 外链会过期,必须也搬进 OSS,否则过几天图就裂了(用户看到的就是"图丢了")。
+    const isRemoteImageResult = mediaType !== "video" && /^https?:\/\//i.test(sourceUrl || "");
+    if (!sourceUrl || (!shouldUploadToCloudAsset(sourceUrl) && !isRemoteImageResult)) return;
 
-    void uploadMediaSourceToCloudAsset(sourceUrl, `${mediaType || "image"}-${Date.now()}`, "generated-result")
+    const uploadPromise = shouldUploadToCloudAsset(sourceUrl)
+      ? uploadMediaSourceToCloudAsset(sourceUrl, `${mediaType || "image"}-${Date.now()}`, "generated-result")
+      : fetch("/api/cloud-assets/upload", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            sourceUrl,
+            filename: `${mediaType || "image"}-${Date.now()}`,
+            scope: "generated-result",
+          }),
+        }).then(async (res) => {
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok || !data?.url) throw new Error(data?.error || "上传云端素材失败");
+          return data.url;
+        });
+
+    void uploadPromise
       .then((cloudUrl) => {
         if (!cloudUrl || cloudUrl === sourceUrl) return;
         patchTask(conversationId, aiMsgId, taskId, { url: cloudUrl });
@@ -2550,7 +2672,8 @@ function HomeInner() {
     );
     const variantDescriptors = getVariantDescriptors(composerText || text, count);
     const genParams = { ...requestParams, num: count };
-    const displayText = composerText || "请按识别到的文本替换规则编辑图片中的文字";
+    // displayLabel：展示用短标签（如"材质：针织布料"），不影响真实请求提示词
+    const displayText = payload?.displayLabel || composerText || "请按识别到的文本替换规则编辑图片中的文字";
 
     const userMsg = {
       id: userMsgId,
@@ -3075,6 +3198,15 @@ function HomeInner() {
     const generatingItem = canvasGeneratingItems.find((img) => img.id === id);
     const deletedUrl = item?.image_url || item?.url || generatingItem?.image_url || generatingItem?.url || "";
     setCanvasGeneratingItems((prev) => prev.filter((img) => img.id !== id));
+    // 同 URL 的图(复制的副本、跨画布的同一张图)还在画布上时不能记 URL 标记,否则会连坐误删
+    const urlStillInUse = Boolean(deletedUrl) && collectLiveCanvasImageUrls(id).has(deletedUrl);
+    const markedUrl = urlStillInUse ? "" : deletedUrl;
+    if (item) {
+      recordCanvasDeleteForUndo("images", item, {
+        canvasImageIds: [id],
+        ...(markedUrl ? { imageUrls: [markedUrl] } : {}),
+      });
+    }
     canvasHistory.push((prev) => prev.filter((img) => img.id !== id));
     setSelectedImage((prev) => (prev?.id === id ? null : prev));
     if (deletedUrl) {
@@ -3083,10 +3215,10 @@ function HomeInner() {
     }
     recordCloudDeletions({
       canvasImageIds: id,
-      imageUrls: deletedUrl,
+      imageUrls: markedUrl,
     });
     toast("已删除", "info", 1200);
-  }, [canvasGeneratingItems, canvasHistory, canvasImages, toast]);
+  }, [canvasGeneratingItems, canvasHistory, canvasImages, collectLiveCanvasImageUrls, recordCanvasDeleteForUndo, toast]);
 
   const handleSendToChat = useCallback((img) => {
     if (img?.media_type === "video" || img?.mediaType === "video") {
@@ -3473,6 +3605,73 @@ function HomeInner() {
     toast("已填入快捷编辑指令", "success", 1500);
   }, [handleGenerate, isBusy, params, toast]);
 
+  /** 一键换材质：基于选中图片 + 材质提示词发起一次改图；palette 可选（选了则同时替换配色） */
+  const handleApplyMaterial = useCallback(async (material, palette, img) => {
+    if (!img?.image_url || !material?.prompt) return;
+    if (isBusy) {
+      toast("当前有任务进行中，请稍候再试", "info", 1500);
+      return;
+    }
+
+    const meta = await detectRefImageMeta(img.image_url);
+    setSelectedImage(img);
+    setTextEditBlocks([]);
+    setTextEditPanelVisible(false);
+    setSemanticSelection(null);
+    toast(`正在应用「${material.name}」材质${palette ? `（${palette.name} 配色）` : ""}...`, "info", 1800);
+    await handleGenerate({
+      text: buildMaterialEditPrompt(material, palette),
+      displayLabel: `材质：${material.name}${palette ? ` · ${palette.name}` : ""}`,
+      params: {
+        ...params,
+        image_size: "auto",
+        _autoRatio: meta.ratio,
+        _autoDimensions: meta.dimensionsLabel || undefined,
+        num: 1,
+      },
+      refImages: [img.image_url],
+      preserveComposer: true,
+      // 材质生成展示的是简略标签（displayLabel），不隐藏提示词
+      hideConversationMessages: true,
+      disableAgentDefaults: true,
+      composerMode: "manual",
+    });
+  }, [handleGenerate, isBusy, params, toast]);
+
+  /** 组合探索：多材质 + 可选配色方案，基于选中图片发起一次改图 */
+  const handleApplyCombo = useCallback(async (materials, palette, img) => {
+    if (!img?.image_url || !materials?.length) return;
+    if (isBusy) {
+      toast("当前有任务进行中，请稍候再试", "info", 1500);
+      return;
+    }
+
+    const meta = await detectRefImageMeta(img.image_url);
+    setSelectedImage(img);
+    setTextEditBlocks([]);
+    setTextEditPanelVisible(false);
+    setSemanticSelection(null);
+    const comboLabel = materials.map((m) => m.name).join("+");
+    toast(`正在探索组合「${comboLabel}」...`, "info", 1800);
+    await handleGenerate({
+      text: buildComboEditPrompt(materials, palette),
+      displayLabel: `组合：${comboLabel}${palette ? ` · ${palette.name}` : ""}`,
+      params: {
+        ...params,
+        image_size: "auto",
+        _autoRatio: meta.ratio,
+        _autoDimensions: meta.dimensionsLabel || undefined,
+        num: 1,
+      },
+      refImages: [img.image_url],
+      preserveComposer: true,
+      // 组合生成展示的是简略标签（displayLabel），不隐藏提示词
+      hideConversationMessages: true,
+      disableAgentDefaults: true,
+      composerMode: "manual",
+    });
+  }, [handleGenerate, isBusy, params, toast]);
+
   const handleQuickUpscaleImage = useCallback(async (upscaleRequest, img) => {
     const { provider, targetSize } = normalizeUpscaleRequest(upscaleRequest);
     if (!img?.image_url || !targetSize) return;
@@ -3546,6 +3745,20 @@ function HomeInner() {
     setSelectedImage(img);
     setSemanticSelection(null);
   }, []);
+
+  /** 聊天面板生成结果下的"试试一键换材质"：选中画布上对应的图并打开材质库 */
+  const handleTryMaterialFromChat = useCallback((url) => {
+    if (!url) return;
+    const target = (canvasImagesRef.current || []).find(
+      (item) => item?.image_url === url && (item.media_type || "image") === "image",
+    );
+    if (!target) {
+      toast("这张图不在当前画布上，先把它拖进画布再试", "info", 2200);
+      return;
+    }
+    handleSelectImage(target);
+    canvasRef.current?.openMaterialPicker?.();
+  }, [handleSelectImage, toast]);
 
   /** 框选多张画布图片时，批量同步到右侧参考图（与模型最大参考图数量对齐） */
   const handleSyncCanvasRefImages = useCallback((urls) => {
@@ -3701,9 +3914,11 @@ function HomeInner() {
 
   const handleClearHistory = useCallback(() => {
     const messagesToDelete = activeCanvasHistoryMessages;
+    // 消息里的生成图可能同时在画布上(生成完成会自动上画布),仍被画布使用的 URL 不能标记删除
+    const liveCanvasUrls = collectLiveCanvasImageUrls();
     recordCloudDeletions({
       messageIds: messagesToDelete.map((message) => message.id),
-      imageUrls: messagesToDelete.flatMap(collectMessageImageUrls),
+      imageUrls: messagesToDelete.flatMap(collectMessageImageUrls).filter((url) => !liveCanvasUrls.has(url)),
     });
     setConversations((prev) => prev.map((conversation) => ({
       ...conversation,
@@ -3713,7 +3928,7 @@ function HomeInner() {
       updatedAt: Date.now(),
     })));
     toast("历史记录已清空", "info", 1500);
-  }, [activeCanvasBoardId, activeCanvasHistoryMessages, canvasBoards.length, toast]);
+  }, [activeCanvasBoardId, activeCanvasHistoryMessages, canvasBoards.length, collectLiveCanvasImageUrls, toast]);
 
   const handleNewConversation = useCallback(() => {
     if (isNavigationBusy) {
@@ -3756,11 +3971,12 @@ function HomeInner() {
     setRefImages([]);
     canvasTextsHistory.setState([]);
     canvasShapesHistory.setState([]);
+    clearCanvasUndoActions();
     setSelectedImage(null);
     setSemanticSelection(null);
     canvasSelectionUrlsRef.current = [];
     toast("已新建画布", "success", 1200);
-  }, [activeCanvasBoardId, canvasBoards.length, canvasHistory, canvasImages, canvasTexts, canvasTextsHistory, canvasShapes, canvasShapesHistory, isTextEditing, refImages, toast]);
+  }, [activeCanvasBoardId, canvasBoards.length, canvasHistory, canvasImages, canvasTexts, canvasTextsHistory, canvasShapes, canvasShapesHistory, clearCanvasUndoActions, isTextEditing, refImages, toast]);
 
   const handleSelectCanvasBoard = useCallback((boardId) => {
     if (isTextEditing) {
@@ -3791,6 +4007,7 @@ function HomeInner() {
     setRefImages(targetBoard.refImages || []);
     canvasTextsHistory.setState(targetBoard.texts || []);
     canvasShapesHistory.setState(targetBoard.shapes || []);
+    clearCanvasUndoActions();
     setSelectedImage(null);
     setSemanticSelection(null);
     canvasSelectionUrlsRef.current = [];
@@ -3800,6 +4017,7 @@ function HomeInner() {
     canvasBoards,
     canvasHistory,
     canvasImages,
+    clearCanvasUndoActions,
     refImages,
     canvasShapes,
     canvasShapesHistory,
@@ -3836,10 +4054,14 @@ function HomeInner() {
       toast("默认画布不能删除", "info", 1500);
       return;
     }
+    // 其它画布还在用的 URL 不能标记删除,否则那些画布上的同 URL 图片会被连坐删掉
+    const otherBoardsLiveUrls = collectLiveCanvasImageUrls("", boardId);
     recordCloudDeletions({
       canvasBoardIds: boardId,
       canvasImageIds: (boardToDelete?.images || []).map((item) => item?.id),
-      imageUrls: (boardToDelete?.images || []).map((item) => item?.image_url || item?.url),
+      imageUrls: (boardToDelete?.images || [])
+        .map((item) => item?.image_url || item?.url)
+        .filter((url) => url && !otherBoardsLiveUrls.has(url)),
       canvasTextIds: (boardToDelete?.texts || []).map((item) => item?.id),
       canvasShapeIds: (boardToDelete?.shapes || []).map((item) => item?.id),
     });
@@ -3857,6 +4079,7 @@ function HomeInner() {
         setRefImages(nextBoard.refImages || []);
         canvasTextsHistory.setState(nextBoard.texts || []);
         canvasShapesHistory.setState(nextBoard.shapes || []);
+        clearCanvasUndoActions();
         setSelectedImage(null);
         setSemanticSelection(null);
         canvasSelectionUrlsRef.current = [];
@@ -3865,7 +4088,7 @@ function HomeInner() {
       return remaining;
     });
     toast("画布已删除", "info", 1200);
-  }, [activeCanvasBoardId, canvasBoards, canvasHistory, canvasTextsHistory, canvasShapesHistory, isNavigationBusy, toast]);
+  }, [activeCanvasBoardId, canvasBoards, canvasHistory, canvasTextsHistory, canvasShapesHistory, clearCanvasUndoActions, collectLiveCanvasImageUrls, isNavigationBusy, toast]);
 
   const handleSelectConversation = useCallback((conversationId) => {
     if (isNavigationBusy) {
@@ -3883,10 +4106,12 @@ function HomeInner() {
     }
     const conversationToDelete = conversations.find((conversation) => conversation.id === conversationId);
     const messagesToDelete = conversationToDelete?.messages || [];
+    // 仍被画布使用的 URL 不能标记删除,否则画布上的同 URL 图片会被云同步过滤掉
+    const liveCanvasUrls = collectLiveCanvasImageUrls();
     recordCloudDeletions({
       conversationIds: conversationId,
       messageIds: messagesToDelete.map((message) => message.id),
-      imageUrls: messagesToDelete.flatMap(collectMessageImageUrls),
+      imageUrls: messagesToDelete.flatMap(collectMessageImageUrls).filter((url) => !liveCanvasUrls.has(url)),
     });
 
     setConversations((prev) => {
@@ -3915,7 +4140,7 @@ function HomeInner() {
     });
 
     toast("对话已删除", "info", 1200);
-  }, [activeCanvasBoardId, activeConversationId, canvasBoards.length, conversations, isNavigationBusy, resetComposer, toast]);
+  }, [activeCanvasBoardId, activeConversationId, canvasBoards.length, collectLiveCanvasImageUrls, conversations, isNavigationBusy, resetComposer, toast]);
 
   const handleDeleteMessage = useCallback((messageId) => {
     if (isNavigationBusy) {
@@ -3927,13 +4152,15 @@ function HomeInner() {
     }
 
     const messageToDelete = messages.find((message) => message.id === messageId);
+    // 仍被画布使用的 URL 不能标记删除,否则画布上的同 URL 图片会被云同步过滤掉
+    const liveMessageCanvasUrls = collectLiveCanvasImageUrls();
     recordCloudDeletions({
       messageIds: messageId,
-      imageUrls: collectMessageImageUrls(messageToDelete),
+      imageUrls: collectMessageImageUrls(messageToDelete).filter((url) => !liveMessageCanvasUrls.has(url)),
     });
     updateConversationMessages(activeConversationId, (prev) => prev.filter((message) => message.id !== messageId));
     toast("记录已删除", "info", 1200);
-  }, [activeConversationId, isNavigationBusy, messages, toast, updateConversationMessages]);
+  }, [activeConversationId, collectLiveCanvasImageUrls, isNavigationBusy, messages, toast, updateConversationMessages]);
 
   const projectBoards = canvasBoards;
   const startProjectRename = useCallback((board) => {
@@ -4370,6 +4597,8 @@ function HomeInner() {
         onSendToChat={handleSendToChat}
         onQuickEditImage={handleQuickEditImage}
         onQuickUpscaleImage={handleQuickUpscaleImage}
+        onApplyMaterial={handleApplyMaterial}
+        onApplyCombo={handleApplyCombo}
         onDropImages={handleDropImages}
         onDropGeneratedImage={handleDropGeneratedImage}
         onPasteImages={handlePasteCanvasImages}
@@ -4441,6 +4670,7 @@ function HomeInner() {
         onRetry={handleRetry}
         onDownload={handleDownload}
         onImageClick={handleImageClick}
+        onTryMaterial={handleTryMaterialFromChat}
         onPauseGenerate={handlePauseGenerate}
         entryMode={entryMode}
         onEntryModeChange={setEntryMode}
