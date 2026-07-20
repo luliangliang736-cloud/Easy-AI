@@ -650,8 +650,8 @@ export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onCl
     setPaletteId(paletteRoll === pool.length ? null : pool[paletteRoll].id);
   }, [customPalettes]);
 
-  /** 统一生成入口：选 1 个材质走单材质改图,选 2 个及以上走组合分配生成 */
-  const handleSubmit = useCallback(() => {
+  /** 统一生成入口：选 1 个材质走单材质改图,选 2 个及以上走组合分配生成；options 支持 { quality: "2k" } */
+  const handleSubmit = useCallback((options = null) => {
     const materials = comboIds
       .map((id) => [...MATERIALS, ...customMaterials].find((m) => m.id === id))
       .filter(Boolean);
@@ -659,10 +659,10 @@ export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onCl
     const palette =
       [...MATERIAL_PALETTES, ...customPalettes].find((p) => p.id === paletteId) || null;
     if (materials.length === 1 || !onPickCombo) {
-      onPick(materials[0], palette);
+      onPick(materials[0], palette, options);
       return;
     }
-    onPickCombo(materials, palette);
+    onPickCombo(materials, palette, options);
   }, [comboIds, customMaterials, customPalettes, onPick, onPickCombo, paletteId]);
 
   /** 把面板当前位置固化为绝对坐标（拖拽/缩放前调用一次） */
@@ -1651,7 +1651,7 @@ export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onCl
           </button>
           <button
             type="button"
-            onClick={handleSubmit}
+            onClick={() => handleSubmit()}
             disabled={!hasTarget || comboMaterials.length === 0}
             className="flex h-8 min-w-[110px] flex-1 items-center justify-center whitespace-nowrap rounded-xl bg-accent px-3 text-[12px] font-semibold text-white transition-all hover:bg-accent-hover disabled:cursor-not-allowed disabled:bg-bg-tertiary disabled:text-text-tertiary"
             title={
@@ -1671,6 +1671,16 @@ export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onCl
               : singleMaterial
                 ? `生成（${singleMaterial.name}）`
                 : `生成组合（${comboMaterials.length}）`}
+          </button>
+          {/* 2K 直出：走 Pro 2K 模型，不改全局模型选择，适合定稿出高清图 */}
+          <button
+            type="button"
+            onClick={() => handleSubmit({ quality: "2k" })}
+            disabled={!hasTarget || comboMaterials.length === 0}
+            className="flex h-8 shrink-0 items-center justify-center gap-1 whitespace-nowrap rounded-xl border border-accent/60 px-3 text-[12px] font-semibold text-accent transition-all hover:bg-accent/12 disabled:cursor-not-allowed disabled:border-border-primary disabled:text-text-tertiary [html[data-theme=light]_&]:text-[#111827] [html[data-theme=light]_&]:disabled:text-text-tertiary"
+            title="用 Pro 2K 模型直出高清图（更清晰，生成稍慢）"
+          >
+            生成 2K
           </button>
           {/* 预设快捷入口：紧挨生成按钮，点开选预设→回填材质和配色→直接点生成 */}
           {comboPresets.length > 0 && (

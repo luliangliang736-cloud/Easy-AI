@@ -1335,6 +1335,9 @@ const MODEL_LABELS = {
 
 const GPT_IMAGE_2_MODEL = "gpt-image-2";
 const NANO_PRO_UPSCALE_MODEL = "gemini-3-pro-image-preview";
+// 材质面板「生成 2K」：走 Pro 基础模型 + _nanoResolution（Gemini 原生 imageSize），
+// 与"Nano Pro 高清放大"同通道；网关没有给 -2k 模型别名配渠道，直接请求别名会 503。
+const MATERIAL_2K_PARAMS = { model: NANO_PRO_UPSCALE_MODEL, _nanoResolution: "2K" };
 const KLING_VIDEO_MODELS = new Set(["kling-v2-6", "kling-v3", "kling-v3-omni"]);
 const SEEDANCE_VIDEO_MODELS = new Set(["dreamina-seedance-2-0-260128", "dreamina-seedance-2-0-fast-260128"]);
 
@@ -3605,25 +3608,27 @@ function HomeInner() {
     toast("已填入快捷编辑指令", "success", 1500);
   }, [handleGenerate, isBusy, params, toast]);
 
-  /** 一键换材质：基于选中图片 + 材质提示词发起一次改图；palette 可选（选了则同时替换配色） */
-  const handleApplyMaterial = useCallback(async (material, palette, img) => {
+  /** 一键换材质：基于选中图片 + 材质提示词发起一次改图；palette 可选（选了则同时替换配色）；options.quality === "2k" 时用 Pro 2K 模型直出 */
+  const handleApplyMaterial = useCallback(async (material, palette, img, options) => {
     if (!img?.image_url || !material?.prompt) return;
     if (isBusy) {
       toast("当前有任务进行中，请稍候再试", "info", 1500);
       return;
     }
 
+    const is2k = options?.quality === "2k";
     const meta = await detectRefImageMeta(img.image_url);
     setSelectedImage(img);
     setTextEditBlocks([]);
     setTextEditPanelVisible(false);
     setSemanticSelection(null);
-    toast(`正在应用「${material.name}」材质${palette ? `（${palette.name} 配色）` : ""}...`, "info", 1800);
+    toast(`正在应用「${material.name}」材质${palette ? `（${palette.name} 配色）` : ""}${is2k ? "（2K 直出）" : ""}...`, "info", 1800);
     await handleGenerate({
       text: buildMaterialEditPrompt(material, palette),
-      displayLabel: `材质：${material.name}${palette ? ` · ${palette.name}` : ""}`,
+      displayLabel: `材质：${material.name}${palette ? ` · ${palette.name}` : ""}${is2k ? " · 2K" : ""}`,
       params: {
         ...params,
+        ...(is2k ? MATERIAL_2K_PARAMS : null),
         image_size: "auto",
         _autoRatio: meta.ratio,
         _autoDimensions: meta.dimensionsLabel || undefined,
@@ -3638,26 +3643,28 @@ function HomeInner() {
     });
   }, [handleGenerate, isBusy, params, toast]);
 
-  /** 组合探索：多材质 + 可选配色方案，基于选中图片发起一次改图 */
-  const handleApplyCombo = useCallback(async (materials, palette, img) => {
+  /** 组合探索：多材质 + 可选配色方案，基于选中图片发起一次改图；options.quality === "2k" 时用 Pro 2K 模型直出 */
+  const handleApplyCombo = useCallback(async (materials, palette, img, options) => {
     if (!img?.image_url || !materials?.length) return;
     if (isBusy) {
       toast("当前有任务进行中，请稍候再试", "info", 1500);
       return;
     }
 
+    const is2k = options?.quality === "2k";
     const meta = await detectRefImageMeta(img.image_url);
     setSelectedImage(img);
     setTextEditBlocks([]);
     setTextEditPanelVisible(false);
     setSemanticSelection(null);
     const comboLabel = materials.map((m) => m.name).join("+");
-    toast(`正在探索组合「${comboLabel}」...`, "info", 1800);
+    toast(`正在探索组合「${comboLabel}」${is2k ? "（2K 直出）" : ""}...`, "info", 1800);
     await handleGenerate({
       text: buildComboEditPrompt(materials, palette),
-      displayLabel: `组合：${comboLabel}${palette ? ` · ${palette.name}` : ""}`,
+      displayLabel: `组合：${comboLabel}${palette ? ` · ${palette.name}` : ""}${is2k ? " · 2K" : ""}`,
       params: {
         ...params,
+        ...(is2k ? MATERIAL_2K_PARAMS : null),
         image_size: "auto",
         _autoRatio: meta.ratio,
         _autoDimensions: meta.dimensionsLabel || undefined,

@@ -765,8 +765,8 @@ export default function Canvas({
     return () => window.removeEventListener("pointerdown", handlePointerDown);
   }, [isCreativeToolsOpen]);
 
-  /** 材质面板点选：校验选中目标后交给上层发起改图；面板保持打开方便连续测试；palette 可选 */
-  const handlePickMaterial = useCallback((material, palette) => {
+  /** 材质面板点选：校验选中目标后交给上层发起改图；面板保持打开方便连续测试；palette / options（如 { quality: "2k" }）可选 */
+  const handlePickMaterial = useCallback((material, palette, options) => {
     const target = selectedImage;
     if (!target?.image_url) {
       toast("请先在画布选中一张图片", "info", 1800);
@@ -777,11 +777,11 @@ export default function Canvas({
       toast("换材质暂只支持图片元素", "info", 1800);
       return;
     }
-    onApplyMaterial?.(material, palette || null, target);
+    onApplyMaterial?.(material, palette || null, target, options || null);
   }, [onApplyMaterial, selectedImage, toast]);
 
   /** 组合探索点选：校验同单材质，交给上层发起一次多材质+配色改图 */
-  const handlePickCombo = useCallback((materials, palette) => {
+  const handlePickCombo = useCallback((materials, palette, options) => {
     const target = selectedImage;
     if (!target?.image_url) {
       toast("请先在画布选中一张图片", "info", 1800);
@@ -792,7 +792,7 @@ export default function Canvas({
       toast("组合探索暂只支持图片元素", "info", 1800);
       return;
     }
-    onApplyCombo?.(materials, palette, target);
+    onApplyCombo?.(materials, palette, target, options || null);
   }, [onApplyCombo, selectedImage, toast]);
 
   /** 空格按住：可左键拖拽平移画布（输入框内不抢占空格） */
