@@ -25,8 +25,20 @@ railway-v4.44.0-x86_64-pc-windows-msvc
 *.psd
 *.bak
 public/ip-assets/EZfamily
+# public/images 里首页大图走 OSS（HOME_ASSET_BASE_URL），默认不打进部署包；
+# 但以下是代码里本地路径直引的资源，必须随包上传，否则线上 404（logo 就吃过这个亏）
 public/images/*
 !public/images/materials
+!public/images/ip-scenes
+!public/images/showcase-gallery
+!public/images/business-gallery
+!public/images/trusted-logos
+!public/images/easyai-smile.svg
+!public/images/easyai-wordmark.svg
+!public/images/easyai-logo.svg
+!public/images/text-logo.svg
+!public/images/floating-avatar-v2.webp
+!public/images/effect-showcase-muted-mode.jpg
 public/videos
 python_tools
 scripts
