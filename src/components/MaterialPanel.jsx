@@ -137,7 +137,7 @@ function buildMaterialBallPrompt(materialPrompt) {
  * 材质库浮窗：可拖拽、可调整大小，支持分类切换与收藏。
  * 点选材质球后不关闭，方便对同一批元素连续测试不同材质。
  */
-export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onClose }) {
+export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onClose, onSelectionChange, composerHasText = false, onComposerGenerate }) {
   const panelRef = useRef(null);
   const extractImageInputRef = useRef(null);
   // pos 为 null 时使用默认停靠位置（工具栏上方居中），拖拽后切换为绝对坐标
@@ -650,12 +650,22 @@ export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onCl
     setPaletteId(paletteRoll === pool.length ? null : pool[paletteRoll].id);
   }, [customPalettes]);
 
+  const hasTarget = Boolean(selectedImage?.image_url);
+  // 右侧输入框有文案时也可点选材质（发送时"文案 + 材质"直出），面板不再置灰
+  const canUseComposerText = Boolean(composerHasText && onComposerGenerate);
+  const canPick = hasTarget || canUseComposerText;
+
   /** 统一生成入口：选 1 个材质走单材质改图,选 2 个及以上走组合分配生成；options 支持 { quality: "2k" } */
   const handleSubmit = useCallback((options = null) => {
     const materials = comboIds
       .map((id) => [...MATERIALS, ...customMaterials].find((m) => m.id === id))
       .filter(Boolean);
     if (materials.length === 0) return;
+    // 没选画布图片但右侧有文案：走"文案 + 材质"直出（材质/配色由父级从选择上报里取）
+    if (!hasTarget && composerHasText && onComposerGenerate) {
+      onComposerGenerate(options);
+      return;
+    }
     const palette =
       [...MATERIAL_PALETTES, ...customPalettes].find((p) => p.id === paletteId) || null;
     if (materials.length === 1 || !onPickCombo) {
@@ -663,7 +673,7 @@ export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onCl
       return;
     }
     onPickCombo(materials, palette, options);
-  }, [comboIds, customMaterials, customPalettes, onPick, onPickCombo, paletteId]);
+  }, [comboIds, composerHasText, customMaterials, customPalettes, hasTarget, onComposerGenerate, onPick, onPickCombo, paletteId]);
 
   /** 把面板当前位置固化为绝对坐标（拖拽/缩放前调用一次） */
   const capturePos = useCallback(() => {
@@ -810,13 +820,27 @@ export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onCl
         : MATERIALS.filter((material) => material.category === activeTab);
   // DIY 板块跟随官方材质列表展示（收藏 Tab 不显示）
   const showDiySection = activeTab !== FAVORITES_TAB;
-  const hasTarget = Boolean(selectedImage?.image_url);
   const selectedPalette = allPalettes.find((p) => p.id === paletteId) || null;
   const comboMaterials = comboIds
     .map((id) => allMaterials.find((m) => m.id === id))
     .filter(Boolean);
   // 只选 1 个材质时走单材质生成路径,底部按钮文案也按单材质展示
   const singleMaterial = comboMaterials.length === 1 ? comboMaterials[0] : null;
+
+  // 把当前点选的材质/配色上报给父级：供右侧对话"文案 + 材质"直出使用（面板卸载时清空）
+  const onSelectionChangeRef = useRef(onSelectionChange);
+  onSelectionChangeRef.current = onSelectionChange;
+  useEffect(() => {
+    onSelectionChangeRef.current?.({
+      materials: comboMaterials,
+      palette: selectedPalette,
+    });
+    // comboIds/paletteId 是选择的最小来源，materials/palette 对象按需重建
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [comboIds, paletteId, customMaterials, customPalettes]);
+  useEffect(() => () => {
+    onSelectionChangeRef.current?.(null);
+  }, []);
   // 正在编辑的预设（编辑器铺满整个面板展示）
   const editingPreset = comboPresets.find((p) => p.id === editingPresetId) || null;
 
@@ -914,7 +938,7 @@ export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onCl
       <div
         key={material.id}
         className={`group/mat relative aspect-square overflow-hidden rounded-lg bg-bg-tertiary transition-all ${
-          hasTarget ? "" : "opacity-45"
+          canPick ? "" : "opacity-45"
         } ${isComboSelected ? "ring-2 ring-accent" : ""}`}
         onMouseEnter={(e) => showMaterialPreview(material, e.currentTarget)}
         onMouseLeave={hideMaterialPreview}
@@ -1339,7 +1363,9 @@ export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onCl
         </span>
         <span className="truncate text-[11px] text-text-tertiary">
           {!hasTarget
-            ? "· 请先选中一张图片"
+            ? canUseComposerText
+              ? "· 已输入文案，点选材质后发送即按文案+材质生成"
+              : "· 请先选中一张图片，或在右侧输入文案"
             : onPickCombo
               ? "· 点选可多选分配到不同元素，双击仅选这一个"
               : "· 点选材质球，再点底部按钮生成"}
@@ -1652,31 +1678,35 @@ export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onCl
           <button
             type="button"
             onClick={() => handleSubmit()}
-            disabled={!hasTarget || comboMaterials.length === 0}
+            disabled={!canPick || comboMaterials.length === 0}
             className="flex h-8 min-w-[110px] flex-1 items-center justify-center whitespace-nowrap rounded-xl bg-accent px-3 text-[12px] font-semibold text-white transition-all hover:bg-accent-hover disabled:cursor-not-allowed disabled:bg-bg-tertiary disabled:text-text-tertiary"
             title={
               comboMaterials.length === 0
                 ? "先在上方点选材质球"
-                : singleMaterial
-                  ? selectedPalette
-                    ? `按「${singleMaterial.name}」材质和「${selectedPalette.name}」配色生成`
-                    : `按「${singleMaterial.name}」材质生成（保持原图配色）`
-                  : paletteId
-                    ? "按选中的材质和配色生成"
-                    : "按选中的材质生成（保持原图配色）"
+                : !hasTarget && canUseComposerText
+                  ? "按右侧输入的文案 + 所选材质生成"
+                  : singleMaterial
+                    ? selectedPalette
+                      ? `按「${singleMaterial.name}」材质和「${selectedPalette.name}」配色生成`
+                      : `按「${singleMaterial.name}」材质生成（保持原图配色）`
+                    : paletteId
+                      ? "按选中的材质和配色生成"
+                      : "按选中的材质生成（保持原图配色）"
             }
           >
             {comboMaterials.length === 0
               ? "先点选材质"
-              : singleMaterial
-                ? `生成（${singleMaterial.name}）`
-                : `生成组合（${comboMaterials.length}）`}
+              : !hasTarget && canUseComposerText
+                ? `按文案生成（${comboMaterials.length} 材质）`
+                : singleMaterial
+                  ? `生成（${singleMaterial.name}）`
+                  : `生成组合（${comboMaterials.length}）`}
           </button>
           {/* 2K 直出：走 Pro 2K 模型，不改全局模型选择，适合定稿出高清图 */}
           <button
             type="button"
             onClick={() => handleSubmit({ quality: "2k" })}
-            disabled={!hasTarget || comboMaterials.length === 0}
+            disabled={!canPick || comboMaterials.length === 0}
             className="flex h-8 shrink-0 items-center justify-center gap-1 whitespace-nowrap rounded-xl border border-accent/60 px-3 text-[12px] font-semibold text-accent transition-all hover:bg-accent/12 disabled:cursor-not-allowed disabled:border-border-primary disabled:text-text-tertiary [html[data-theme=light]_&]:text-[#111827] [html[data-theme=light]_&]:disabled:text-text-tertiary"
             title="用 Pro 2K 模型直出高清图（更清晰，生成稍慢）"
           >

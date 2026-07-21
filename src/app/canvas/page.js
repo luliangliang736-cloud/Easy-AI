@@ -16,7 +16,7 @@ import { CLOUD_STATE_DELETIONS_KEY, findCloudDeletionMatches, normalizeCloudStat
 import { MAX_GEN_COUNT } from "@/lib/genLimits";
 import { useCanvasT } from "@/lib/canvasI18n";
 import { ChevronsLeft, Globe, Home as HomeIcon, Layers, Loader2, Plus } from "lucide-react";
-import { buildMaterialEditPrompt, buildComboEditPrompt } from "@/lib/materials";
+import { buildMaterialEditPrompt, buildComboEditPrompt, buildMaterialCreatePrompt } from "@/lib/materials";
 
 const FLOATING_ENTRY_DRAFT_KEY = "lovart-floating-entry-draft";
 const CANVAS_REF_IMAGES_STORAGE_KEY = "lovart-canvas-ref-images";
@@ -1524,6 +1524,8 @@ function HomeInner() {
     });
   }, []);
   const [showParams, setShowParams] = useState(false);
+  // 材质面板当前点选的材质/配色（面板关闭时为 null）：右侧对话发送文案时自动带上直出
+  const [materialComposerSelection, setMaterialComposerSelection] = useState(null);
   const [conversations, setConversations] = useState([initialConversationRef.current]);
   const [activeConversationId, setActiveConversationId] = useState(initialConversationRef.current.id);
   const initialCanvasBoardRef = useRef(createCanvasBoard({ id: DEFAULT_CANVAS_BOARD_ID, title: DEFAULT_CANVAS_BOARD_LABEL }));
@@ -1589,6 +1591,8 @@ function HomeInner() {
   const isBusy = isTextEditing;
   const isNavigationBusy = isGenerating || isTextEditing;
   const canSubmit = !isTextEditing && Boolean(String(prompt || "").trim() || getActiveTextReplacements(textEditBlocks).length > 0);
+  // 右侧输入框是否有可用文案：材质面板据此点亮"文案 + 材质"直出路径
+  const composerHasText = Boolean(String(prompt || "").trim());
   const viewportWidth = typeof window !== "undefined" ? window.innerWidth : 0;
   const viewportHeight = typeof window !== "undefined" ? window.innerHeight : 0;
   const floatingTextPanelWidth = 280;
@@ -2677,6 +2681,8 @@ function HomeInner() {
     const genParams = { ...requestParams, num: count };
     // displayLabel：展示用短标签（如"材质：针织布料"），不影响真实请求提示词
     const displayText = payload?.displayLabel || composerText || "请按识别到的文本替换规则编辑图片中的文字";
+    // displayMaterialLabel：材质信息小标（与提示词正文分开展示，样式对齐模型小标）
+    const displayMaterialLabel = payload?.displayMaterialLabel || null;
 
     const userMsg = {
       id: userMsgId,
@@ -2685,6 +2691,7 @@ function HomeInner() {
       text: displayText,
       params: genParams,
       modelLabel,
+      materialLabel: displayMaterialLabel,
       refImages: messageRefImages,
       requestRefImages: effectiveRefImages,
       textEditBlocks: effectiveTextEditBlocks,
@@ -2705,6 +2712,7 @@ function HomeInner() {
       text: displayText,
       params: genParams,
       modelLabel,
+      materialLabel: displayMaterialLabel,
       status: "generating",
       tasks,
       urls: [],
@@ -3679,6 +3687,36 @@ function HomeInner() {
     });
   }, [handleGenerate, isBusy, params, toast]);
 
+  /**
+   * 右侧对话发送入口：材质面板有点选材质时，把用户文案和材质提示词合并直出。
+   * 聊天记录与画布标签只显示"文案 · 材质：xxx"短标签，不暴露后台材质关键词。
+   */
+  const handleComposerSubmit = useCallback((event, options) => {
+    const materials = materialComposerSelection?.materials || [];
+    const composerText = String(prompt || "").trim();
+    if (materials.length === 0 || !composerText) {
+      return handleGenerate(event);
+    }
+    if (typeof event?.preventDefault === "function") event.preventDefault();
+    const is2k = options?.quality === "2k";
+    const palette = materialComposerSelection?.palette || null;
+    const materialNames = materials.map((m) => m.name).join("+");
+    return handleGenerate({
+      text: buildMaterialCreatePrompt(composerText, materials, palette),
+      displayLabel: composerText,
+      displayMaterialLabel: `材质：${materialNames}${palette ? ` · ${palette.name}` : ""}${is2k ? " · 2K" : ""}`,
+      ...(is2k ? { params: { ...params, ...MATERIAL_2K_PARAMS } } : null),
+      disableSemanticEdit: true,
+      disableAgentDefaults: true,
+      composerMode: "manual",
+    });
+  }, [handleGenerate, materialComposerSelection, params, prompt]);
+
+  /** 材质面板底部按钮在"无选中图 + 右侧有文案"时的生成入口（options 支持 { quality: "2k" }） */
+  const handleComposerMaterialGenerate = useCallback((options) => {
+    return handleComposerSubmit(null, options);
+  }, [handleComposerSubmit]);
+
   const handleQuickUpscaleImage = useCallback(async (upscaleRequest, img) => {
     const { provider, targetSize } = normalizeUpscaleRequest(upscaleRequest);
     if (!img?.image_url || !targetSize) return;
@@ -4606,6 +4644,9 @@ function HomeInner() {
         onQuickUpscaleImage={handleQuickUpscaleImage}
         onApplyMaterial={handleApplyMaterial}
         onApplyCombo={handleApplyCombo}
+        onMaterialSelectionChange={setMaterialComposerSelection}
+        materialComposerHasText={composerHasText}
+        onMaterialComposerGenerate={handleComposerMaterialGenerate}
         onDropImages={handleDropImages}
         onDropGeneratedImage={handleDropGeneratedImage}
         onPasteImages={handlePasteCanvasImages}
@@ -4662,7 +4703,7 @@ function HomeInner() {
         messages={messages}
         prompt={prompt}
         onPromptChange={setPrompt}
-        onSubmit={handleGenerate}
+        onSubmit={handleComposerSubmit}
         canSubmit={canSubmit}
         isGenerating={false}
         params={params}
@@ -4678,6 +4719,7 @@ function HomeInner() {
         onDownload={handleDownload}
         onImageClick={handleImageClick}
         onTryMaterial={handleTryMaterialFromChat}
+        materialSelection={materialComposerSelection}
         onPauseGenerate={handlePauseGenerate}
         entryMode={entryMode}
         onEntryModeChange={setEntryMode}

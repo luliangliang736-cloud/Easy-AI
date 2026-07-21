@@ -364,6 +364,28 @@ export function buildComboEditPrompt(materialList, palette) {
     .join("  ");
 }
 
+/** 组装"文案直出 + 材质"的生成提示词：按用户文案生成主体并应用所选材质/配色（材质关键词不对用户展示） */
+export function buildMaterialCreatePrompt(userText, materialList, palette) {
+  const materials = (Array.isArray(materialList) ? materialList : []).filter(Boolean);
+  const materialText = materials.map((m) => `${buildMaterialPromptText(m)}。`).join("；");
+  const distributeText =
+    materials.length > 1
+      ? " 请将这些材质分配到画面中不同的元素上，相邻元素材质对比明显，材质分层清楚。"
+      : "";
+  const colorText = buildPaletteText(palette);
+  const negative = palette ? `${COMBO_NEGATIVE}；${COMBO_COLOR_NEGATIVE}` : COMBO_NEGATIVE;
+  return [
+    `生成内容：${String(userText || "").trim()}。`,
+    COMBO_RENDER_STYLE,
+    `主体表面材质要求：${materialText}${distributeText}`,
+    colorText,
+    "输出清晰锐利，材质和小元素可辨。",
+    `语言模型最终负向 Prompt：${negative}`,
+  ]
+    .filter(Boolean)
+    .join("  ");
+}
+
 /** 组装"一键换材质"的改图提示词；palette 可选，选了则同时替换配色 */
 export function buildMaterialEditPrompt(material, palette) {
   const colorText = buildPaletteText(palette);

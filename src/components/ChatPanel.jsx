@@ -449,7 +449,14 @@ function MessageBubble({ message, onRetry, onDownload, onImageClick, onPreview, 
             </div>
           )}
           <p className="text-sm text-text-primary leading-relaxed">{message.text}</p>
-          <div className="flex items-center gap-2 mt-1.5 flex-wrap">
+          <div className="flex flex-col items-start gap-0.5 mt-1.5">
+            {/* 材质小标：与提示词正文分开，样式对齐模型小标（材质在上，模型在下） */}
+            {message.materialLabel && (
+              <span className="inline-flex min-w-0 max-w-full items-center gap-1 text-[10px] text-text-tertiary">
+                <SwatchBook size={10} className="shrink-0 text-accent" />
+                <span className="truncate">{message.materialLabel}</span>
+              </span>
+            )}
             <span className="text-[10px] text-text-tertiary">
               {message.modelLabel} · {message.params?.image_size}
               {message.params?.num > 1 && ` · ${message.params.num}${t("张")}`}
@@ -470,6 +477,7 @@ function MessageBubble({ message, onRetry, onDownload, onImageClick, onPreview, 
             {message.modelLabel || t("生成结果")}
             {message.params?.image_size ? ` · ${message.params.image_size}` : ""}
             {message.params?.num > 1 ? ` · ${message.params.num}${t("张")}` : ""}
+            {message.materialLabel ? ` · ${message.materialLabel}` : ""}
           </span>
           <button
             type="button"
@@ -736,6 +744,7 @@ export default function ChatPanel({
   showTextEditPanelInline = true,
   onRetry, onDownload, onImageClick,
   onTryMaterial,
+  materialSelection = null,
   onPauseGenerate,
   entryMode = "agent",
   composerMode = "agent", onComposerModeChange,
@@ -2102,6 +2111,20 @@ export default function ChatPanel({
               onChange={onTextEditBlocksChange}
               className=""
             />
+          )}
+
+          {/* 材质面板有点选材质时的提示条：发送文案会带上所选材质直出（不展示后台材质提示词） */}
+          {materialSelection?.materials?.length > 0 && (
+            <div className="flex items-center gap-1.5 rounded-xl border border-accent/30 bg-accent/8 px-2.5 py-1.5 text-[11px] text-text-secondary">
+              <SwatchBook size={12} className="shrink-0 text-accent" />
+              <span className="min-w-0 truncate">
+                {t("发送时将应用材质：")}
+                <span className="text-text-primary">
+                  {materialSelection.materials.map((m) => m.name).join("、")}
+                </span>
+                {materialSelection.palette ? `（${materialSelection.palette.name}）` : ""}
+              </span>
+            </div>
           )}
 
           {/* Input box with drag-and-drop */}
