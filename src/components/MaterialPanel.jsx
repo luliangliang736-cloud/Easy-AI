@@ -655,6 +655,16 @@ export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onCl
   const canUseComposerText = Boolean(composerHasText && onComposerGenerate);
   const canPick = hasTarget || canUseComposerText;
 
+  // 面板内提示词输入框：超长文案折行溢出后亮出扩大按钮，点击加高方便编辑（与右侧输入框交互一致）
+  const composerBoxRef = useRef(null);
+  const [isComposerBoxExpanded, setIsComposerBoxExpanded] = useState(false);
+  const [isComposerBoxMultiline, setIsComposerBoxMultiline] = useState(false);
+  useEffect(() => {
+    const el = composerBoxRef.current;
+    if (!el) return;
+    setIsComposerBoxMultiline(el.scrollHeight > el.clientHeight + 2);
+  }, [composerText, isComposerBoxExpanded]);
+
   /** 统一生成入口：选 1 个材质走单材质改图,选 2 个及以上走组合分配生成；options 支持 { quality: "2k" } */
   const handleSubmit = useCallback((options = null) => {
     const materials = comboIds
@@ -1627,8 +1637,9 @@ export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onCl
         {/* 面板内提示词输入：与右侧对话输入框共享同一份文案（双向同步），
             无选中图时「文案 + 材质」直出可全程在面板内完成 */}
         {typeof onComposerTextChange === "function" && (
-          <div className="mb-2.5">
+          <div className="relative mb-2.5">
             <textarea
+              ref={composerBoxRef}
               value={composerText}
               onChange={(e) => onComposerTextChange(e.target.value)}
               onKeyDown={(e) => {
@@ -1641,8 +1652,21 @@ export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onCl
                 ? "提示词与右侧输入框实时同步（材质改图按选中图进行，不使用文案）"
                 : "描述想生成的画面，点选材质后回车直接生成"}
               rows={2}
-              className="w-full resize-none rounded-xl border border-border-primary bg-bg-secondary px-2.5 py-2 text-[12px] leading-relaxed text-text-primary outline-none transition-colors placeholder:text-text-tertiary focus:border-accent/60"
+              className={`block w-full resize-none overflow-y-auto rounded-xl border border-border-primary bg-bg-secondary py-2 pl-2.5 pr-8 text-[12px] leading-relaxed text-text-primary outline-none transition-colors placeholder:text-text-tertiary focus:border-accent/60 ${
+                isComposerBoxExpanded ? "h-[28vh]" : "h-[56px]"
+              }`}
             />
+            {/* 长提示词编辑加高开关：内容溢出两行后才出现，与右侧输入框交互一致 */}
+            {(isComposerBoxExpanded || isComposerBoxMultiline) && (
+              <button
+                type="button"
+                onClick={() => setIsComposerBoxExpanded((v) => !v)}
+                className="absolute right-1.5 top-1.5 rounded-lg p-1 text-text-tertiary transition-all hover:bg-bg-hover hover:text-text-primary"
+                title={isComposerBoxExpanded ? "还原输入框高度" : "扩大输入框，方便编辑长提示词"}
+              >
+                {isComposerBoxExpanded ? <Minimize2 size={12} /> : <Maximize2 size={12} />}
+              </button>
+            )}
           </div>
         )}
 
