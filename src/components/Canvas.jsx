@@ -398,7 +398,7 @@ function getUpscalePreviewSize(meta, targetLongSide) {
 
 export default function Canvas({
   images, selectedImage, onSelectImage, onDeleteImage,
-  onUpdateImage, onSendToChat, onQuickEditImage, onQuickUpscaleImage, onApplyMaterial, onApplyCombo, onMaterialSelectionChange, materialComposerHasText = false, onMaterialComposerGenerate, onDropImages, onDropGeneratedImage, onPasteImages,
+  onUpdateImage, onSendToChat, onQuickEditImage, onQuickUpscaleImage, onApplyMaterial, onApplyCombo, onMaterialSelectionChange, materialComposerHasText = false, onMaterialComposerGenerate, materialComposerText = "", onMaterialComposerTextChange, onDropImages, onDropGeneratedImage, onPasteImages,
   activeTool, onToolChange, zoom, onZoomChange,
   ref,
   generatingItems = [],
@@ -3102,6 +3102,8 @@ export default function Canvas({
             onSelectionChange={onMaterialSelectionChange}
             composerHasText={materialComposerHasText}
             onComposerGenerate={onMaterialComposerGenerate}
+            composerText={materialComposerText}
+            onComposerTextChange={onMaterialComposerTextChange}
           />
         )}
         <Toolbar

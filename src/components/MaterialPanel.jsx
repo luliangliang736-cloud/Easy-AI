@@ -137,7 +137,7 @@ function buildMaterialBallPrompt(materialPrompt) {
  * 材质库浮窗：可拖拽、可调整大小，支持分类切换与收藏。
  * 点选材质球后不关闭，方便对同一批元素连续测试不同材质。
  */
-export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onClose, onSelectionChange, composerHasText = false, onComposerGenerate }) {
+export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onClose, onSelectionChange, composerHasText = false, onComposerGenerate, composerText = "", onComposerTextChange }) {
   const panelRef = useRef(null);
   const extractImageInputRef = useRef(null);
   // pos 为 null 时使用默认停靠位置（工具栏上方居中），拖拽后切换为绝对坐标
@@ -1364,8 +1364,8 @@ export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onCl
         <span className="truncate text-[11px] text-text-tertiary">
           {!hasTarget
             ? canUseComposerText
-              ? "· 已输入文案，点选材质后发送即按文案+材质生成"
-              : "· 请先选中一张图片，或在右侧输入文案"
+              ? "· 已输入文案，点选材质后即可按文案+材质生成"
+              : "· 请先选中一张图片，或在下方输入文案"
             : onPickCombo
               ? "· 点选可多选分配到不同元素，双击仅选这一个"
               : "· 点选材质球，再点底部按钮生成"}
@@ -1621,6 +1621,28 @@ export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onCl
                 "原图配色"
               )}
             </span>
+          </div>
+        )}
+
+        {/* 面板内提示词输入：与右侧对话输入框共享同一份文案（双向同步），
+            无选中图时「文案 + 材质」直出可全程在面板内完成 */}
+        {typeof onComposerTextChange === "function" && (
+          <div className="mb-2.5">
+            <textarea
+              value={composerText}
+              onChange={(e) => onComposerTextChange(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent?.isComposing) {
+                  e.preventDefault();
+                  if (comboMaterials.length > 0 && canPick) handleSubmit();
+                }
+              }}
+              placeholder={hasTarget
+                ? "提示词与右侧输入框实时同步（材质改图按选中图进行，不使用文案）"
+                : "描述想生成的画面，点选材质后回车直接生成"}
+              rows={2}
+              className="w-full resize-none rounded-xl border border-border-primary bg-bg-secondary px-2.5 py-2 text-[12px] leading-relaxed text-text-primary outline-none transition-colors placeholder:text-text-tertiary focus:border-accent/60"
+            />
           </div>
         )}
 

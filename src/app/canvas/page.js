@@ -4647,6 +4647,8 @@ function HomeInner() {
         onMaterialSelectionChange={setMaterialComposerSelection}
         materialComposerHasText={composerHasText}
         onMaterialComposerGenerate={handleComposerMaterialGenerate}
+        materialComposerText={prompt}
+        onMaterialComposerTextChange={setPrompt}
         onDropImages={handleDropImages}
         onDropGeneratedImage={handleDropGeneratedImage}
         onPasteImages={handlePasteCanvasImages}
