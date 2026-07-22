@@ -17,7 +17,11 @@ export async function GET(request, { params }) {
       return NextResponse.json({ error: "请先登录 EasyAI" }, { status: 401 });
     }
 
-    const keyFromParams = (params?.key || []).map((part) => decodeURIComponent(part)).join("/");
+    // ⚠️ Next 已对路径段做过一次百分号解码，这里绝不能再 decodeURIComponent：
+    // 资产 key 内含编码邮箱（users/foo%40gmail.com/...），双重解码会把 %40 变成 @，
+    // 导致与 expectedUserPrefix（encodeURIComponent 形式）不匹配，所有图片 403。
+    const resolvedParams = await params;
+    const keyFromParams = (resolvedParams?.key || []).join("/");
     const key = keyFromParams || getObjectKeyFromRequest(request);
     const expectedUserPrefix = `users/${encodeURIComponent(user.email.toLowerCase())}/`;
     const expectedSystemPrefix = "users/system-generated/";
