@@ -333,7 +333,7 @@ const EXACT = {
   "配色库": "Palettes",
   "· 可选：生成时同时应用所选配色，也可 DIY 保存": "· Optional: apply the selected palette when generating, or save your own",
   "官方配色": "Official",
-  "我的配色": "My Palettes",
+  "我的配色": "Custom",
   "原图配色": "Original Colors",
   "DIY 一套配色并保存": "Create and save a DIY palette",
   "还没有自定义配色，点 DIY 创建": "No custom palettes yet; click DIY to create one",
