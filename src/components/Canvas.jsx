@@ -2504,9 +2504,9 @@ export default function Canvas({
                             onApplyMaterial?.(material, null, img);
                           }}
                           className="h-6 w-6 shrink-0 overflow-hidden rounded-full border border-border-primary transition-all hover:scale-110 hover:border-accent"
-                          title={`一键换成「${material.name}」`}
+                          title={t(`一键换成「${material.name}」`)}
                         >
-                          <img src={material.thumb} alt={material.name} className="h-full w-full object-cover" draggable={false} />
+                          <img src={material.thumb} alt={t(material.name)} className="h-full w-full object-cover" draggable={false} />
                         </button>
                       ))}
                       <button

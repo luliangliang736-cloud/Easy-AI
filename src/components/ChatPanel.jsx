@@ -2120,9 +2120,9 @@ export default function ChatPanel({
               <span className="min-w-0 truncate">
                 {t("发送时将应用材质：")}
                 <span className="text-text-primary">
-                  {materialSelection.materials.map((m) => m.name).join("、")}
+                  {materialSelection.materials.map((m) => t(m.name)).join("、")}
                 </span>
-                {materialSelection.palette ? `（${materialSelection.palette.name}）` : ""}
+                {materialSelection.palette ? `（${t(materialSelection.palette.name)}）` : ""}
               </span>
             </div>
           )}

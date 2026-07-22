@@ -5,6 +5,7 @@ import { createPortal } from "react-dom";
 import { Star, X, GripHorizontal, Shuffle, Plus, Bookmark, Pencil, Check, ChevronsDownUp, ChevronsUpDown, SwatchBook, Palette, Paintbrush, Pipette, Maximize2, Minimize2, ImagePlus, Loader2 } from "lucide-react";
 import { MATERIALS, MATERIAL_CATEGORIES, MATERIAL_PALETTES, isDiyMaterial } from "@/lib/materials";
 import { CLOUD_STATE_RESTORED_EVENT } from "@/lib/useCloudLocalStorageSync";
+import { useCanvasT } from "@/lib/canvasI18n";
 
 const FAVORITES_KEY = "lovart-material-favorites";
 const CUSTOM_PALETTES_KEY = "lovart-custom-palettes";
@@ -138,6 +139,7 @@ function buildMaterialBallPrompt(materialPrompt) {
  * 点选材质球后不关闭，方便对同一批元素连续测试不同材质。
  */
 export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onClose, onSelectionChange, composerHasText = false, onComposerGenerate, composerText = "", onComposerTextChange }) {
+  const { t } = useCanvasT();
   const panelRef = useRef(null);
   const extractImageInputRef = useRef(null);
   // pos 为 null 时使用默认停靠位置（工具栏上方居中），拖拽后切换为绝对坐标
@@ -970,7 +972,7 @@ export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onCl
             isCustomMaterial ? "opacity-100" : "opacity-0 group-hover/mat:opacity-100"
           }`}
         >
-          {material.name}
+          {t(material.name)}
         </span>
         {/* 选中角标：只选 1 个显示对勾，多选显示序号 */}
         {isComboSelected && (
@@ -990,8 +992,8 @@ export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onCl
               ? "bg-black/45 text-[#FFD84D] opacity-100"
               : "bg-black/35 text-white/80 opacity-0 hover:text-white group-hover/mat:opacity-100"
           }`}
-          title={isFavorite ? "取消收藏" : "收藏材质"}
-          aria-label={isFavorite ? "取消收藏" : "收藏材质"}
+          title={isFavorite ? t("取消收藏") : t("收藏材质")}
+          aria-label={isFavorite ? t("取消收藏") : t("收藏材质")}
         >
           <Star size={11} fill={isFavorite ? "currentColor" : "none"} />
         </button>
@@ -1005,8 +1007,8 @@ export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onCl
                 handleEditCustomMaterial(material);
               }}
               className="absolute right-1 top-7 flex h-5 w-5 items-center justify-center rounded-md bg-black/35 text-white/80 opacity-0 transition-all hover:text-white group-hover/mat:opacity-100"
-              title="编辑该 DIY 材质"
-              aria-label={`编辑材质 ${material.name}`}
+              title={t("编辑该 DIY 材质")}
+              aria-label={t(`编辑材质 ${material.name}`)}
             >
               <Pencil size={10} />
             </button>
@@ -1017,8 +1019,8 @@ export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onCl
                 handleDeleteCustomMaterial(material.id);
               }}
               className="absolute right-1 top-[3.25rem] flex h-5 w-5 items-center justify-center rounded-md bg-black/35 text-white/80 opacity-0 transition-all hover:text-white group-hover/mat:opacity-100"
-              title="删除该 DIY 材质"
-              aria-label={`删除材质 ${material.name}`}
+              title={t("删除该 DIY 材质")}
+              aria-label={t(`删除材质 ${material.name}`)}
             >
               <X size={11} />
             </button>
@@ -1036,7 +1038,7 @@ export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onCl
         <button
           type="button"
           onClick={() => setPaletteId(palette.id)}
-          title={`${palette.name}：${[palette.main, ...palette.aux].join(" ")}`}
+          title={t(`${palette.name}：${[palette.main, ...palette.aux].join(" ")}`)}
           className={`flex h-7 items-center gap-1.5 rounded-lg px-2 text-[11px] font-medium transition-colors ${
             paletteId === palette.id
               ? "bg-accent text-white"
@@ -1057,7 +1059,7 @@ export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onCl
               />
             ))}
           </span>
-          {palette.name}
+          {t(palette.name)}
         </button>
         {isCustom && (
           <>
@@ -1065,8 +1067,8 @@ export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onCl
               type="button"
               onClick={() => handleEditCustomPalette(palette)}
               className="absolute -left-1 -top-1 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-black/60 text-white opacity-0 transition-opacity hover:bg-black/80 group-hover/palette:opacity-100"
-              title="重命名 / 编辑该配色"
-              aria-label={`编辑配色 ${palette.name}`}
+              title={t("重命名 / 编辑该配色")}
+              aria-label={t(`编辑配色 ${palette.name}`)}
             >
               <Pencil size={8} />
             </button>
@@ -1074,8 +1076,8 @@ export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onCl
               type="button"
               onClick={() => handleDeleteCustomPalette(palette.id)}
               className="absolute -right-1 -top-1 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-black/60 text-white opacity-0 transition-opacity hover:bg-black/80 group-hover/palette:opacity-100"
-              title="删除该自定义配色"
-              aria-label={`删除配色 ${palette.name}`}
+              title={t("删除该自定义配色")}
+              aria-label={t(`删除配色 ${palette.name}`)}
             >
               <X size={9} />
             </button>
@@ -1090,13 +1092,13 @@ export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onCl
     <div className="mb-2 rounded-xl border border-border-primary bg-bg-elevated/50 px-2.5 py-2">
       <div className="mb-1.5 flex items-center gap-2">
         <span className="shrink-0 text-[10px] font-semibold text-text-secondary">
-          {editingMaterialId ? "编辑材质" : "新建材质"}
+          {editingMaterialId ? t("编辑材质") : t("新建材质")}
         </span>
         <input
           type="text"
           value={materialDraft.name}
           onChange={(e) => setMaterialDraft((prev) => ({ ...prev, name: e.target.value }))}
-          placeholder="材质名称，如：磨砂玻璃"
+          placeholder={t("材质名称，如：磨砂玻璃")}
           maxLength={10}
           autoFocus
           className="h-7 min-w-0 flex-1 rounded-lg bg-bg-secondary px-2 text-[11px] text-text-primary outline-none placeholder:text-text-tertiary"
@@ -1105,7 +1107,7 @@ export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onCl
       <textarea
         value={materialDraft.prompt}
         onChange={(e) => setMaterialDraft((prev) => ({ ...prev, prompt: e.target.value }))}
-        placeholder="只需描述材质本身，如：半透明磨砂玻璃质感，表面有细腻颗粒，边缘透光。光影、渲染风格和负面词会自动按官方预设补全"
+        placeholder={t("只需描述材质本身，如：半透明磨砂玻璃质感，表面有细腻颗粒，边缘透光。光影、渲染风格和负面词会自动按官方预设补全")}
         maxLength={300}
         rows={2}
         className="mb-1.5 w-full resize-none rounded-lg bg-bg-secondary px-2 py-1.5 text-[11px] leading-relaxed text-text-primary outline-none placeholder:text-text-tertiary scrollbar-thin"
@@ -1114,24 +1116,24 @@ export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onCl
       {materialDraft.thumb && (
         <div className="mb-1.5 flex items-center gap-2">
           <span className="relative h-14 w-14 shrink-0 overflow-hidden rounded-lg border border-border-primary">
-            <img src={materialDraft.thumb} alt="AI 材质球预览" className="h-full w-full object-cover" draggable={false} />
+            <img src={materialDraft.thumb} alt="AI material ball preview" className="h-full w-full object-cover" draggable={false} />
             <button
               type="button"
               onClick={() => setMaterialDraft((prev) => ({ ...prev, thumb: "" }))}
               className="absolute right-0.5 top-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-black/55 text-white transition-colors hover:bg-black/80"
-              title="移除 AI 材质球，改用代表色渐变球"
-              aria-label="移除 AI 材质球"
+              title={t("移除 AI 材质球，改用代表色渐变球")}
+              aria-label={t("移除 AI 材质球")}
             >
               <X size={9} />
             </button>
           </span>
           <span className="text-[10px] leading-relaxed text-text-tertiary">
-            AI 材质球已生成，保存后即按此展示；不满意可点右侧按钮重新生成
+            {t("AI 材质球已生成，保存后即按此展示；不满意可点右侧按钮重新生成")}
           </span>
         </div>
       )}
       {thumbGenerateError && (
-        <p className="mb-1.5 text-[10px] text-red-400">{thumbGenerateError}</p>
+        <p className="mb-1.5 text-[10px] text-red-400">{t(thumbGenerateError)}</p>
       )}
       <div className="flex flex-wrap items-center gap-1.5">
         <button
@@ -1140,17 +1142,17 @@ export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onCl
           disabled={!materialDraft.name.trim() || !materialDraft.prompt.trim() || isThumbGenerating}
           className="flex h-7 items-center rounded-lg bg-accent px-3 text-[11px] font-semibold text-white transition-all hover:bg-accent-hover disabled:cursor-not-allowed disabled:bg-bg-tertiary disabled:text-text-tertiary"
         >
-          {editingMaterialId ? "保存修改" : "保存材质"}
+          {editingMaterialId ? t("保存修改") : t("保存材质")}
         </button>
         <button
           type="button"
           onClick={handleGenerateMaterialThumb}
           disabled={!materialDraft.prompt.trim() || isThumbGenerating}
           className="flex h-7 items-center gap-1 rounded-lg bg-bg-elevated px-2.5 text-[11px] font-medium text-text-secondary transition-colors hover:bg-bg-hover hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-45"
-          title="按材质描述 AI 渲染一颗真实材质球做缩略图（消耗一次生图积分）"
+          title={t("按材质描述 AI 渲染一颗真实材质球做缩略图（消耗一次生图积分）")}
         >
           {isThumbGenerating ? <Loader2 size={11} className="animate-spin" /> : <ImagePlus size={11} />}
-          {isThumbGenerating ? "渲染中…" : materialDraft.thumb ? "重新生成缩略图" : "生成材质球缩略图"}
+          {isThumbGenerating ? t("渲染中…") : materialDraft.thumb ? t("重新生成缩略图") : t("生成材质球缩略图")}
         </button>
         <button
           type="button"
@@ -1162,7 +1164,7 @@ export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onCl
           }}
           className="flex h-7 items-center rounded-lg px-2.5 text-[11px] text-text-tertiary transition-colors hover:bg-bg-hover hover:text-text-primary"
         >
-          取消
+          {t("取消")}
         </button>
       </div>
     </div>
@@ -1172,7 +1174,7 @@ export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onCl
   const renderPaletteEditorForm = () => (
     <div className="mb-2 flex flex-wrap items-center gap-2 rounded-xl border border-border-primary bg-bg-elevated/50 px-2.5 py-2">
       <span className="shrink-0 text-[10px] font-semibold text-text-secondary">
-        {editingPaletteId ? "编辑配色" : "新建配色"}
+        {editingPaletteId ? t("编辑配色") : t("新建配色")}
       </span>
       <input
         type="text"
@@ -1181,13 +1183,13 @@ export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onCl
         onKeyDown={(e) => {
           if (e.key === "Enter") handleSavePaletteDraft();
         }}
-        placeholder="起个名字，如：品牌色"
+        placeholder={t("起个名字，如：品牌色")}
         maxLength={10}
         autoFocus
         className="h-7 w-32 min-w-0 flex-1 rounded-lg bg-bg-secondary px-2 text-[11px] text-text-primary outline-none placeholder:text-text-tertiary"
       />
-      <label className="flex items-center gap-1 text-[10px] text-text-tertiary" title="主色">
-        主
+      <label className="flex items-center gap-1 text-[10px] text-text-tertiary" title={t("主色")}>
+        {t("主")}
         <input
           type="color"
           value={paletteDraft.main}
@@ -1197,8 +1199,8 @@ export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onCl
       </label>
       {paletteDraft.aux.map((color, index) => (
         <span key={index} className="group/auxcolor relative flex items-center">
-          <label className="flex items-center gap-1 text-[10px] text-text-tertiary" title={`辅助色 ${index + 1}`}>
-            辅{index + 1}
+          <label className="flex items-center gap-1 text-[10px] text-text-tertiary" title={t(`辅助色 ${index + 1}`)}>
+            {t(`辅${index + 1}`)}
             <input
               type="color"
               value={color}
@@ -1215,8 +1217,8 @@ export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onCl
             type="button"
             onClick={() => handleRemoveDraftAuxColor(index)}
             className="absolute -right-1.5 -top-1.5 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-black/60 text-white opacity-0 transition-opacity hover:bg-black/80 group-hover/auxcolor:opacity-100"
-            title={`删除辅助色 ${index + 1}`}
-            aria-label={`删除辅助色 ${index + 1}`}
+            title={t(`删除辅助色 ${index + 1}`)}
+            aria-label={t(`删除辅助色 ${index + 1}`)}
           >
             <X size={8} />
           </button>
@@ -1227,8 +1229,8 @@ export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onCl
           type="button"
           onClick={handleAddDraftAuxColor}
           className="flex h-6 w-6 items-center justify-center rounded-lg bg-bg-secondary text-text-tertiary transition-colors hover:bg-bg-hover hover:text-text-primary"
-          title={`添加辅助色（共 ${paletteDraft.aux.length + 1}/${PALETTE_MAX_COLORS} 种颜色）`}
-          aria-label="添加辅助色"
+          title={t(`添加辅助色（共 ${paletteDraft.aux.length + 1}/${PALETTE_MAX_COLORS} 种颜色）`)}
+          aria-label={t("添加辅助色")}
         >
           <Plus size={11} />
         </button>
@@ -1237,10 +1239,10 @@ export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onCl
         type="button"
         onClick={() => extractImageInputRef.current?.click()}
         className="flex h-7 items-center gap-1 whitespace-nowrap rounded-lg bg-bg-elevated px-2 text-[11px] font-medium text-text-secondary transition-colors hover:bg-bg-hover hover:text-text-primary"
-        title="上传一张图片，按颜色占比自动提取主色和辅助色"
+        title={t("上传一张图片，按颜色占比自动提取主色和辅助色")}
       >
         <Pipette size={11} />
-        从图片提取
+        {t("从图片提取")}
       </button>
       <input
         ref={extractImageInputRef}
@@ -1254,7 +1256,7 @@ export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onCl
         onClick={handleSavePaletteDraft}
         className="ml-auto flex h-7 items-center rounded-lg bg-accent px-2.5 text-[11px] font-semibold text-white transition-all hover:bg-accent-hover"
       >
-        {editingPaletteId ? "保存修改" : "保存到配色库"}
+        {editingPaletteId ? t("保存修改") : t("保存到配色库")}
       </button>
     </div>
   );
@@ -1279,9 +1281,9 @@ export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onCl
           data-panel-nodrag
           onClick={handleRestoreFromMinimized}
           className="flex items-center gap-1.5 rounded-full px-1 text-[12px] font-semibold text-white"
-          title="展开材质库"
+          title={t("展开材质库")}
         >
-          材质库
+          {t("材质库")}
           {selectionCount > 0 && (
             <span className="rounded-full bg-white/25 px-1.5 py-px text-[10px] font-bold text-white">
               {selectionCount}
@@ -1293,7 +1295,7 @@ export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onCl
           data-panel-nodrag
           onClick={handleRestoreFromMinimized}
           className="flex h-6 w-6 items-center justify-center rounded-full text-white/70 transition-colors hover:bg-white/15 hover:text-white"
-          aria-label="展开材质库"
+          aria-label={t("展开材质库")}
         >
           <ChevronsUpDown size={12} />
         </button>
@@ -1302,7 +1304,7 @@ export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onCl
           data-panel-nodrag
           onClick={onClose}
           className="flex h-6 w-6 items-center justify-center rounded-full text-white/70 transition-colors hover:bg-white/15 hover:text-white"
-          aria-label="关闭材质库"
+          aria-label={t("关闭材质库")}
         >
           <X size={12} />
         </button>
@@ -1338,8 +1340,8 @@ export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onCl
             data-panel-nodrag
             onClick={() => setIsMinimized(true)}
             className="flex h-6 w-6 items-center justify-center rounded-md text-text-tertiary transition-colors hover:bg-bg-hover hover:text-text-primary"
-            title="收起为小胶囊，不遮挡画布"
-            aria-label="收起材质库"
+            title={t("收起为小胶囊，不遮挡画布")}
+            aria-label={t("收起材质库")}
           >
             <ChevronsDownUp size={13} />
           </button>
@@ -1348,8 +1350,8 @@ export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onCl
             data-panel-nodrag
             onClick={handleToggleMaximize}
             className="flex h-6 w-6 items-center justify-center rounded-md text-text-tertiary transition-colors hover:bg-bg-hover hover:text-text-primary"
-            title={isMaximized ? "还原面板大小" : "放大面板，一次看全材质和配色"}
-            aria-label={isMaximized ? "还原材质库大小" : "放大材质库"}
+            title={isMaximized ? t("还原面板大小") : t("放大面板，一次看全材质和配色")}
+            aria-label={isMaximized ? t("还原材质库大小") : t("放大材质库")}
           >
             {isMaximized ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
           </button>
@@ -1358,7 +1360,7 @@ export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onCl
             data-panel-nodrag
             onClick={onClose}
             className="flex h-6 w-6 items-center justify-center rounded-md text-text-tertiary transition-colors hover:bg-bg-hover hover:text-text-primary"
-            aria-label="关闭材质库"
+            aria-label={t("关闭材质库")}
           >
             <X size={13} />
           </button>
@@ -1369,16 +1371,16 @@ export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onCl
       <div className="flex shrink-0 items-center gap-1.5 px-3.5 pb-2 pt-2.5" data-panel-nodrag>
         <span className="flex shrink-0 items-center gap-1 text-[12px] font-semibold text-text-primary">
           <SwatchBook size={12} className="shrink-0" />
-          预设材质
+          {t("预设材质")}
         </span>
         <span className="truncate text-[11px] text-text-tertiary">
           {!hasTarget
             ? canUseComposerText
-              ? "· 已输入文案，点选材质后即可按文案+材质生成"
-              : "· 请先选中一张图片，或在下方输入文案"
+              ? t("· 已输入文案，点选材质后即可按文案+材质生成")
+              : t("· 请先选中一张图片，或在下方输入文案")
             : onPickCombo
-              ? "· 点选可多选分配到不同元素，双击仅选这一个"
-              : "· 点选材质球，再点底部按钮生成"}
+              ? t("· 点选可多选分配到不同元素，双击仅选这一个")
+              : t("· 点选材质球，再点底部按钮生成")}
         </span>
       </div>
 
@@ -1398,7 +1400,7 @@ export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onCl
             {tab.id === FAVORITES_TAB && (
               <Star size={10} className="shrink-0" fill={activeTab === tab.id ? "currentColor" : "none"} />
             )}
-            {tab.label}
+            {t(tab.label)}
             {tab.id === FAVORITES_TAB && favorites.length > 0 ? ` ${favorites.length}` : ""}
           </button>
         ))}
@@ -1409,7 +1411,7 @@ export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onCl
         {visibleMaterials.length === 0 && activeTab === FAVORITES_TAB ? (
           <div className="flex h-full flex-col items-center justify-center gap-2 text-text-tertiary">
             <Star size={22} strokeWidth={1.5} />
-            <p className="text-[11px]">还没有收藏的材质，悬浮材质球点星标即可收藏</p>
+            <p className="text-[11px]">{t("还没有收藏的材质，悬浮材质球点星标即可收藏")}</p>
           </div>
         ) : (
           <div
@@ -1427,11 +1429,11 @@ export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onCl
           <div className="mb-2 flex items-center gap-1.5">
             <span className="flex shrink-0 items-center gap-1 text-[12px] font-semibold text-text-primary">
               <Paintbrush size={12} className="shrink-0" />
-              我的材质
+              {t("我的材质")}
               {customMaterials.length > 0 ? ` ${customMaterials.length}` : ""}
             </span>
             <span className="truncate text-[10px] text-text-tertiary">
-              · 只需描述材质本身，光影和渲染风格自动对齐官方预设
+              {t("· 只需描述材质本身，光影和渲染风格自动对齐官方预设")}
             </span>
           </div>
 
@@ -1458,10 +1460,10 @@ export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onCl
                     ? "border-accent text-text-primary"
                     : "border-border-primary text-text-tertiary hover:border-accent hover:text-text-primary"
                 }`}
-                title="DIY 一个自定义材质"
+                title={t("DIY 一个自定义材质")}
               >
                 <Plus size={16} />
-                <span className="text-[10px] font-medium">DIY 材质</span>
+                <span className="text-[10px] font-medium">{t("DIY 材质")}</span>
               </button>
             )}
           </div>
@@ -1471,16 +1473,16 @@ export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onCl
       {/* ===== 配色区：与所选材质一起应用 ===== */}
       <div className="shrink-0 border-t border-border-primary px-3.5 pb-3 pt-2.5" data-panel-nodrag>
           <div className="mb-1.5 flex items-center gap-1.5">
-            <span className="text-[13px] font-semibold text-text-primary">配色库</span>
+            <span className="text-[13px] font-semibold text-text-primary">{t("配色库")}</span>
             <span className="truncate text-[11px] text-text-tertiary">
-              · 可选：生成时同时应用所选配色，也可 DIY 保存
+              {t("· 可选：生成时同时应用所选配色，也可 DIY 保存")}
             </span>
           </div>
           {/* 第一层：原图配色 + 官方预设 */}
           <div className="mb-1.5 flex flex-wrap items-center gap-1.5">
             <span className="flex w-[70px] shrink-0 items-center gap-1 text-[11px] font-semibold text-text-secondary">
               <Palette size={12} className="shrink-0" />
-              官方配色
+              {t("官方配色")}
             </span>
             <button
               type="button"
@@ -1491,7 +1493,7 @@ export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onCl
                   : "bg-bg-elevated text-text-tertiary hover:bg-bg-hover hover:text-text-primary"
               }`}
             >
-              原图配色
+              {t("原图配色")}
             </button>
             {MATERIAL_PALETTES.map(renderPaletteChip)}
           </div>
@@ -1500,7 +1502,7 @@ export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onCl
           <div className="mb-2 flex flex-wrap items-center gap-1.5">
             <span className="flex w-[70px] shrink-0 items-center gap-1 text-[11px] font-semibold text-text-secondary">
               <Paintbrush size={12} className="shrink-0" />
-              我的配色
+              {t("我的配色")}
             </span>
             {customPalettes.map(renderPaletteChip)}
             <button
@@ -1514,13 +1516,13 @@ export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onCl
                   ? "bg-accent text-white"
                   : "bg-bg-elevated text-text-tertiary hover:bg-bg-hover hover:text-text-primary"
               }`}
-              title="DIY 一套配色并保存"
+              title={t("DIY 一套配色并保存")}
             >
               <Plus size={11} />
               DIY
             </button>
             {customPalettes.length === 0 && (
-              <span className="text-[10px] text-text-tertiary">还没有自定义配色，点 DIY 创建</span>
+              <span className="text-[10px] text-text-tertiary">{t("还没有自定义配色，点 DIY 创建")}</span>
             )}
           </div>
 
@@ -1532,11 +1534,11 @@ export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onCl
       <div className="shrink-0 border-t border-border-primary px-3.5 pb-3 pt-2.5" data-panel-nodrag>
         {/* 选择总览：让用户随时看清选了哪些材质和配色 */}
         <div className="mb-1.5 flex items-center gap-1.5">
-          <span className="text-[12px] font-semibold text-text-primary">当前选择</span>
+          <span className="text-[12px] font-semibold text-text-primary">{t("当前选择")}</span>
           <span className="truncate text-[10px] text-text-tertiary">
             {comboMaterials.length > 0
-              ? `${comboMaterials.length} 个材质 · ${selectedPalette ? selectedPalette.name : "原图配色"}`
-              : "还未点选材质"}
+              ? t(`${comboMaterials.length} 个材质 · ${selectedPalette ? selectedPalette.name : "原图配色"}`)
+              : t("还未点选材质")}
           </span>
         </div>
         {comboMaterials.length === 0 ? (
@@ -1550,16 +1552,16 @@ export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onCl
                 <span className="block h-5 w-5 overflow-hidden rounded">
                   <img
                     src={selectedImage.image_url}
-                    alt="选中的目标图"
+                    alt={t("选中的目标图")}
                     className="h-full w-full object-cover"
                     draggable={false}
                   />
                 </span>
-                目标图
+                {t("目标图")}
               </span>
             )}
             <span className="text-[10px] leading-relaxed text-text-tertiary">
-              在上方材质库点击材质球选择（可多选，多个材质会分配到不同元素），配色在上方配色库选择（可选）
+              {t("在上方材质库点击材质球选择（可多选，多个材质会分配到不同元素），配色在上方配色库选择（可选）")}
             </span>
           </div>
         ) : (
@@ -1574,12 +1576,12 @@ export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onCl
                 <span className="block h-5 w-5 overflow-hidden rounded">
                   <img
                     src={selectedImage.image_url}
-                    alt="选中的目标图"
+                    alt={t("选中的目标图")}
                     className="h-full w-full object-cover"
                     draggable={false}
                   />
                 </span>
-                目标图
+                {t("目标图")}
               </span>
             )}
             {comboMaterials.map((material, index) => (
@@ -1597,13 +1599,13 @@ export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onCl
                     </span>
                   )}
                 </span>
-                {material.name}
+                {t(material.name)}
                 <button
                   type="button"
                   onClick={() => toggleComboMaterial(material.id)}
                   className="flex h-3.5 w-3.5 items-center justify-center rounded-full text-text-tertiary transition-colors hover:bg-bg-hover hover:text-text-primary"
-                  title={`移除「${material.name}」`}
-                  aria-label={`移除材质 ${material.name}`}
+                  title={t(`移除「${material.name}」`)}
+                  aria-label={t(`移除材质 ${material.name}`)}
                 >
                   <X size={8} />
                 </button>
@@ -1625,10 +1627,10 @@ export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onCl
                       />
                     ))}
                   </span>
-                  {selectedPalette.name}
+                  {t(selectedPalette.name)}
                 </>
               ) : (
-                "原图配色"
+                t("原图配色")
               )}
             </span>
           </div>
@@ -1649,8 +1651,8 @@ export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onCl
                 }
               }}
               placeholder={hasTarget
-                ? "提示词与右侧输入框实时同步（材质改图按选中图进行，不使用文案）"
-                : "描述想生成的画面，点选材质后回车直接生成"}
+                ? t("提示词与右侧输入框实时同步（材质改图按选中图进行，不使用文案）")
+                : t("描述想生成的画面，点选材质后回车直接生成")}
               rows={2}
               className={`block w-full resize-none overflow-y-auto rounded-xl border border-border-primary bg-bg-secondary py-2 pl-2.5 pr-8 text-[12px] leading-relaxed text-text-primary outline-none transition-colors placeholder:text-text-tertiary focus:border-accent/60 ${
                 isComposerBoxExpanded ? "h-[28vh]" : "h-[56px]"
@@ -1662,7 +1664,7 @@ export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onCl
                 type="button"
                 onClick={() => setIsComposerBoxExpanded((v) => !v)}
                 className="absolute right-1.5 top-1.5 rounded-lg p-1 text-text-tertiary transition-all hover:bg-bg-hover hover:text-text-primary"
-                title={isComposerBoxExpanded ? "还原输入框高度" : "扩大输入框，方便编辑长提示词"}
+                title={isComposerBoxExpanded ? t("还原输入框高度") : t("扩大输入框，方便编辑长提示词")}
               >
                 {isComposerBoxExpanded ? <Minimize2 size={12} /> : <Maximize2 size={12} />}
               </button>
@@ -1681,7 +1683,7 @@ export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onCl
               onKeyDown={(e) => {
                 if (e.key === "Enter") handleSaveComboPreset();
               }}
-              placeholder="预设名称（如：品牌主视觉）"
+              placeholder={t("预设名称（如：品牌主视觉）")}
               maxLength={12}
               autoFocus
               className="h-7 min-w-0 flex-1 rounded-lg bg-bg-secondary px-2 text-[11px] text-text-primary outline-none placeholder:text-text-tertiary"
@@ -1691,7 +1693,7 @@ export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onCl
               onClick={handleSaveComboPreset}
               className="flex h-7 shrink-0 items-center rounded-lg bg-accent px-2.5 text-[11px] font-semibold text-white transition-all hover:bg-accent-hover"
             >
-              保存
+              {t("保存")}
             </button>
           </div>
         )}
@@ -1701,10 +1703,10 @@ export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onCl
               type="button"
               onClick={handleRandomCombo}
               className="flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-xl bg-bg-elevated px-3 text-[12px] font-medium text-text-secondary transition-colors hover:bg-bg-hover hover:text-text-primary"
-              title="随机抽 3~5 个材质和一个配色方案"
+              title={t("随机抽 3~5 个材质和一个配色方案")}
             >
               <Shuffle size={13} />
-              随机
+              {t("随机")}
             </button>
           )}
           <button
@@ -1716,10 +1718,10 @@ export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onCl
                 ? "bg-accent text-white"
                 : "bg-bg-elevated text-text-secondary hover:bg-bg-hover hover:text-text-primary"
             }`}
-            title="把当前材质+配色保存为命名预设（单个材质也可以）"
+            title={t("把当前材质+配色保存为命名预设（单个材质也可以）")}
           >
             <Bookmark size={13} />
-            存为预设
+            {t("存为预设")}
           </button>
           <button
             type="button"
@@ -1728,25 +1730,25 @@ export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onCl
             className="flex h-8 min-w-[110px] flex-1 items-center justify-center whitespace-nowrap rounded-xl bg-accent px-3 text-[12px] font-semibold text-white transition-all hover:bg-accent-hover disabled:cursor-not-allowed disabled:bg-bg-tertiary disabled:text-text-tertiary"
             title={
               comboMaterials.length === 0
-                ? "先在上方点选材质球"
+                ? t("先在上方点选材质球")
                 : !hasTarget && canUseComposerText
-                  ? "按右侧输入的文案 + 所选材质生成"
+                  ? t("按右侧输入的文案 + 所选材质生成")
                   : singleMaterial
                     ? selectedPalette
-                      ? `按「${singleMaterial.name}」材质和「${selectedPalette.name}」配色生成`
-                      : `按「${singleMaterial.name}」材质生成（保持原图配色）`
+                      ? t(`按「${singleMaterial.name}」材质和「${selectedPalette.name}」配色生成`)
+                      : t(`按「${singleMaterial.name}」材质生成（保持原图配色）`)
                     : paletteId
-                      ? "按选中的材质和配色生成"
-                      : "按选中的材质生成（保持原图配色）"
+                      ? t("按选中的材质和配色生成")
+                      : t("按选中的材质生成（保持原图配色）")
             }
           >
             {comboMaterials.length === 0
-              ? "先点选材质"
+              ? t("先点选材质")
               : !hasTarget && canUseComposerText
-                ? `按文案生成（${comboMaterials.length} 材质）`
+                ? t(`按文案生成（${comboMaterials.length} 材质）`)
                 : singleMaterial
-                  ? `生成（${singleMaterial.name}）`
-                  : `生成组合（${comboMaterials.length}）`}
+                  ? t(`生成（${singleMaterial.name}）`)
+                  : t(`生成组合（${comboMaterials.length}）`)}
           </button>
           {/* 2K 直出：走 Pro 2K 模型，不改全局模型选择，适合定稿出高清图 */}
           <button
@@ -1754,9 +1756,9 @@ export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onCl
             onClick={() => handleSubmit({ quality: "2k" })}
             disabled={!canPick || comboMaterials.length === 0}
             className="flex h-8 shrink-0 items-center justify-center gap-1 whitespace-nowrap rounded-xl border border-accent/60 px-3 text-[12px] font-semibold text-accent transition-all hover:bg-accent/12 disabled:cursor-not-allowed disabled:border-border-primary disabled:text-text-tertiary [html[data-theme=light]_&]:text-[#111827] [html[data-theme=light]_&]:disabled:text-text-tertiary"
-            title="用 Pro 2K 模型直出高清图（更清晰，生成稍慢）"
+            title={t("用 Pro 2K 模型直出高清图（更清晰，生成稍慢）")}
           >
-            生成 2K
+            {t("生成 2K")}
           </button>
           {/* 预设快捷入口：紧挨生成按钮，点开选预设→回填材质和配色→直接点生成 */}
           {comboPresets.length > 0 && (
@@ -1769,10 +1771,10 @@ export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onCl
                     ? "bg-accent text-white"
                     : "bg-bg-elevated text-text-secondary hover:bg-bg-hover hover:text-text-primary"
                 }`}
-                title="从已保存的预设中快速选择材质和配色"
+                title={t("从已保存的预设中快速选择材质和配色")}
               >
                 <Bookmark size={13} fill={isPresetPickerOpen ? "currentColor" : "none"} />
-                我的预设
+                {t("我的预设")}
               </button>
               {isPresetPickerOpen && presetPickerPos && createPortal(
                 <div
@@ -1805,7 +1807,7 @@ export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onCl
                           className={`group/pitem flex w-full cursor-pointer items-center gap-2 px-2.5 py-1.5 text-left transition-colors hover:bg-bg-hover ${
                             isActive ? "bg-bg-elevated" : ""
                           }`}
-                          title={`载入预设「${preset.name}」`}
+                          title={t(`载入预设「${preset.name}」`)}
                         >
                           <span className="flex shrink-0 items-center -space-x-1.5">
                             {presetMaterials.slice(0, 3).map((material) => (
@@ -1820,7 +1822,7 @@ export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onCl
                           <span className="min-w-0 flex-1">
                             <span className="block truncate text-[11px] font-medium text-text-primary">{preset.name}</span>
                             <span className="block truncate text-[10px] text-text-tertiary">
-                              {presetMaterials.length} 材质 · {preset.palette ? preset.palette.name : "原图配色"}
+                              {t(`${presetMaterials.length} 材质 · ${preset.palette ? preset.palette.name : "原图配色"}`)}
                             </span>
                           </span>
                           {preset.palette && (
@@ -1850,8 +1852,8 @@ export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onCl
                                 openPresetEditor(preset);
                               }}
                               className="flex h-5 w-5 items-center justify-center rounded text-text-tertiary transition-colors hover:bg-bg-tertiary hover:text-text-primary"
-                              title="编辑该预设（改名/增删材质/换配色）"
-                              aria-label={`编辑预设 ${preset.name}`}
+                              title={t("编辑该预设（改名/增删材质/换配色）")}
+                              aria-label={t(`编辑预设 ${preset.name}`)}
                             >
                               <Pencil size={10} />
                             </button>
@@ -1862,8 +1864,8 @@ export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onCl
                                 handleDeleteComboPreset(preset.id);
                               }}
                               className="flex h-5 w-5 items-center justify-center rounded text-text-tertiary transition-colors hover:bg-bg-tertiary hover:text-text-primary"
-                              title="删除该预设"
-                              aria-label={`删除预设 ${preset.name}`}
+                              title={t("删除该预设")}
+                              aria-label={t(`删除预设 ${preset.name}`)}
                             >
                               <X size={11} />
                             </button>
@@ -1873,7 +1875,7 @@ export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onCl
                     })}
                   </div>
                   <div className="border-t border-border-primary py-1 text-center text-[9px] text-text-tertiary">
-                    点选预设直接套用 · 悬浮可编辑或删除
+                    {t("点选预设直接套用 · 悬浮可编辑或删除")}
                   </div>
                 </div>,
                 document.body,
@@ -1886,7 +1888,7 @@ export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onCl
               onClick={() => setComboIds([])}
               className="flex h-8 shrink-0 items-center whitespace-nowrap rounded-xl px-2.5 text-[12px] text-text-tertiary transition-colors hover:bg-bg-hover hover:text-text-primary"
             >
-              清空
+              {t("清空")}
             </button>
           )}
         </div>
@@ -1908,20 +1910,20 @@ export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onCl
             <div className="flex shrink-0 items-center justify-between gap-2 border-b border-border-primary px-3.5 py-2.5">
               <span className="flex items-center gap-1.5 text-[13px] font-semibold text-text-primary">
                 <Bookmark size={13} className="shrink-0" />
-                编辑预设
+                {t("编辑预设")}
               </span>
               <button
                 type="button"
                 onClick={closePresetEditor}
                 className="flex h-6 w-6 items-center justify-center rounded-md text-text-tertiary transition-colors hover:bg-bg-hover hover:text-text-primary"
-                aria-label="关闭预设编辑"
+                aria-label={t("关闭预设编辑")}
               >
                 <X size={13} />
               </button>
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto px-3.5 py-3 scrollbar-thin">
               <div className="mb-3 flex items-center gap-2">
-                <span className="shrink-0 text-[11px] font-semibold text-text-secondary">名称</span>
+                <span className="shrink-0 text-[11px] font-semibold text-text-secondary">{t("名称")}</span>
                 <input
                   type="text"
                   value={presetEditDraft.name}
@@ -1931,7 +1933,7 @@ export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onCl
                 />
               </div>
               <div className="mb-1.5 text-[11px] font-semibold text-text-secondary">
-                材质（{presetEditDraft.materialIds.length}/{COMBO_MAX}，点击增删；DIY 材质悬浮可编辑）
+                {t(`材质（${presetEditDraft.materialIds.length}/${COMBO_MAX}，点击增删；DIY 材质悬浮可编辑）`)}
               </div>
               {/* DIY 材质编辑器：在覆盖层里也能直接改材质描述或新建材质 */}
               {isMaterialEditorOpen && renderMaterialEditorForm()}
@@ -1953,7 +1955,7 @@ export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onCl
                       <button
                         type="button"
                         onClick={() => togglePresetDraftMaterial(material.id)}
-                        title={material.name}
+                        title={t(material.name)}
                         className="absolute inset-0"
                       >
                         {renderMaterialThumb(material, "h-full w-full")}
@@ -1971,8 +1973,8 @@ export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onCl
                             handleEditCustomMaterial(material);
                           }}
                           className="absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded-md bg-black/35 text-white/80 opacity-0 transition-all hover:text-white group-hover/ptile:opacity-100"
-                          title="编辑该 DIY 材质"
-                          aria-label={`编辑材质 ${material.name}`}
+                          title={t("编辑该 DIY 材质")}
+                          aria-label={t(`编辑材质 ${material.name}`)}
                         >
                           <Pencil size={10} />
                         </button>
@@ -1994,15 +1996,15 @@ export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onCl
                         ? "border-accent text-text-primary"
                         : "border-border-primary text-text-tertiary hover:border-accent hover:text-text-primary"
                     }`}
-                    title="DIY 一个自定义材质"
+                    title={t("DIY 一个自定义材质")}
                   >
                     <Plus size={14} />
-                    <span className="text-[9px] font-medium">DIY 材质</span>
+                    <span className="text-[9px] font-medium">{t("DIY 材质")}</span>
                   </button>
                 )}
               </div>
               <div className="mb-1.5 text-[11px] font-semibold text-text-secondary">
-                配色（自定义配色悬浮可编辑）
+                {t("配色（自定义配色悬浮可编辑）")}
               </div>
               <div className="flex flex-wrap items-center gap-1.5">
                 <button
@@ -2014,7 +2016,7 @@ export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onCl
                       : "bg-bg-elevated text-text-tertiary hover:bg-bg-hover hover:text-text-primary"
                   }`}
                 >
-                  原图配色
+                  {t("原图配色")}
                 </button>
                 {editorPalettes.map((palette) => {
                   // 只有还存在于配色库里的自定义配色才可编辑（预设里的旧快照不行）
@@ -2024,7 +2026,7 @@ export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onCl
                       <button
                         type="button"
                         onClick={() => setPresetEditDraft((prev) => ({ ...prev, paletteId: palette.id }))}
-                        title={`${palette.name}：${[palette.main, ...palette.aux].join(" ")}`}
+                        title={t(`${palette.name}：${[palette.main, ...palette.aux].join(" ")}`)}
                         className={`flex h-7 items-center gap-1.5 rounded-lg px-2 text-[11px] font-medium transition-colors ${
                           presetEditDraft.paletteId === palette.id
                             ? "bg-accent text-white"
@@ -2044,15 +2046,15 @@ export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onCl
                             />
                           ))}
                         </span>
-                        {palette.name}
+                        {t(palette.name)}
                       </button>
                       {isCustomPalette && (
                         <button
                           type="button"
                           onClick={() => handleEditCustomPalette(palette)}
                           className="absolute -left-1 -top-1 flex h-3.5 w-3.5 items-center justify-center rounded-full bg-black/60 text-white opacity-0 transition-opacity hover:bg-black/80 group-hover/ppalette:opacity-100"
-                          title="重命名 / 编辑该配色"
-                          aria-label={`编辑配色 ${palette.name}`}
+                          title={t("重命名 / 编辑该配色")}
+                          aria-label={t(`编辑配色 ${palette.name}`)}
                         >
                           <Pencil size={8} />
                         </button>
@@ -2072,7 +2074,7 @@ export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onCl
                       ? "bg-accent text-white"
                       : "bg-bg-elevated text-text-tertiary hover:bg-bg-hover hover:text-text-primary"
                   }`}
-                  title="DIY 一套配色并保存"
+                  title={t("DIY 一套配色并保存")}
                 >
                   <Plus size={11} />
                   DIY
@@ -2090,14 +2092,14 @@ export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onCl
                 disabled={presetEditDraft.materialIds.length < 1}
                 className="flex h-8 flex-1 items-center justify-center rounded-xl bg-accent px-3 text-[12px] font-semibold text-white transition-all hover:bg-accent-hover disabled:cursor-not-allowed disabled:bg-bg-tertiary disabled:text-text-tertiary"
               >
-                {presetEditDraft.materialIds.length < 1 ? "至少选 1 个材质" : "保存修改"}
+                {presetEditDraft.materialIds.length < 1 ? t("至少选 1 个材质") : t("保存修改")}
               </button>
               <button
                 type="button"
                 onClick={closePresetEditor}
                 className="flex h-8 items-center rounded-xl px-3 text-[12px] text-text-tertiary transition-colors hover:bg-bg-hover hover:text-text-primary"
               >
-                取消
+                {t("取消")}
               </button>
             </div>
           </div>
@@ -2125,16 +2127,16 @@ export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onCl
           {renderMaterialThumb(materialPreview.material, "h-36 w-full")}
           <div className="px-3 py-2.5">
             <div className="flex items-center gap-1.5">
-              <span className="text-[12px] font-semibold text-text-primary">{materialPreview.material.name}</span>
+              <span className="text-[12px] font-semibold text-text-primary">{t(materialPreview.material.name)}</span>
               <span className="rounded bg-bg-elevated px-1.5 py-0.5 text-[10px] text-text-tertiary">
-                {materialPreview.material.category || DIY_CATEGORY}
+                {t(materialPreview.material.category || DIY_CATEGORY)}
               </span>
             </div>
             <p className="mt-1.5 text-[11px] leading-relaxed text-text-tertiary line-clamp-3">
               {materialPreview.material.prompt}
             </p>
             <p className="mt-1.5 border-t border-border-primary pt-1.5 text-[10px] text-text-tertiary/80">
-              单击加入组合 · 双击仅用这一个
+              {t("单击加入组合 · 双击仅用这一个")}
             </p>
           </div>
         </div>,
@@ -2150,13 +2152,13 @@ export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onCl
           <div className="flex h-52 w-full items-center justify-center bg-bg-tertiary">
             <img
               src={selectedImage.image_url}
-              alt="选中的目标图"
+              alt={t("选中的目标图")}
               className="max-h-full max-w-full object-contain"
               draggable={false}
             />
           </div>
           <div className="px-3 py-2 text-[11px] text-text-secondary">
-            目标图 · 材质将应用到这张选中的图
+            {t("目标图 · 材质将应用到这张选中的图")}
           </div>
         </div>,
         document.body,
@@ -2165,7 +2167,7 @@ export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onCl
       {/* 单选替换的即时反馈：告知组合已被替换为单个材质 */}
       {soloNotice && (
         <div className="pointer-events-none absolute bottom-16 left-1/2 z-30 -translate-x-1/2 whitespace-nowrap rounded-lg bg-black/78 px-3 py-1.5 text-[11px] text-white backdrop-blur-sm">
-          已切换为仅使用「{soloNotice}」
+          {t(`已切换为仅使用「${soloNotice}」`)}
         </div>
       )}
     </div>

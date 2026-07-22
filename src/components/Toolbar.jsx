@@ -193,14 +193,14 @@ export default function Toolbar({
               <div className="relative flex w-max max-w-[260px] items-center gap-2 rounded-xl bg-bg-secondary/95 py-2 pl-3 pr-2 text-xs text-text-primary shadow-md shadow-black/10 backdrop-blur-xl">
                 {/* 提示文案：深色模式用品牌绿，浅色模式保持黑色 */}
                 <span className="text-accent [html[data-theme=light]_&]:text-[#111827]">
-                  创意工具箱：一键换材质/风格等创意玩法都在这里
+                  {t("创意工具箱：一键换材质/风格等创意玩法都在这里")}
                 </span>
                 <button
                   type="button"
                   onClick={dismissToolboxHint}
                   className="shrink-0 rounded-lg bg-bg-hover px-2 py-1 text-[11px] text-text-secondary transition-colors hover:text-text-primary"
                 >
-                  知道了
+                  {t("知道了")}
                 </button>
                 <span
                   aria-hidden="true"
@@ -215,9 +215,9 @@ export default function Toolbar({
               className="absolute bottom-[calc(100%+10px)] right-0 z-30 w-56 rounded-2xl border border-border-primary bg-bg-secondary/95 p-3 shadow-2xl shadow-black/40 backdrop-blur-xl animate-fade-in"
               onPointerDown={(e) => e.stopPropagation()}
             >
-              <div className="mb-2 text-xs font-semibold text-text-primary">创意工具</div>
+              <div className="mb-2 text-xs font-semibold text-text-primary">{t("创意工具")}</div>
               <div className="rounded-xl bg-bg-tertiary/60 px-3 py-4 text-center text-[11px] leading-relaxed text-text-tertiary">
-                更多创意玩法即将上线，敬请期待
+                {t("更多创意玩法即将上线，敬请期待")}
               </div>
             </div>
           )}
