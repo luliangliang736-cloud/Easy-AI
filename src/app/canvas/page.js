@@ -3709,6 +3709,8 @@ function HomeInner() {
       disableSemanticEdit: true,
       disableAgentDefaults: true,
       composerMode: "manual",
+      // 保留输入框文案：方便用同一段文案换不同材质反复生成做对比
+      preserveComposer: true,
     });
   }, [handleGenerate, materialComposerSelection, params, prompt]);
 
