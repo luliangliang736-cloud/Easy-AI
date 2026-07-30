@@ -12,9 +12,17 @@ import { LARK_IDENTITY, runLarkCliJson } from "@/lib/server/larkCliRuntime";
 export const runtime = "nodejs";
 
 const BASE_TOKEN = process.env.FEISHU_WA_BASE_TOKEN || "R2edbyyrZaGixJsH0v2cD1Mcnkg";
-const TABLE_ID = process.env.FEISHU_WA_TABLE_ID || "tble6jwNnOTjv75V";
-const VIEW_ID = process.env.FEISHU_WA_VIEW_ID || "vewQ8ft4Ji";
+const TABLE_ID = process.env.FEISHU_WA_TABLE_ID || "tbl5LlkOa5yLoGQf";
 const AI_IMAGE_FIELD_NAME = "AI设计图";
+
+const FIELD_ALIASES = {
+  scene: ["场景类型", "标签"],
+  headline: ["主文案（印尼语 ≤30）", "主文案-印尼语", "主文案（印尼语）"],
+  subline: ["副文案（印尼语 ≤50）", "副文案-印尼语", "副文案（印尼语）"],
+  role: ["人物"],
+  outfit: ["服装"],
+  style: ["风格"],
+};
 
 function normalizeText(value) {
   if (Array.isArray(value)) return value.filter(Boolean).join("，");
@@ -24,6 +32,14 @@ function normalizeText(value) {
 function getField(record, fieldNames, name) {
   const index = fieldNames.indexOf(name);
   return index >= 0 ? record[index] : null;
+}
+
+function getFieldByAliases(record, fieldNames, aliases) {
+  for (const name of aliases) {
+    const value = normalizeText(getField(record, fieldNames, name));
+    if (value) return value;
+  }
+  return "";
 }
 
 async function writeTempJson(payload) {
@@ -39,18 +55,45 @@ function resolveTableTarget() {
   return { tableId: TABLE_ID, tableName: "" };
 }
 
+// 视图与附件字段按表自动解析并缓存，换表时只需要更新 TABLE_ID
+const resolvedViewIdByTable = new Map();
+const resolvedAiImageFieldByTable = new Map();
+
+async function resolveViewId(tableId = TABLE_ID) {
+  if (process.env.FEISHU_WA_VIEW_ID) return process.env.FEISHU_WA_VIEW_ID;
+  const cached = resolvedViewIdByTable.get(tableId);
+  if (cached) return cached;
+  const data = await runLarkCliJson([
+    "base", "+view-list",
+    "--base-token", BASE_TOKEN,
+    "--table-id", tableId,
+    "--as", LARK_IDENTITY,
+    "--format", "json",
+    "--jq", ".",
+  ]);
+  const views = Array.isArray(data?.data?.views) ? data.data.views : [];
+  const view = views.find((item) => item?.type === "grid") || views[0];
+  if (!view?.id) throw new Error("未找到飞书表格视图");
+  resolvedViewIdByTable.set(tableId, view.id);
+  return view.id;
+}
+
 async function resolveAiImageFieldId(tableId = TABLE_ID) {
   if (tableId === TABLE_ID && process.env.FEISHU_WA_AI_IMAGE_FIELD) return process.env.FEISHU_WA_AI_IMAGE_FIELD;
+  const cached = resolvedAiImageFieldByTable.get(tableId);
+  if (cached) return cached;
   const data = await runLarkCliJson([
     "base", "+field-list",
     "--base-token", BASE_TOKEN,
     "--table-id", tableId,
     "--as", LARK_IDENTITY,
+    "--format", "json",
     "--jq", ".",
   ]);
   const fields = Array.isArray(data?.data?.fields) ? data.data.fields : [];
   const field = fields.find((item) => item?.name === AI_IMAGE_FIELD_NAME && item?.type === "attachment");
   if (!field?.id) throw new Error("未找到飞书 AI设计图 附件字段");
+  resolvedAiImageFieldByTable.set(tableId, field.id);
   return field.id;
 }
 
@@ -105,10 +148,29 @@ function inferWaFields({ headline = "", subline = "", scene = "" } = {}) {
     };
   }
 
+  // 风格写法对齐「WA海报批量测试」：克制、可对比，品牌绿只做点缀
+  const stylePool = [
+    "蓝白金融科技广告，清晰信息卡片、可信赖、明亮留白，少量品牌绿点缀",
+    "暖色生活场景海报，真实需求感、亲和人物、行动按钮突出，品牌色克制使用",
+    "浅色合规信任海报，OJK/AFPI背书、清晰文字层级、简洁图标，绿色仅作辅助",
+    "深蓝科技金融海报，数据卡片、速度感线条、专业可信，形成与绿色版差异",
+    "发薪日前救急海报，暖黄色行动氛围、手机额度卡片、快速到账动线，品牌绿只用于CTA或小图标",
+    "金色权益感营销海报，高级渐变、会员礼遇、干净排版，避免重复绿色背景",
+    "新用户引导海报，清爽浅色流程卡片、透明步骤、OJK信任背书，少量品牌绿按钮点缀",
+  ];
+  let hash = 0;
+  const seed = compact || "wa";
+  for (let i = 0; i < seed.length; i += 1) hash = (hash + seed.charCodeAt(i) * (i + 1)) % 997;
+  const style = stylePool[hash % stylePool.length];
+
   return {
     role,
-    outfit: role === "Robot" ? "仅使用库里的Robot标准形态：标准绿色主体机身、黑色屏幕脸、银白机械臂/脚部；最多只改变姿势/朝向/手势，不改变服饰、颜色、机身或屏幕脸" : "亲和职业装",
-    style: "绿色品牌金融广告，干净明亮，可信赖，信息清晰",
+    outfit: role === "Robot"
+      ? "仅使用库里的Robot标准形态：标准绿色主体机身、黑色屏幕脸、银白机械臂/脚部；最多只改变姿势/朝向/手势，不改变服饰、颜色、机身或屏幕脸"
+      : role === "Girl"
+        ? "亲和职业装"
+        : "商务服饰",
+    style,
   };
 }
 
@@ -126,14 +188,15 @@ async function prepareBatch({ limit = 5, start = 0, end = 0, tail = false } = {}
   const safeLimit = Math.min(Math.max(Number(limit) || 5, 1), 500);
   const safeStart = Math.max(Number(start) || 0, 0);
   const safeEnd = Math.max(Number(end) || 0, 0);
-  // 使用视图 ID 保证按任务序号顺序返回，直接取对应条数
+  // 使用视图 ID 保证按视图行序返回，直接取对应条数
   const readLimit = tail ? 200 : (safeEnd > 0 ? safeEnd : safeLimit);
   const target = resolveTableTarget();
+  const viewId = await resolveViewId(target.tableId);
   const data = await runLarkCliJson([
     "base", "+record-list",
     "--base-token", BASE_TOKEN,
     "--table-id", target.tableId,
-    "--view-id", VIEW_ID,
+    "--view-id", viewId,
     "--as", LARK_IDENTITY,
     "--limit", String(Math.min(readLimit, 200)),
     "--format", "json",
@@ -165,15 +228,15 @@ async function prepareBatch({ limit = 5, start = 0, end = 0, tail = false } = {}
   const items = [];
   for (const selected of selectedRecords) {
     const { record, recordId, index } = selected;
-    const scene = normalizeText(getField(record, fields, "场景类型"));
-    const headline = normalizeText(getField(record, fields, "主文案（印尼语 ≤30）"));
-    const subline = normalizeText(getField(record, fields, "副文案（印尼语 ≤50）"));
+    const scene = getFieldByAliases(record, fields, FIELD_ALIASES.scene);
+    const headline = getFieldByAliases(record, fields, FIELD_ALIASES.headline);
+    const subline = getFieldByAliases(record, fields, FIELD_ALIASES.subline);
     if (!recordId || !headline || !subline) continue;
 
     const inferred = inferWaFields({ headline, subline, scene });
-    const currentRole = normalizeText(getField(record, fields, "人物"));
-    const currentOutfit = normalizeText(getField(record, fields, "服装"));
-    const currentStyle = normalizeText(getField(record, fields, "风格"));
+    const currentRole = getFieldByAliases(record, fields, FIELD_ALIASES.role);
+    const currentOutfit = getFieldByAliases(record, fields, FIELD_ALIASES.outfit);
+    const currentStyle = getFieldByAliases(record, fields, FIELD_ALIASES.style);
     const role = currentRole || inferred.role;
     const outfit = role === "Robot"
       ? "仅使用库里的Robot标准形态：标准绿色主体机身、黑色屏幕脸、银白机械臂/脚部；最多只改变姿势/朝向/手势，不改变服饰、颜色、机身或屏幕脸"
