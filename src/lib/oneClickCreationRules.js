@@ -533,10 +533,16 @@ export function parseBatchWaTemplatePrompts(inputText) {
 export function chooseWaTemplateIpRole({ headline = "", subline = "", role = "" } = {}) {
   if (role) return role;
   const compact = `${headline} ${subline}`.toLowerCase().replace(/\s+/g, "");
-  if (/(robot|科技|安全|自动|cepat|5menit|menit|cair|limit)/i.test(compact)) return "Robot";
-  if (/(hemat|bebas|cicilan|promo|diskon|extra|ekstra|优惠|省钱|促销)/i.test(compact)) return "Boy";
-  const roles = ["Girl", "Boy", "Robot"];
-  return roles[Math.floor(Math.random() * roles.length)];
+  // Robot 仅在明确点名或极强“全自动秒放款”语境下使用；不要因常见词 limit/cair 误判成 Robot
+  if (/(robot|机器人)/i.test(compact)) return "Robot";
+  if (/(全自动|秒到账|5menit|5\s*menit|otomatis)/i.test(compact)) return "Robot";
+  if (/(hemat|bebas|cicilan|promo|diskon|extra|ekstra|优惠|省钱|促销|bunga|利率)/i.test(compact)) return "Boy";
+  if (/(upgrade|prioritas|vip|gold|selamat|恭喜|升级|会员)/i.test(compact)) return "Girl";
+  // 默认在 Girl / Boy 间轮换，避免批量任务大量落成 Robot
+  const roles = ["Girl", "Boy"];
+  let hash = 0;
+  for (let i = 0; i < compact.length; i += 1) hash = (hash + compact.charCodeAt(i) * (i + 1)) % 997;
+  return roles[hash % roles.length];
 }
 
 function chooseWaTemplateProp({ headline = "", subline = "" } = {}) {
@@ -550,6 +556,13 @@ function chooseWaTemplateProp({ headline = "", subline = "" } = {}) {
 
 function pickRandom(items = []) {
   return items[Math.floor(Math.random() * items.length)] || "";
+}
+
+// 「原版锁定」触发词：风格字段写这些词时，沿用垫图原样，只换文案
+export function isWaKeepTemplateStyle(visualStyle = "") {
+  const compact = String(visualStyle || "").toLowerCase().replace(/\s+/g, "");
+  if (!compact) return false;
+  return /(保持原版|沿用原版|沿用模板|原版风格|模板原样|保持模板|风格不变|不改风格|不换风格|只换文案|只改文案|只换标题|只改标题|keeporiginal|keeptemplate)/i.test(compact);
 }
 
 function chooseWaTemplateBackgroundStyle(visualStyle = "") {
@@ -650,14 +663,23 @@ export function buildWaTemplatePrompt({ headline = "", subline = "", outfitStyle
   const isRealisticRole = String(role || "").includes("真人版");
   const baseRole = String(role || "").replace("真人版", "") || role;
   const isRobotRole = String(baseRole || "").toLowerCase() === "robot";
-  const prop = chooseWaTemplateProp({ headline: displayHeadline, subline: displaySubline });
-  const backgroundStyle = chooseWaTemplateBackgroundStyle(visualStyle);
-  const characterVariation = chooseWaTemplateCharacterVariation(outfitStyle);
+  const keepTemplateStyle = isWaKeepTemplateStyle(visualStyle);
+  const prop = keepTemplateStyle
+    ? "沿用第一张参考图中已有的道具，不新增、不替换道具"
+    : chooseWaTemplateProp({ headline: displayHeadline, subline: displaySubline });
+  const backgroundStyle = keepTemplateStyle
+    ? "完全沿用第一张参考图的原背景配色、纹理、装饰与光影，不做任何新的风格变化"
+    : chooseWaTemplateBackgroundStyle(visualStyle);
+  const characterVariation = keepTemplateStyle && !outfitStyle
+    ? "沿用第一张参考图人物的站位、姿势、朝向和服装，最多允许极轻微的表情/手势微调"
+    : chooseWaTemplateCharacterVariation(outfitStyle);
   const characterRenderStyle = isRealisticRole
     ? `真人版商业视觉质感：参考图是 EasyFamily ${baseRole} 的真人版身份素材，必须保留 ${baseRole} 的核心脸型、发型轮廓、五官比例、眼镜、年轻亲和气质和品牌角色识别度；整体呈现为真实人物摄影/半写实商业广告质感，不要退回 3D 卡通、公仔、玩偶，也不要变成陌生真人模特`
     : isRobotRole
       ? "强身份复制 EasyFamily Robot 标准形态：Robot 只能使用库里的 Robot标准形态作为唯一外形来源，必须保持原始头身轮廓、屏幕脸比例、机身形状、标准绿色主体机身、黑色屏幕脸、银白机械臂/脚部和原始机械臂结构；最多只允许改变姿势、朝向、手势和与道具的关系，不允许更换服饰、增加配饰、改变颜色、改变脸部表情结构或重新设计身体"
-    : chooseWaTemplateCharacterRenderStyle(visualStyle);
+    : keepTemplateStyle
+      ? "沿用第一张参考图人物的原渲染方式（3D/2D、材质、光影一致），不改变渲染风格"
+      : chooseWaTemplateCharacterRenderStyle(visualStyle);
   const realisticRoleRequirement = isRealisticRole
     ? `- 真人版是 ${baseRole} 的独立视觉变体，只在用户明确写“真人版”时启用；本次必须以参考图中的真人版 ${baseRole} 身份为准，不能混用普通卡通版 ${baseRole} 素材，也不能改变原有 EasyFamily 身份特征。
 - 真人版 ${baseRole} 的正视图是身份锚点：优先保留其脸型、发型轮廓、眼镜、眉眼比例、鼻口关系、年龄气质和亲和表情；服装、姿势和场景可以变化，但不能换成参考场景里的陌生人物脸。
@@ -675,7 +697,61 @@ export function buildWaTemplatePrompt({ headline = "", subline = "", outfitStyle
 - 如果需要拿道具或指向元素，只能使用现有两只机械臂中的一只完成动作；不要为了拿道具新增手臂或手。
 - Robot 身体、胸口、脸侧、耳罩状部件、手臂和机身边缘不要新增 smile logo / Easycash logo / EZlogo；如果参考标准形态本身没有该 logo 点位，就保持机身纯净。`
     : "";
-  const rightPanelStyle = chooseWaTemplateRightPanelStyle(visualStyle);
+  const rightPanelStyle = keepTemplateStyle
+    ? "完全沿用第一张参考图的原背板形状、颜色、圆角、质感与层次，不做变化"
+    : chooseWaTemplateRightPanelStyle(visualStyle);
+  const styleSections = keepTemplateStyle
+    ? `视觉风格要求（原版锁定模式）：
+- 用户要求沿用第一张参考模板的原版风格：${visualStyle}。
+- 本次是只换文案的小改任务：整体配色、背景、纹理、装饰元素、光影氛围、右侧背板、字体节奏和画面气质必须与第一张参考图保持一致，不做风格重设计。
+- 禁止引入新的色系、新的装饰主题、新的材质质感或新的背景方向；只允许因替换主副标题带来的最小必要调整（如文字长度不同导致的排版微调）。
+- 如果风格描述里除锁定词外还写了具体小改要求（例如换个道具、换个表情、局部换色），只执行该项小改，其余一律保持参考图原样。
+
+背景变化要求（原版锁定模式）：
+- ${backgroundStyle}。
+- 背景层、渐变层、纹理层、装饰层与参考图保持一致；不要新增、删除或移动背景装饰元素。
+- 左侧文案区保持参考图原有的对比度和留白关系。
+
+右侧人物背板变化要求（原版锁定模式）：
+- ${rightPanelStyle}。
+- 背板位置、面积、层次与人物承托关系与参考图保持一致。`
+    : `视觉风格要求：
+- 用户指定的视觉风格：${visualStyle || "未指定，使用默认年轻金融科技广告风格"}。
+- 风格只是辅助审美层，用来满足不同用户的视觉偏好；优先级低于固定版式、主副标题准确性、Logo+OJK 合规标识、人物/IP 占位和可读性。
+- 如果用户指定了“风格/画面风格/视觉风格”或在需求中写了某种风格关键词，需要在不改变核心规则的前提下体现该风格，不要只沿用参考模板默认外观。
+- 指定风格建议体现在 3-4 个方面：整体配色、背景质感/纹理、右侧人物背板形态、装饰元素、光影氛围、字体/卡片节奏。
+- 风格变化要克制且服务版式：仍然保持左侧文案区、右侧人物区、Logo+OJK 合规区和 2:1 横版结构。
+- 如果用户指定艺术家或艺术流派名称，只提取其可识别的视觉特征作为审美参考；不要做完整临摹，不要牺牲品牌识别、信息可读性和商业海报属性。
+- 如果用户指定的是具有明确视觉符号的命名风格，例如蒙德里安、复古港风、赛博朋克、孟菲斯、国潮、Y2K 等，必须出现 2-3 个该风格的可识别特征；不要只做普通换色、普通绿色几何或普通复古纹理。
+- 如果是 ins 小众治愈风格，应使用柔和低饱和配色、轻盈留白、温柔光感、细腻纹理和少量精致小装饰。
+- 如果是炫酷风格，应使用更强对比、动态斜切/几何、深浅层次、绿色高光、利落光影和更有冲击力的右侧背板。
+- 如果是蒙德里安风格，应出现黑色网格线、矩形色块、非对称直角构图、大留白和红/黄/蓝/品牌绿点缀中的多个特征。
+- 如果是复古港风风格，应出现港式复古商业海报感、胶片颗粒、暖调旧海报质感、霓虹招牌感色彩或 80s-90s 港风排版节奏中的多个特征。
+- 如果是科技、赛博、渐变、玻璃拟态、3D、扁平、复古、国潮、印尼本土化、商务、节日、电商促销、暗黑高级等风格，也应按对应风格调整配色、材质、装饰和视觉氛围，但不要牺牲信息清晰度。
+- 如果指定的是扁平插画、蒙德里安、几何抽象、孟菲斯、手绘、像素、国潮手绘等平面类风格，右侧人物也应同步转译成平面/插画表达；不要让 3D 人物硬插进平面画面里造成风格割裂。
+
+背景变化要求：
+- 本次背景变化方向：${backgroundStyle}。
+- 背景可以比参考图更有变化，但必须低干扰、低对比、服务主体。
+- 可选方向包括：微渐变噪点、磨砂质感、布纹/纸感肌理、品牌色同色系网点/斜纹/波浪、切割式色块/分屏设计、低饱和线条/网格、弥散渐变、极简流体线条、弱化品牌元素矩阵、品牌色散点、柔和光晕、轻微暗角。
+- 背景装饰优先使用金融、消费信贷、抽象几何、低干扰纹理相关元素，例如手机、钱包、金币、钞票、check、盾牌、额度卡、箭头、圆点、线条、网格；不要把 smile logo / Easycash logo / EZlogo 当作背景低透明图案或角落水印。
+- 允许使用没有强行业含义的中立装饰元素，例如纸飞机、星点、抽象叶片、简单花形、小弧线、小几何符号，但必须低透明、小尺寸、只做边缘点缀。
+- 背景不得出现与金融产品和商务人物差别太大的行业符号。
+- 背景变化只能发生在原背景层级内，不能抢主标题、IP、Logo+OJK 合规标识。
+- 左侧文案区必须保持高对比度和高可读性；背景纹理在文案区必须弱化。
+- 背景元素主要放在边缘、角落、人物背后或非文案区，中心和文案区保持干净。
+- 画面角落、背景层、渐变层、纹理层和装饰层禁止出现残缺、裁切、半透明、变形、错色、带红框或不可识别的 smile logo / Easycash logo / EZlogo；如果无法完整清晰复刻官方 logo，就不要在该位置生成 logo。
+- 背景装饰透明度必须克制：纹理约 1%-5%，中立金融图标矩阵约 10%-20%，线条和几何元素保持低饱和；品牌 logo 不能作为背景图标矩阵使用。
+- 不要每次都使用纯色或单一弧形色块，但也不要做复杂场景背景；如果背景会抢焦点，宁可简化或不要这些背景元素。
+
+右侧人物背板变化要求：
+- 本次右侧人物背板变化方向：${rightPanelStyle}。
+- 人物背后的板块/卡片/色块可以比参考模板有中等幅度变化，不要只是简单换颜色。
+- 可以变化背板的形状、圆角、切角、层叠关系、渐变、玻璃质感、柔和光影、局部描边或内阴影。
+- 背板必须仍然位于第一张模板图原右侧人物背景区域内，不能侵入左侧文案区或遮挡 Logo/OJK。
+- 背板面积、视觉重心和人物承托关系应接近参考模板，但形态可以有约 15%-25% 的变化。
+- 背板最多 2-3 层，不要复杂堆叠，不要做成真实场景背景。
+- 背板变化应增强人物层次和新鲜感，不能抢人物脸部、手机/道具或主标题。`;
   return `请基于第一张参考图的 WA 横版营销模板重新生成一张 2:1 设计图，并严格替换模板中的主标题和副标题。
 
 固定版式要求：
@@ -717,43 +793,7 @@ ${emphasisInstruction}
 - 如果文案较短，不要为了填满空间而放大副标题。
 - 主标题和副标题整体不能向下压到 Logo + OJK 合规标识附近；文案组与 Logo + OJK 之间必须有明确分隔留白，优先缩小副标题或微调文案组，而不是让两块信息贴在一起。
 
-视觉风格要求：
-- 用户指定的视觉风格：${visualStyle || "未指定，使用默认年轻金融科技广告风格"}。
-- 风格只是辅助审美层，用来满足不同用户的视觉偏好；优先级低于固定版式、主副标题准确性、Logo+OJK 合规标识、人物/IP 占位和可读性。
-- 如果用户指定了“风格/画面风格/视觉风格”或在需求中写了某种风格关键词，需要在不改变核心规则的前提下体现该风格，不要只沿用参考模板默认外观。
-- 指定风格建议体现在 3-4 个方面：整体配色、背景质感/纹理、右侧人物背板形态、装饰元素、光影氛围、字体/卡片节奏。
-- 风格变化要克制且服务版式：仍然保持左侧文案区、右侧人物区、Logo+OJK 合规区和 2:1 横版结构。
-- 如果用户指定艺术家或艺术流派名称，只提取其可识别的视觉特征作为审美参考；不要做完整临摹，不要牺牲品牌识别、信息可读性和商业海报属性。
-- 如果用户指定的是具有明确视觉符号的命名风格，例如蒙德里安、复古港风、赛博朋克、孟菲斯、国潮、Y2K 等，必须出现 2-3 个该风格的可识别特征；不要只做普通换色、普通绿色几何或普通复古纹理。
-- 如果是 ins 小众治愈风格，应使用柔和低饱和配色、轻盈留白、温柔光感、细腻纹理和少量精致小装饰。
-- 如果是炫酷风格，应使用更强对比、动态斜切/几何、深浅层次、绿色高光、利落光影和更有冲击力的右侧背板。
-- 如果是蒙德里安风格，应出现黑色网格线、矩形色块、非对称直角构图、大留白和红/黄/蓝/品牌绿点缀中的多个特征。
-- 如果是复古港风风格，应出现港式复古商业海报感、胶片颗粒、暖调旧海报质感、霓虹招牌感色彩或 80s-90s 港风排版节奏中的多个特征。
-- 如果是科技、赛博、渐变、玻璃拟态、3D、扁平、复古、国潮、印尼本土化、商务、节日、电商促销、暗黑高级等风格，也应按对应风格调整配色、材质、装饰和视觉氛围，但不要牺牲信息清晰度。
-- 如果指定的是扁平插画、蒙德里安、几何抽象、孟菲斯、手绘、像素、国潮手绘等平面类风格，右侧人物也应同步转译成平面/插画表达；不要让 3D 人物硬插进平面画面里造成风格割裂。
-
-背景变化要求：
-- 本次背景变化方向：${backgroundStyle}。
-- 背景可以比参考图更有变化，但必须低干扰、低对比、服务主体。
-- 可选方向包括：微渐变噪点、磨砂质感、布纹/纸感肌理、品牌色同色系网点/斜纹/波浪、切割式色块/分屏设计、低饱和线条/网格、弥散渐变、极简流体线条、弱化品牌元素矩阵、品牌色散点、柔和光晕、轻微暗角。
-- 背景装饰优先使用金融、消费信贷、抽象几何、低干扰纹理相关元素，例如手机、钱包、金币、钞票、check、盾牌、额度卡、箭头、圆点、线条、网格；不要把 smile logo / Easycash logo / EZlogo 当作背景低透明图案或角落水印。
-- 允许使用没有强行业含义的中立装饰元素，例如纸飞机、星点、抽象叶片、简单花形、小弧线、小几何符号，但必须低透明、小尺寸、只做边缘点缀。
-- 背景不得出现与金融产品和商务人物差别太大的行业符号。
-- 背景变化只能发生在原背景层级内，不能抢主标题、IP、Logo+OJK 合规标识。
-- 左侧文案区必须保持高对比度和高可读性；背景纹理在文案区必须弱化。
-- 背景元素主要放在边缘、角落、人物背后或非文案区，中心和文案区保持干净。
-- 画面角落、背景层、渐变层、纹理层和装饰层禁止出现残缺、裁切、半透明、变形、错色、带红框或不可识别的 smile logo / Easycash logo / EZlogo；如果无法完整清晰复刻官方 logo，就不要在该位置生成 logo。
-- 背景装饰透明度必须克制：纹理约 1%-5%，中立金融图标矩阵约 10%-20%，线条和几何元素保持低饱和；品牌 logo 不能作为背景图标矩阵使用。
-- 不要每次都使用纯色或单一弧形色块，但也不要做复杂场景背景；如果背景会抢焦点，宁可简化或不要这些背景元素。
-
-右侧人物背板变化要求：
-- 本次右侧人物背板变化方向：${rightPanelStyle}。
-- 人物背后的板块/卡片/色块可以比参考模板有中等幅度变化，不要只是简单换颜色。
-- 可以变化背板的形状、圆角、切角、层叠关系、渐变、玻璃质感、柔和光影、局部描边或内阴影。
-- 背板必须仍然位于第一张模板图原右侧人物背景区域内，不能侵入左侧文案区或遮挡 Logo/OJK。
-- 背板面积、视觉重心和人物承托关系应接近参考模板，但形态可以有约 15%-25% 的变化。
-- 背板最多 2-3 层，不要复杂堆叠，不要做成真实场景背景。
-- 背板变化应增强人物层次和新鲜感，不能抢人物脸部、手机/道具或主标题。
+${styleSections}
 
 右侧元素要求：
 - 使用 ${role} 风格的 EZfamily IP 角色作为右侧主视觉参考。
@@ -810,8 +850,10 @@ ${isRobotRole ? "- 本次角色是 Robot：不要新增上衣、外套、裙装/
 - 不要新增模板参考图中不存在的大面积漂浮元素。
 - 不要把右侧元素移动到新的构图位置。
 - 不要忽略用户指定的人物服饰关键词；如果用户指定制服、医生制服、传统服饰或职业装，禁止生成默认休闲服装。
-- 不要完全忽略用户指定的视觉风格关键词；如果用户指定 ins 小众治愈、炫酷、高级、可爱、极简、科技、赛博、渐变、复古、国潮、电商、节日等风格，需要做出可感知的审美差异，但不得破坏核心版式和品牌规则。
-- 如果用户指定扁平插画、蒙德里安、几何抽象、孟菲斯、手绘、像素等平面类风格，不要生成与画面不匹配的强 3D 人物；人物可以转译为 2D/flat/vector illustration，但必须保留 EZfamily 角色识别度。
+${keepTemplateStyle
+    ? `- 本次是原版锁定模式：不要为了"新鲜感"或"审美差异"改变参考图的配色、背景、装饰、背板或渲染风格；除主副标题以外的任何主动风格变化都视为错误。`
+    : `- 不要完全忽略用户指定的视觉风格关键词；如果用户指定 ins 小众治愈、炫酷、高级、可爱、极简、科技、赛博、渐变、复古、国潮、电商、节日等风格，需要做出可感知的审美差异，但不得破坏核心版式和品牌规则。
+- 如果用户指定扁平插画、蒙德里安、几何抽象、孟菲斯、手绘、像素等平面类风格，不要生成与画面不匹配的强 3D 人物；人物可以转译为 2D/flat/vector illustration，但必须保留 EZfamily 角色识别度。`}
 - 不要改变左文案右元素的固定版式。`;
 }
 
@@ -831,14 +873,23 @@ export function buildWaDataPosterPrompt({ headline = "", subline = "", outfitSty
   const isRealisticRole = String(role || "").includes("真人版");
   const baseRole = String(role || "").replace("真人版", "") || role;
   const isRobotRole = String(baseRole || "").toLowerCase() === "robot";
-  const prop = chooseWaTemplateProp({ headline: displayHeadline, subline: displaySubline });
-  const backgroundStyle = chooseWaTemplateBackgroundStyle(visualStyle);
-  const characterVariation = chooseWaTemplateCharacterVariation(outfitStyle);
+  const keepTemplateStyle = isWaKeepTemplateStyle(visualStyle);
+  const prop = keepTemplateStyle
+    ? "沿用第一张参考图中已有的道具，不新增、不替换道具"
+    : chooseWaTemplateProp({ headline: displayHeadline, subline: displaySubline });
+  const backgroundStyle = keepTemplateStyle
+    ? "完全沿用第一张参考图上半部分的原背景配色、纹理、装饰与光影，不做任何新的风格变化"
+    : chooseWaTemplateBackgroundStyle(visualStyle);
+  const characterVariation = keepTemplateStyle && !outfitStyle
+    ? "沿用第一张参考图人物的站位、姿势、朝向和服装，最多允许极轻微的表情/手势微调"
+    : chooseWaTemplateCharacterVariation(outfitStyle);
   const characterRenderStyle = isRealisticRole
     ? `真人版商业视觉质感：参考图是 EasyFamily ${baseRole} 的真人版身份素材，必须保留 ${baseRole} 的核心脸型、发型轮廓、五官比例、眼镜、年轻亲和气质和品牌角色识别度；整体呈现为真实人物摄影/半写实商业广告质感，不要退回 3D 卡通、公仔、玩偶，也不要变成陌生真人模特`
     : isRobotRole
       ? "强身份复制 EasyFamily Robot 标准形态：Robot 只能使用库里的 Robot标准形态作为唯一外形来源，必须保持原始头身轮廓、屏幕脸比例、机身形状、标准绿色主体机身、黑色屏幕脸、银白机械臂/脚部和原始机械臂结构；最多只允许改变姿势、朝向、手势和与道具的关系，不允许更换服饰、增加配饰、改变颜色、改变脸部表情结构或重新设计身体"
-      : chooseWaTemplateCharacterRenderStyle(visualStyle);
+      : keepTemplateStyle
+        ? "沿用第一张参考图人物的原渲染方式（3D/2D、材质、光影一致），不改变渲染风格"
+        : chooseWaTemplateCharacterRenderStyle(visualStyle);
   const realisticRoleRequirement = isRealisticRole
     ? `- 真人版是 ${baseRole} 的独立视觉变体，只在用户明确写“真人版”时启用；本次必须以参考图中的真人版 ${baseRole} 身份为准，不能混用普通卡通版 ${baseRole} 素材，也不能改变原有 EasyFamily 身份特征。
 - 真人版 ${baseRole} 的正视图是身份锚点：优先保留其脸型、发型轮廓、眼镜、眉眼比例、鼻口关系、年龄气质和亲和表情；服装、姿势和场景可以变化，但不能换成参考场景里的陌生人物脸。`
@@ -899,11 +950,17 @@ ${emphasisInstruction}
 - 主标题和副标题必须保持高对比度和高可读性，不要被人物、道具、光效或背景纹理遮挡。
 - 文案组不要下沉到黑色数据板块附近；文案与黑色数据板块顶部必须保留清晰安全距离。
 
-视觉风格要求：
+${keepTemplateStyle
+    ? `视觉风格要求（原版锁定模式）：
+- 用户要求沿用第一张参考模板的原版风格：${visualStyle}。
+- 本次是只换文案的小改任务：上半部分的配色、背景、纹理、装饰、光影和人物背板必须与第一张参考图保持一致，不做风格重设计。
+- 禁止引入新的色系、装饰主题或材质质感；只允许因替换主副标题带来的最小必要排版调整。
+- 如果风格描述里除锁定词外还写了具体小改要求，只执行该项小改，其余保持参考图原样。`
+    : `视觉风格要求：
 - 用户指定的视觉风格：${visualStyle || "未指定，使用默认年轻金融科技广告风格"}。
 - 风格只作用在上半部分主视觉区域，不能改变下半部分黑色数据板块。
 - 如果用户指定风格，需要体现在上半部分的配色、背景质感、人物背板、装饰元素、光影氛围、字体节奏中。
-- 即使风格变化明显，也必须保持 1:1 数据版模板结构、上半部分营销海报、下半部分固定黑色数据框。
+- 即使风格变化明显，也必须保持 1:1 数据版模板结构、上半部分营销海报、下半部分固定黑色数据框。`}
 
 背景变化要求：
 - 本次上半部分背景变化方向：${backgroundStyle}。
