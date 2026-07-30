@@ -61,21 +61,26 @@ const resolvedAiImageFieldByTable = new Map();
 
 async function resolveViewId(tableId = TABLE_ID) {
   if (process.env.FEISHU_WA_VIEW_ID) return process.env.FEISHU_WA_VIEW_ID;
-  const cached = resolvedViewIdByTable.get(tableId);
-  if (cached) return cached;
-  const data = await runLarkCliJson([
-    "base", "+view-list",
-    "--base-token", BASE_TOKEN,
-    "--table-id", tableId,
-    "--as", LARK_IDENTITY,
-    "--format", "json",
-    "--jq", ".",
-  ]);
-  const views = Array.isArray(data?.data?.views) ? data.data.views : [];
-  const view = views.find((item) => item?.type === "grid") || views[0];
-  if (!view?.id) throw new Error("未找到飞书表格视图");
-  resolvedViewIdByTable.set(tableId, view.id);
-  return view.id;
+  if (resolvedViewIdByTable.has(tableId)) return resolvedViewIdByTable.get(tableId);
+  let viewId = "";
+  try {
+    const data = await runLarkCliJson([
+      "base", "+view-list",
+      "--base-token", BASE_TOKEN,
+      "--table-id", tableId,
+      "--as", LARK_IDENTITY,
+      "--format", "json",
+      "--jq", ".",
+    ]);
+    const views = Array.isArray(data?.data?.views) ? data.data.views : [];
+    const view = views.find((item) => item?.type === "grid") || views[0];
+    viewId = view?.id || "";
+  } catch (error) {
+    // bot 身份可能缺 base:view:read 权限；降级为不带视图读取（默认视图行序）
+    console.warn("[feishu-wa-batch] view-list unavailable, fallback to default view:", error?.message || error);
+  }
+  resolvedViewIdByTable.set(tableId, viewId);
+  return viewId;
 }
 
 async function resolveAiImageFieldId(tableId = TABLE_ID) {
@@ -196,7 +201,7 @@ async function prepareBatch({ limit = 5, start = 0, end = 0, tail = false } = {}
     "base", "+record-list",
     "--base-token", BASE_TOKEN,
     "--table-id", target.tableId,
-    "--view-id", viewId,
+    ...(viewId ? ["--view-id", viewId] : []),
     "--as", LARK_IDENTITY,
     "--limit", String(Math.min(readLimit, 200)),
     "--format", "json",
