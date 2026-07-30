@@ -5,6 +5,7 @@ import { NextResponse } from "next/server";
 import { LARK_IDENTITY, runLarkCliJson } from "@/lib/server/larkCliRuntime";
 
 export const runtime = "nodejs";
+export const maxDuration = 300;
 
 const BASE_TOKEN = process.env.FEISHU_WA_BASE_TOKEN || "R2edbyyrZaGixJsH0v2cD1Mcnkg";
 const TABLE_ID = process.env.FEISHU_WA_TABLE_ID || "tbl5LlkOa5yLoGQf";
@@ -25,6 +26,129 @@ const EDITABLE_FIELDS = new Set([
   "场景类型",
   "标签",
 ]);
+
+// WA 表格助手的 LLM 渠道可独立配置（WA_COMMAND_*），未配置时退回全局 OPENAI_*
+const LLM_API_BASE_RAW = (process.env.WA_COMMAND_API_BASE || process.env.OPENAI_API_BASE || "https://api.openai.com/v1").replace(/\/$/, "");
+const LLM_API_BASE = /\/v\d+$/i.test(LLM_API_BASE_RAW) ? LLM_API_BASE_RAW : `${LLM_API_BASE_RAW}/v1`;
+const LLM_API_KEY = process.env.WA_COMMAND_API_KEY || process.env.OPENAI_API_KEY || "";
+const LLM_API_VERSION = process.env.WA_COMMAND_API_VERSION || process.env.OPENAI_API_VERSION || "";
+const LLM_API_KEY_HEADER = (process.env.WA_COMMAND_API_KEY_HEADER || process.env.OPENAI_API_KEY_HEADER || "authorization").trim().toLowerCase();
+const LLM_API_STYLE = (process.env.WA_COMMAND_API_STYLE || process.env.OPENAI_API_STYLE || "auto").trim().toLowerCase();
+const WA_COMMAND_MODEL = process.env.WA_COMMAND_MODEL || process.env.OBJECT_PLAN_MODEL || "gpt-4o-mini";
+const WA_COMMAND_LLM_TIMEOUT_MS = Number(process.env.WA_COMMAND_LLM_TIMEOUT_MS || 90 * 1000);
+
+const ROBOT_OUTFIT = "仅使用库里的Robot标准形态：标准绿色主体机身、黑色屏幕脸、银白机械臂/脚部；最多只改变姿势/朝向/手势，不改变服饰、颜色、机身或屏幕脸";
+
+function buildLlmAuthHeaders() {
+  if (!LLM_API_KEY) return {};
+  if (LLM_API_KEY_HEADER === "api-key" || LLM_API_KEY_HEADER === "x-api-key") {
+    return { [LLM_API_KEY_HEADER]: LLM_API_KEY };
+  }
+  return { Authorization: `Bearer ${LLM_API_KEY}` };
+}
+
+function buildLlmChatUrl() {
+  const url = LLM_API_STYLE === "azure"
+    ? `${LLM_API_BASE_RAW}/openai/deployments/${encodeURIComponent(WA_COMMAND_MODEL)}/chat/completions`
+    : `${LLM_API_BASE}/chat/completions`;
+  if (!LLM_API_VERSION) return url;
+  const nextUrl = new URL(url);
+  if (!nextUrl.searchParams.has("api-version")) nextUrl.searchParams.set("api-version", LLM_API_VERSION);
+  return nextUrl.toString();
+}
+
+async function callWaCommandLLM(messages) {
+  if (!LLM_API_KEY) throw new Error("未配置 WA_COMMAND_API_KEY / OPENAI_API_KEY");
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), WA_COMMAND_LLM_TIMEOUT_MS);
+  try {
+    const res = await fetch(buildLlmChatUrl(), {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...buildLlmAuthHeaders() },
+      body: JSON.stringify({
+        ...(LLM_API_STYLE === "azure" ? {} : { model: WA_COMMAND_MODEL }),
+        messages,
+        temperature: 0.9,
+      }),
+      signal: controller.signal,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data?.error?.message || `LLM 请求失败（${res.status}）`);
+    const content = data?.choices?.[0]?.message?.content;
+    if (typeof content === "string") return content.trim();
+    if (Array.isArray(content)) {
+      return content.map((part) => (part?.type === "text" || part?.type === "output_text" ? part.text : "")).join("").trim();
+    }
+    return "";
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function parseLlmJsonArray(text = "") {
+  const cleaned = String(text || "").replace(/```(?:json)?/gi, "").trim();
+  const start = cleaned.indexOf("[");
+  const end = cleaned.lastIndexOf("]");
+  if (start < 0 || end <= start) return null;
+  try {
+    const parsed = JSON.parse(cleaned.slice(start, end + 1));
+    return Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+const VALID_ROLES = new Set(["Boy", "Girl", "Boy真人版", "Robot"]);
+
+// 用 LLM 根据每条记录的主副文案主题 + 用户附加要求生成人物/服装/风格
+async function generateVariationRowsWithLLM(records, instruction = "") {
+  const recordLines = records.map((record) => JSON.stringify({
+    seq: String(record.seq),
+    场景: formatSelectValue(record.scene),
+    中文主文案: record.zhHeadline,
+    中文副文案: record.zhSubline,
+    印尼语主文案: record.headline,
+    印尼语副文案: record.subline,
+    备注: record.note,
+  }));
+  const systemPrompt = [
+    "你是印尼金融产品 WA 营销海报的设计企划，为每条海报记录生成「人物 / 服装 / 风格」三个字段。",
+    "硬性规则：",
+    "1. 「风格」用一句中文描述海报风格基调：配色 + 氛围 + 关键视觉元素。基调必须严格依据该条记录的主副文案主题推导，禁止引入文案中不存在的主题词（例如文案没提发薪日就绝不能出现“发薪日”，没提学费就不能出现“学费”，没提VIP就不能出现“会员”）。",
+    "2. 用户的附加要求优先级最高。如果用户指定了色系数量分布（例如“3个绿色系、3个暖色系、1个浅蓝色系”），输出各色系的数量必须严格一致，并在风格描述开头写明主色系。",
+    "3. 「人物」只能取：Boy、Girl、Boy真人版、Robot。整体男女大致均衡，与该条文案调性匹配；只有文案强调自动化/极速/线上流程时才可用 Robot。",
+    "4. 「服装」从以下选择或在其基础上微调：绿色客服制服、客服制服、亲和职业装、高级商务服装、印尼制服。人物为 Robot 时服装必须原样输出：" + ROBOT_OUTFIT,
+    "5. 各条之间风格要有明显差异，避免多条输出相同或高度相似的句子；本次输出也要和常规套路有新鲜感。",
+    "只输出 JSON 数组，不要输出任何其他文字。每项格式：{\"seq\":\"1\",\"人物\":\"Girl\",\"服装\":\"客服制服\",\"风格\":\"...\"}",
+  ].join("\n");
+  const userPrompt = [
+    instruction ? `用户附加要求：${instruction}` : "用户附加要求：无",
+    `共 ${records.length} 条记录：`,
+    ...recordLines,
+  ].join("\n");
+
+  const text = await callWaCommandLLM([
+    { role: "system", content: systemPrompt },
+    { role: "user", content: userPrompt },
+  ]);
+  const items = parseLlmJsonArray(text);
+  if (!items) throw new Error("LLM 返回的不是有效 JSON 数组");
+
+  const bySeq = new Map();
+  for (const item of items) {
+    const seq = String(item?.seq || "").trim();
+    const role = String(item?.人物 || "").trim();
+    const outfit = role === "Robot" ? ROBOT_OUTFIT : String(item?.服装 || "").trim();
+    const style = String(item?.风格 || "").trim();
+    if (!seq || !VALID_ROLES.has(role) || !outfit || !style) continue;
+    bySeq.set(seq, { 人物: role, 服装: outfit, 风格: style });
+  }
+  const missing = records.filter((record) => !bySeq.has(String(record.seq)));
+  if (missing.length > 0) {
+    throw new Error(`LLM 输出缺少 ${missing.length} 条记录（第${missing.map((item) => item.seq).join("、")}张）`);
+  }
+  return bySeq;
+}
 
 function pickField(row, fields, names) {
   for (const name of names) {
@@ -339,7 +463,7 @@ function chooseSecondBatchRole(record, index, counts, targets) {
 function chooseSecondBatchOutfit(record, role) {
   const source = compactText(record);
   if (role === "Robot") {
-    return "仅使用库里的Robot标准形态：标准绿色主体机身、黑色屏幕脸、银白机械臂/脚部；最多只改变姿势/朝向/手势，不改变服饰、颜色、机身或屏幕脸";
+    return ROBOT_OUTFIT;
   }
   const isBoyRole = String(role || "").includes("Boy");
   if (/(vip|gold|member|会员|权益)/i.test(source)) return "高级商务服装";
@@ -539,7 +663,6 @@ async function reduceRobots(target = 4) {
 }
 
 function selectRecordsByRewriteRequest(records, request) {
-  console.log('[DEBUG selectRecords] total records:', records.length, 'request:', JSON.stringify(request));
   if (request?.all) return records;
   if (request?.start > 0 && request?.end > 0) {
     const start = Math.min(request.start, request.end);
@@ -558,20 +681,34 @@ function selectRecordsByRewriteRequest(records, request) {
 
 async function rewriteVariationFields(request) {
   const records = await listRecords(500);
-  console.log('[DEBUG rewriteVariation] listRecords returned:', records.length, 'request:', JSON.stringify(request));
   const selected = selectRecordsByRewriteRequest(records, request);
   if (selected.length === 0) throw new Error("没有找到需要重写的 WA 记录");
 
-  const rows = buildSecondBatchRows(selected, selected.length, request?.preferences || {});
+  // 优先用 LLM 按每条主副文案主题 + 用户附加要求生成；失败时退回规则轮换
+  let patchBySeq = null;
+  let source = "llm";
+  try {
+    patchBySeq = await generateVariationRowsWithLLM(selected, request?.instruction || "");
+  } catch (error) {
+    console.warn("[feishu-wa-command] LLM 重写失败，退回规则逻辑:", error?.message || error);
+    source = "rules";
+  }
+
+  let fallbackRows = null;
+  if (!patchBySeq) {
+    fallbackRows = buildSecondBatchRows(selected, selected.length, request?.preferences || {});
+  }
+
   const changed = [];
   for (let index = 0; index < selected.length; index += 1) {
     const record = selected[index];
-    const row = rows[index];
-    const patch = {
-      人物: row.人物,
-      服装: row.服装,
-      风格: row.风格,
-    };
+    const patch = patchBySeq
+      ? patchBySeq.get(String(record.seq))
+      : {
+        人物: fallbackRows[index].人物,
+        服装: fallbackRows[index].服装,
+        风格: fallbackRows[index].风格,
+      };
     await updateRecord(record.id, patch);
     changed.push({ seq: record.seq || String(index + 1), ...patch });
   }
@@ -581,7 +718,7 @@ async function rewriteVariationFields(request) {
     return acc;
   }, {});
 
-  return { changed, roleCounts };
+  return { changed, roleCounts, source };
 }
 
 async function handleCommand(text = "") {
@@ -589,8 +726,8 @@ async function handleCommand(text = "") {
   if (!source) throw new Error("指令为空");
 
   const rewriteRequest = parseRewriteVariationRequest(source);
-  console.log('[DEBUG handleCommand] source:', JSON.stringify(source), '=> rewriteRequest:', JSON.stringify(rewriteRequest));
   if (rewriteRequest) {
+    rewriteRequest.instruction = source;
     const result = await rewriteVariationFields(rewriteRequest);
     const preview = result.changed
       .slice(0, 8)
@@ -599,6 +736,9 @@ async function handleCommand(text = "") {
     return {
       reply: [
         `已在当前 WA 主表重写 ${result.changed.length} 条的 人物 / 服装 / 风格。`,
+        result.source === "llm"
+          ? "风格基调按每条主副文案主题生成，并已套用你的附加要求。"
+          : "本次 AI 生成不可用，已按内置规则填充。",
         "未改主文案、副文案、AI设计图，也没有创建新表。",
         `人物分布：${Object.entries(result.roleCounts).map(([key, value]) => `${key} ${value}条`).join("，")}。`,
         preview ? `预览：\n${preview}${result.changed.length > 8 ? "\n..." : ""}` : "",
