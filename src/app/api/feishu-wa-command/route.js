@@ -7,7 +7,7 @@ import { LARK_IDENTITY, runLarkCliJson } from "@/lib/server/larkCliRuntime";
 export const runtime = "nodejs";
 
 const BASE_TOKEN = process.env.FEISHU_WA_BASE_TOKEN || "R2edbyyrZaGixJsH0v2cD1Mcnkg";
-const TABLE_ID = process.env.FEISHU_WA_TABLE_ID || "tble6jwNnOTjv75V";
+const TABLE_ID = process.env.FEISHU_WA_TABLE_ID || "tbl5LlkOa5yLoGQf";
 const AI_IMAGE_FIELD_NAME = "AI设计图";
 const EDITABLE_FIELDS = new Set([
   "人物",
@@ -16,10 +16,26 @@ const EDITABLE_FIELDS = new Set([
   "需求备注",
   "主文案（印尼语 ≤30）",
   "副文案（印尼语 ≤50）",
+  "主文案-印尼语",
+  "副文案-印尼语",
   "主文案（中文）",
   "副文案（中文）",
+  "主文案-中文",
+  "副文案-中文",
   "场景类型",
+  "标签",
 ]);
+
+function pickField(row, fields, names) {
+  for (const name of names) {
+    const index = fields.indexOf(name);
+    if (index >= 0 && row[index] != null && String(row[index]).trim()) {
+      return row[index];
+    }
+  }
+  const first = names.map((name) => fields.indexOf(name)).find((index) => index >= 0);
+  return first >= 0 ? row[first] : "";
+}
 
 async function writeTempJson(payload) {
   const dir = path.join(process.cwd(), ".easyai-tmp");
@@ -39,13 +55,16 @@ async function runWithTempJson(argsBeforeJson, payload, argsAfterJson = []) {
   }
 }
 
-async function listRecords(limit = 500) {
+async function listRecords(limit = 200) {
+  // lark-cli 限制：--limit 最大 200；--jq 必须搭配 --format json（默认 markdown 与 --jq 互斥）
+  const safeLimit = Math.min(Math.max(Number(limit) || 200, 1), 200);
   const data = await runLarkCliJson([
     "base", "+record-list",
     "--base-token", BASE_TOKEN,
     "--table-id", TABLE_ID,
     "--as", LARK_IDENTITY,
-    "--limit", String(limit),
+    "--limit", String(safeLimit),
+    "--format", "json",
     "--jq", ".",
   ]);
   if (!data?.ok) throw new Error(data?.error?.message || "读取飞书表格失败");
@@ -56,23 +75,27 @@ async function listRecords(limit = 500) {
   const recordIds = Array.isArray(payload.record_id_list) ? payload.record_id_list : [];
   const aiImageFieldIndex = fields.indexOf("AI设计图");
   const aiImageFieldId = aiImageFieldIndex >= 0 ? fieldIds[aiImageFieldIndex] : "";
-  return rows.map((row, index) => ({
+  return rows.map((row, index) => {
+    // 只有数字型「任务序号」才作为序号；新表没有该字段时按行序编号，避免把“提需时间”当序号
+    const seqRaw = String(pickField(row, fields, ["任务序号"]) || "").trim();
+    return {
     id: recordIds[index],
-    seq: String(row[fields.indexOf("任务序号")] || ""),
-    priority: row[fields.indexOf("优先级")],
-    role: String(row[fields.indexOf("人物")] || ""),
-    outfit: String(row[fields.indexOf("服装")] || ""),
-    style: String(row[fields.indexOf("风格")] || ""),
-    scene: row[fields.indexOf("场景类型")],
-    aiImage: row[fields.indexOf("AI设计图")],
+    seq: /^\d+$/.test(seqRaw) ? seqRaw : String(index + 1),
+    priority: pickField(row, fields, ["优先级"]),
+    role: String(pickField(row, fields, ["人物"]) || ""),
+    outfit: String(pickField(row, fields, ["服装"]) || ""),
+    style: String(pickField(row, fields, ["风格"]) || ""),
+    scene: pickField(row, fields, ["场景类型", "标签"]),
+    aiImage: pickField(row, fields, ["AI设计图"]),
     aiImageFieldId,
-    manualImage: row[fields.indexOf("人工设计图")],
-    zhHeadline: String(row[fields.indexOf("主文案（中文）")] || ""),
-    zhSubline: String(row[fields.indexOf("副文案（中文）")] || ""),
-    headline: String(row[fields.indexOf("主文案（印尼语 ≤30）")] || ""),
-    subline: String(row[fields.indexOf("副文案（印尼语 ≤50）")] || ""),
-    note: String(row[fields.indexOf("需求备注")] || ""),
-  })).filter((item) => item.id);
+    manualImage: pickField(row, fields, ["人工设计图"]),
+    zhHeadline: String(pickField(row, fields, ["主文案（中文）", "主文案-中文"]) || ""),
+    zhSubline: String(pickField(row, fields, ["副文案（中文）", "副文案-中文"]) || ""),
+    headline: String(pickField(row, fields, ["主文案（印尼语 ≤30）", "主文案-印尼语", "主文案（印尼语）"]) || ""),
+    subline: String(pickField(row, fields, ["副文案（印尼语 ≤50）", "副文案-印尼语", "副文案（印尼语）"]) || ""),
+    note: String(pickField(row, fields, ["需求备注", "标签"]) || ""),
+    };
+  }).filter((item) => item.id);
 }
 
 async function listViews() {
@@ -327,21 +350,65 @@ function chooseSecondBatchOutfit(record, role) {
   return isBoyRole ? "亲和职业装" : "客服制服";
 }
 
+// 每个场景类别提供多个风格变体并按行序轮换，避免同类文案批量落到同一句风格
+const SECOND_BATCH_STYLE_POOLS = [
+  {
+    pattern: /(vip|gold|member|会员|权益)/i,
+    styles: [
+      "VIP会员权益海报，高级金色与象牙白主视觉，礼遇感、会员徽章、干净明亮，品牌绿仅做小面积点缀",
+      "轻奢深色权益海报，黑金渐变、会员卡片质感、精致排版，品牌绿只做高光点缀",
+      "浅金礼遇感海报，香槟金与奶白配色、升级仪式感、简洁徽章元素，绿色仅用于CTA",
+    ],
+  },
+  {
+    pattern: /(skor|credit|信用)/i,
+    styles: [
+      "信用修复教育海报，蓝白金融科技界面、分数仪表盘、向上箭头，可信专业，减少大面积绿色背景",
+      "浅灰蓝信任感海报，信用分数卡片、进度条向上、干净留白，品牌绿只做小图标",
+      "深蓝专业金融海报，数据仪表与上升曲线、权威可信氛围，避免绿色主背景",
+    ],
+  },
+  {
+    pattern: /(pinjaman pertama|新用户|ojk|transparan)/i,
+    styles: [
+      "新用户引导海报，清爽浅色流程卡片、透明步骤、OJK信任背书，少量品牌绿按钮点缀",
+      "白底极简信任海报，三步流程图示、OJK/AFPI标识区、清晰层级，绿色仅作辅助色",
+      "浅青新手友好海报，圆角引导卡片、亲和插画感、步骤编号清晰，品牌绿克制使用",
+    ],
+  },
+  {
+    pattern: /(gaji|发薪|limit|额度|cair|dana)/i,
+    styles: [
+      "发薪日前救急海报，暖黄色行动氛围、手机额度卡片、快速到账动线，品牌绿只用于CTA或小图标",
+      "蓝白金融科技海报，额度数字卡片、清晰信息层级、明亮留白，少量品牌绿点缀",
+      "暖色生活场景海报，真实用钱需求感、亲和人物、醒目行动按钮，品牌色克制使用",
+      "深蓝速度感海报，到账动线、速度线条、专业可信，与绿色版形成明显差异",
+      "浅色清爽额度海报，大数字额度展示、简洁图标、高可读性排版，绿色仅作辅助",
+    ],
+  },
+  {
+    pattern: /(sekolah|学费|教育|afpi)/i,
+    styles: [
+      "教育缴费场景海报，温暖米色与书本学费元素，家庭安心感、合规可信，避免整张绿色",
+      "浅蓝教育信任海报，书本与校园元素点缀、清晰缴费信息卡片，品牌绿只做小图标",
+    ],
+  },
+];
+
+const SECOND_BATCH_DEFAULT_STYLES = [
+  "蓝白金融科技广告，清晰信息卡片、可信赖、明亮留白，少量品牌绿点缀",
+  "金色权益感营销海报，高级渐变、会员礼遇、干净排版，避免重复绿色背景",
+  "暖色生活场景海报，真实需求感、亲和人物、行动按钮突出，品牌色克制使用",
+  "浅色合规信任海报，OJK/AFPI背书、清晰文字层级、简洁图标，绿色仅作辅助",
+  "深蓝科技金融海报，数据卡片、速度感线条、专业可信，形成与绿色版差异",
+];
+
 function chooseSecondBatchStyle(record, index) {
   const source = compactText(record);
-  if (/(vip|gold|member|会员|权益)/i.test(source)) return "VIP会员权益海报，高级金色与象牙白主视觉，礼遇感、会员徽章、干净明亮，品牌绿仅做小面积点缀";
-  if (/(skor|credit|信用)/i.test(source)) return "信用修复教育海报，蓝白金融科技界面、分数仪表盘、向上箭头，可信专业，减少大面积绿色背景";
-  if (/(pinjaman pertama|新用户|ojk|transparan)/i.test(source)) return "新用户引导海报，清爽浅色流程卡片、透明步骤、OJK信任背书，少量品牌绿按钮点缀";
-  if (/(gaji|发薪|limit|额度)/i.test(source)) return "发薪日前救急海报，暖黄色行动氛围、手机额度卡片、快速到账动线，品牌绿只用于CTA或小图标";
-  if (/(sekolah|学费|教育|afpi)/i.test(source)) return "教育缴费场景海报，温暖米色与书本学费元素，家庭安心感、合规可信，避免整张绿色";
-  const variants = [
-    "蓝白金融科技广告，清晰信息卡片、可信赖、明亮留白，少量品牌绿点缀",
-    "金色权益感营销海报，高级渐变、会员礼遇、干净排版，避免重复绿色背景",
-    "暖色生活场景海报，真实需求感、亲和人物、行动按钮突出，品牌色克制使用",
-    "浅色合规信任海报，OJK/AFPI背书、清晰文字层级、简洁图标，绿色仅作辅助",
-    "深蓝科技金融海报，数据卡片、速度感线条、专业可信，形成与绿色版差异",
-  ];
-  return variants[index % variants.length];
+  for (const pool of SECOND_BATCH_STYLE_POOLS) {
+    if (pool.pattern.test(source)) return pool.styles[index % pool.styles.length];
+  }
+  return SECOND_BATCH_DEFAULT_STYLES[index % SECOND_BATCH_DEFAULT_STYLES.length];
 }
 
 function buildSecondBatchRows(records, limit, preferences = {}) {
