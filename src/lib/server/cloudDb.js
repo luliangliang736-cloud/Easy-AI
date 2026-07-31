@@ -26,7 +26,8 @@ export function getCloudDbPool() {
       ssl: process.env.DATABASE_SSL === "false" ? false : { rejectUnauthorized: false },
       max: Number(process.env.DATABASE_POOL_MAX || 5),
       idleTimeoutMillis: 30_000,
-      connectionTimeoutMillis: 10_000,
+      // 容器网络繁忙（如 OSS 大图上传洪峰）时 10s 容易误伤，放宽到 20s
+      connectionTimeoutMillis: 20_000,
     });
   }
   return globalThis[globalKey];

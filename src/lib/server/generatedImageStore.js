@@ -9,6 +9,10 @@ const MAX_FILE_AGE_MS = 6 * 60 * 60 * 1000;
 // 本地 temp 文件有 6 小时寿命且随重启丢失。写入时同步做一份 OSS 永久备份，
 // 读取时本地 miss 则回源 OSS，保证 /api/generated-images/ URL 永久有效。
 const OSS_BACKUP_PREFIX = "users/system-generated/generated-images/";
+
+export function getGeneratedImageBackupKey(filename = "") {
+  return `${OSS_BACKUP_PREFIX}${String(filename || "")}`;
+}
 // 上限要能覆盖 4K 高清放大的 PNG(可到 40MB+)。低于实际图片大小时,
 // 生成结果会保留服务商的临时外链,外链过期后图片就永久丢失(裂图)。
 const MAX_REMOTE_IMAGE_BYTES = Number(process.env.GENERATED_IMAGE_CACHE_MAX_BYTES || 60 * 1024 * 1024);

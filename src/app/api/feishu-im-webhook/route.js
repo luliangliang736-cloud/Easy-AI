@@ -11,7 +11,7 @@ import { ensureLarkCliReady, LARK_CLI, LARK_IDENTITY, runLarkCliJson } from "@/l
 export const runtime = "nodejs";
 
 const execFileAsync = promisify(execFile);
-const TABLE_ID = process.env.FEISHU_WA_TABLE_ID || "tble6jwNnOTjv75V";
+const TABLE_ID = process.env.FEISHU_WA_TABLE_ID || "tbl5LlkOa5yLoGQf";
 const EVENT_VERIFY_TOKEN = process.env.FEISHU_EVENT_VERIFY_TOKEN || "";
 const MAX_REPLY_IMAGES = 6;
 

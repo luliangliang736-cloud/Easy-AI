@@ -9,7 +9,7 @@ import { ensureLarkCliReady, LARK_CLI, LARK_IDENTITY } from "@/lib/server/larkCl
 export const runtime = "nodejs";
 
 const execFileAsync = promisify(execFile);
-const TABLE_ID = process.env.FEISHU_WA_TABLE_ID || "tble6jwNnOTjv75V";
+const TABLE_ID = process.env.FEISHU_WA_TABLE_ID || "tbl5LlkOa5yLoGQf";
 
 async function writeTempJson(payload) {
   const dir = path.join(process.cwd(), ".easyai-tmp");

@@ -779,8 +779,18 @@ export default function ChatPanel({
   const [showConversationMenu, setShowConversationMenu] = useState(false);
   const [showCanvasHistoryMenu, setShowCanvasHistoryMenu] = useState(false);
   const [showModelMenu, setShowModelMenu] = useState(false);
+  // 模型下拉向上展开的动态限高：打开时按按钮上方可用空间计算，避免矮屏冲出视口顶部
+  const modelMenuRootRef = useRef(null);
+  const [modelMenuMaxHeight, setModelMenuMaxHeight] = useState(420);
   const [conversationSearch, setConversationSearch] = useState("");
   const [gptAdvancedOpen, setGptAdvancedOpen] = useState(false);
+  // Kling/Seedance 视频参数折叠：大屏保持展开（与旧行为一致），矮屏（14 寸笔记本等）默认收起看摘要
+  const [videoParamsOpen, setVideoParamsOpen] = useState(true);
+  useEffect(() => {
+    try {
+      if (window.matchMedia("(max-height: 820px)").matches) setVideoParamsOpen(false);
+    } catch {}
+  }, []);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -1568,13 +1578,22 @@ export default function ChatPanel({
             <div className="space-y-3 py-2 animate-fade-in">
               <div>
                 <span className="block text-[11px] text-text-tertiary mb-1.5">{t("模型")}</span>
-                <div className="relative" data-model-menu-root>
+                <div className="relative" data-model-menu-root ref={modelMenuRootRef}>
                   {(() => {
                     const Icon = currentTier.icon;
                     return (
                       <button
                         type="button"
-                        onClick={() => setShowModelMenu((prev) => !prev)}
+                        onClick={() => {
+                          setShowModelMenu((prev) => {
+                            if (!prev) {
+                              // 打开时按按钮上方的实际可用空间限高，矮屏（14 寸笔记本等）菜单不再冲出屏幕顶
+                              const rect = modelMenuRootRef.current?.getBoundingClientRect();
+                              if (rect) setModelMenuMaxHeight(Math.max(180, Math.min(420, rect.top - 14)));
+                            }
+                            return !prev;
+                          });
+                        }}
                         className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-left transition-all ${PARAM_ACTIVE_CLASS}`}
                       >
                         <Icon size={14} className={PARAM_ACTIVE_ICON_CLASS} />
@@ -1587,7 +1606,11 @@ export default function ChatPanel({
                     );
                   })()}
                   {showModelMenu && (
-                    <div className="absolute left-0 right-0 bottom-[calc(100%+6px)] z-40 space-y-1 rounded-xl border border-border-primary bg-bg-secondary/98 p-1.5 shadow-2xl backdrop-blur-xl">
+                    /* 向上展开：最大高度按打开瞬间按钮上方的可用空间动态计算，超出部分菜单内滚动 */
+                    <div
+                      className="absolute left-0 right-0 bottom-[calc(100%+6px)] z-40 space-y-1 overflow-y-auto rounded-xl border border-border-primary bg-bg-secondary/98 p-1.5 shadow-2xl backdrop-blur-xl scrollbar-thin"
+                      style={{ maxHeight: modelMenuMaxHeight }}
+                    >
                       {MODEL_TIERS.map((tier) => {
                         const Icon = tier.icon;
                         const active = currentTier.id === tier.id;
@@ -1621,6 +1644,9 @@ export default function ChatPanel({
                   )}
                 </div>
               </div>
+              {/* 模型选择块之外的参数统一限高滚动：矮屏（14 寸笔记本等）上参数过多时区内滚动，
+                  输入框和发送键始终留在屏幕内。模型块不进滚动区，它的下拉向上展开会被 overflow 裁剪 */}
+              <div className="-mr-1 max-h-[38vh] space-y-3 overflow-y-auto pr-1 scrollbar-thin">
               {currentTier.variants.length > 1 && (
                 <div>
                   <span className="block text-[11px] text-text-tertiary mb-1.5">{t("模型规格")}</span>
@@ -1669,8 +1695,8 @@ export default function ChatPanel({
                     t((params.sound || "off") === "on" ? "有声" : "无声"),
                     t(isKlingFirstLastFrame ? "首尾帧" : klingRefCount === 1 ? "图生视频" : "文生视频"),
                   ].join(" · ")}
-                  open
-                  onToggle={() => {}}
+                  open={videoParamsOpen}
+                  onToggle={() => setVideoParamsOpen((prev) => !prev)}
                 >
                   <div className="pt-2 space-y-3">
                     <div>
@@ -1811,15 +1837,23 @@ export default function ChatPanel({
                     params.resolution || (String(params.model || "").includes("fast") ? "720p" : "1080p"),
                     t((refImages?.length || 0) === 0 ? "文生视频" : (refImages?.length || 0) === 1 ? "图生视频" : "首尾帧视频"),
                   ].join(" · ")}
-                  open
-                  onToggle={() => {}}
+                  open={videoParamsOpen}
+                  onToggle={() => setVideoParamsOpen((prev) => !prev)}
                 >
                   {(() => {
                     const isSeedanceFast = String(params.model || "").includes("fast");
+                    // 上游限制：带参考图（i2v/首尾帧）最高 1080p，2K 仅文生视频可用
+                    const seedanceHasRefImages = (refImages?.length || 0) > 0;
                     const seedanceResolutions = isSeedanceFast
                       ? [{ value: "480p", label: "480p" }, { value: "720p", label: "720p" }]
-                      : [{ value: "480p", label: "480p" }, { value: "720p", label: "720p" }, { value: "1080p", label: "1080p" }, { value: "2K", label: "2K" }];
-                    const currentResolution = params.resolution || (isSeedanceFast ? "720p" : "1080p");
+                      : [
+                          { value: "480p", label: "480p" },
+                          { value: "720p", label: "720p" },
+                          { value: "1080p", label: "1080p" },
+                          ...(seedanceHasRefImages ? [] : [{ value: "2K", label: "2K" }]),
+                        ];
+                    const rawResolution = params.resolution || (isSeedanceFast ? "720p" : "1080p");
+                    const currentResolution = seedanceHasRefImages && rawResolution === "2K" ? "1080p" : rawResolution;
                     return (
                       <div className="pt-2 space-y-3">
                         <div>
@@ -1880,7 +1914,7 @@ export default function ChatPanel({
                             ))}
                           </div>
                           <p className="text-[10px] text-text-tertiary mt-1.5">
-                            {t(isSeedanceFast ? "快速版最高 720p。" : "标准版支持最高 2K，分辨率越高消耗 token 越多。")}
+                            {t(isSeedanceFast ? "快速版最高 720p。" : "标准版文生视频最高 2K，带参考图最高 1080p。")}
                             {" "}{t("0 张参考图为文生视频，1 张为图生视频（首帧），2 张为首尾帧生视频。")}
                           </p>
                         </div>
@@ -2077,6 +2111,7 @@ export default function ChatPanel({
                 </div>
               </div>
               )}
+              </div>
             </div>
           )}
 

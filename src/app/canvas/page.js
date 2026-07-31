@@ -17,6 +17,8 @@ import { MAX_GEN_COUNT } from "@/lib/genLimits";
 import { useCanvasT } from "@/lib/canvasI18n";
 import { ChevronsLeft, Globe, Home as HomeIcon, Layers, Loader2, Plus } from "lucide-react";
 import { buildMaterialEditPrompt, buildComboEditPrompt, buildMaterialCreatePrompt } from "@/lib/materials";
+import { buildMultiAnglePrompt, formatMultiAngleLabel, isDefaultAngle } from "@/lib/multiAngle";
+import { buildOutpaintPrompt, formatOutpaintLabel } from "@/lib/outpaint";
 
 const FLOATING_ENTRY_DRAFT_KEY = "lovart-floating-entry-draft";
 const CANVAS_REF_IMAGES_STORAGE_KEY = "lovart-canvas-ref-images";
@@ -695,10 +697,61 @@ function shouldKeepLocalAssetWhenCloudUnavailable(errorMessage = "") {
   return process.env.NODE_ENV !== "production" && /OSS is not configured/i.test(String(errorMessage || ""));
 }
 
+// 迁移死链记忆：服务端确认源图已永久丢失（410）的 URL 记下来不再尝试迁移。
+// 否则每次打开画布都会对同一批已丢失的图片发起成批注定失败的上传请求，
+// 白白占用上传通道还反复弹"云端保存失败"。
+const MIGRATION_DEAD_URLS_KEY = "easyai-cloud-migration-dead-urls";
+const MIGRATION_DEAD_URLS_LIMIT = 500;
+let migrationDeadUrlsCache = null;
+
+function getMigrationDeadUrls() {
+  if (!migrationDeadUrlsCache) {
+    try {
+      const parsed = JSON.parse(window.localStorage.getItem(MIGRATION_DEAD_URLS_KEY) || "[]");
+      migrationDeadUrlsCache = new Set(Array.isArray(parsed) ? parsed : []);
+    } catch {
+      migrationDeadUrlsCache = new Set();
+    }
+  }
+  return migrationDeadUrlsCache;
+}
+
+function markMigrationDeadUrl(url) {
+  if (typeof url !== "string" || !url) return;
+  const deadUrls = getMigrationDeadUrls();
+  if (deadUrls.has(url)) return;
+  deadUrls.add(url);
+  try {
+    window.localStorage.setItem(
+      MIGRATION_DEAD_URLS_KEY,
+      JSON.stringify([...deadUrls].slice(-MIGRATION_DEAD_URLS_LIMIT))
+    );
+  } catch {}
+}
+
+// 批量迁移的并发闸门：一次画布加载可能有几十张待迁移图片，
+// 全量并发会瞬间打满服务端上传通道，其它请求跟着超时。
+async function mapWithConcurrency(items, limit, mapper) {
+  const results = new Array(items.length);
+  let nextIndex = 0;
+  await Promise.all(
+    Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, async () => {
+      while (nextIndex < items.length) {
+        const index = nextIndex;
+        nextIndex += 1;
+        results[index] = await mapper(items[index], index);
+      }
+    })
+  );
+  return results;
+}
+
 async function uploadMediaSourceToCloudAsset(source, filename = "image", scope = "canvas") {
   if (typeof source !== "string") return source;
   if (isCloudAssetUrl(source)) return source;
   if (isLocalGeneratedMediaUrl(source)) {
+    // 已确认永久丢失的源图：不再发请求，原样返回（调用方本来就有失败兜底）
+    if (getMigrationDeadUrls().has(source)) return source;
     const res = await fetch("/api/cloud-assets/upload", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -706,6 +759,7 @@ async function uploadMediaSourceToCloudAsset(source, filename = "image", scope =
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok || !data?.url) {
+      if (res.status === 410) markMigrationDeadUrl(source);
       if (shouldKeepLocalAssetWhenCloudUnavailable(data?.error)) return source;
       throw new Error(data?.error || "上传云端素材失败");
     }
@@ -1491,6 +1545,15 @@ function HomeInner() {
     toastRef.current = wrapped;
   }
   const toast = toastRef.current;
+  // "云端保存失败"类警告节流：批量图片迁移/备份失败时（如一批大图排队被拒），
+  // 每张图都弹一条会连环刷屏。同类提示 30 秒内只弹一次，后台会自动重试补传。
+  const cloudSaveWarnAtRef = useRef(0);
+  const toastCloudSaveFailure = useCallback((message) => {
+    const now = Date.now();
+    if (now - cloudSaveWarnAtRef.current < 30_000) return;
+    cloudSaveWarnAtRef.current = now;
+    toast(message, "warning", 2200);
+  }, [toast]);
   const { theme, toggleTheme } = useTheme("dark");
   const initialConversationRef = useRef(createConversation());
   const [activeTool, setActiveTool] = useState("select");
@@ -1801,7 +1864,7 @@ function HomeInner() {
   }, [setCanvasImagesState, setCanvasShapesState, setCanvasTextsState]);
 
   const cloudifyLocalGeneratedUrl = useCallback((url, filename = "image", scope = "canvas-migration") => {
-    if (!isLocalGeneratedMediaUrl(url)) return Promise.resolve(url);
+    if (!isLocalGeneratedMediaUrl(url) || getMigrationDeadUrls().has(url)) return Promise.resolve(url);
     const cache = cloudAssetMigrationRef.current;
     if (!cache.has(url)) {
       cache.set(
@@ -1817,9 +1880,9 @@ function HomeInner() {
     const localItems = canvasImages.filter((item) => isLocalGeneratedMediaUrl(item?.image_url));
     if (!localItems.length) return undefined;
     let cancelled = false;
-    void Promise.all(localItems.map((item) => (
+    void mapWithConcurrency(localItems, 3, (item) => (
       cloudifyLocalGeneratedUrl(item.image_url, item.prompt || item.id, "canvas-migration")
-    ))).then((urls) => {
+    )).then((urls) => {
       if (cancelled) return;
       const replacements = new Map(localItems.map((item, index) => [item.image_url, urls[index]]));
       if ([...replacements].every(([from, to]) => from === to)) return;
@@ -1844,9 +1907,9 @@ function HomeInner() {
     if (!localUrls.size) return undefined;
     let cancelled = false;
     const urls = [...localUrls];
-    void Promise.all(urls.map((url, index) => (
+    void mapWithConcurrency(urls, 3, (url, index) => (
       cloudifyLocalGeneratedUrl(url, `board-${index + 1}`, "canvas-board-migration")
-    ))).then((nextUrls) => {
+    )).then((nextUrls) => {
       if (cancelled) return;
       const replacements = new Map(urls.map((url, index) => [url, nextUrls[index]]));
       if ([...replacements].every(([from, to]) => from === to)) return;
@@ -1882,9 +1945,9 @@ function HomeInner() {
     const replaceList = (list, replacements) => (
       Array.isArray(list) ? list.map((url) => replacements.get(url) || url) : list
     );
-    void Promise.all(urls.map((url, index) => (
+    void mapWithConcurrency(urls, 3, (url, index) => (
       cloudifyLocalGeneratedUrl(url, `conversation-${index + 1}`, "conversation-migration")
-    ))).then((nextUrls) => {
+    )).then((nextUrls) => {
       if (cancelled) return;
       const replacements = new Map(urls.map((url, index) => [url, nextUrls[index]]));
       if ([...replacements].every(([from, to]) => from === to)) return;
@@ -2371,9 +2434,9 @@ function HomeInner() {
         ));
       })
       .catch(() => {
-        toast("参考图云端保存失败，换设备可能无法恢复这张图", "warning", 2200);
+        toastCloudSaveFailure("参考图云端保存失败，换设备可能无法恢复这张图");
       });
-  }, [cloudifyComposerMediaSource, toast, updateConversationMessages]);
+  }, [cloudifyComposerMediaSource, toastCloudSaveFailure, updateConversationMessages]);
 
   const syncGeneratedResultToCloudInBackground = useCallback(({
     boardId,
@@ -2384,10 +2447,10 @@ function HomeInner() {
     sourceUrl,
     mediaType,
   }) => {
-    // 超大图(如 4K 高清放大)可能超过本地缓存上限,结果 URL 仍是服务商的临时外链。
-    // 外链会过期,必须也搬进 OSS,否则过几天图就裂了(用户看到的就是"图丢了")。
-    const isRemoteImageResult = mediaType !== "video" && /^https?:\/\//i.test(sourceUrl || "");
-    if (!sourceUrl || (!shouldUploadToCloudAsset(sourceUrl) && !isRemoteImageResult)) return;
+    // 超大图(如 4K 高清放大)和落盘超时的视频，结果 URL 仍是服务商的临时外链。
+    // 外链会过期,必须也搬进 OSS,否则过几天素材就裂了(用户看到的就是"图丢了")。
+    const isRemoteResult = /^https?:\/\//i.test(sourceUrl || "");
+    if (!sourceUrl || (!shouldUploadToCloudAsset(sourceUrl) && !isRemoteResult)) return;
 
     const uploadPromise = shouldUploadToCloudAsset(sourceUrl)
       ? uploadMediaSourceToCloudAsset(sourceUrl, `${mediaType || "image"}-${Date.now()}`, "generated-result")
@@ -2412,9 +2475,9 @@ function HomeInner() {
         updateCanvasImageInBoard(boardId, canvasItemId, { image_url: cloudUrl });
       })
       .catch(() => {
-        toast("生成结果云端保存失败，换设备可能无法恢复这张图", "warning", 2200);
+        toastCloudSaveFailure("生成结果云端保存失败，换设备可能无法恢复这张图");
       });
-  }, [patchTask, toast, updateCanvasImageInBoard]);
+  }, [patchTask, toastCloudSaveFailure, updateCanvasImageInBoard]);
 
   const resetComposer = useCallback(() => {
     setPrompt("");
@@ -2776,7 +2839,7 @@ function HomeInner() {
       );
       const imagePayload =
         preparedImages.length === 1 ? preparedImages[0] : preparedImages;
-      const taskRequestTimeoutMs = isKlingVideoRequest
+      const taskRequestTimeoutMs = isAnyVideoRequest
         ? VIDEO_REQUEST_TIMEOUT_MS
         : isGptImage2Request
           ? GPT_IMAGE_2_REQUEST_TIMEOUT_MS
@@ -3275,10 +3338,10 @@ function HomeInner() {
           )));
         })
         .catch(() => {
-          toast("参考图云端保存失败，换设备可能无法恢复这张图", "warning", 2200);
+          toastCloudSaveFailure("参考图云端保存失败，换设备可能无法恢复这张图");
         });
     });
-  }, [activeCanvasBoardId, cloudifyComposerMediaSource, toast]);
+  }, [activeCanvasBoardId, cloudifyComposerMediaSource, toastCloudSaveFailure]);
 
   const handleCancelTextEditPanel = useCallback(() => {
     setTextEditBlocks([]);
@@ -3616,7 +3679,12 @@ function HomeInner() {
     toast("已填入快捷编辑指令", "success", 1500);
   }, [handleGenerate, isBusy, params, toast]);
 
-  /** 一键换材质：基于选中图片 + 材质提示词发起一次改图；palette 可选（选了则同时替换配色）；options.quality === "2k" 时用 Pro 2K 模型直出 */
+  /**
+   * 一键换材质：基于选中图片 + 材质提示词发起一次改图；palette 可选（选了则同时替换配色）；
+   * options.quality === "2k" 时用 Pro 2K 模型直出；
+   * options.userInstruction 可选：面板/右侧输入框有文案时传入，限定材质替换范围（如"只换服饰，皮肤不变"）；
+   * 图片悬浮快捷条不传，保持"无脑一键换"的纯净行为。
+   */
   const handleApplyMaterial = useCallback(async (material, palette, img, options) => {
     if (!img?.image_url || !material?.prompt) return;
     if (isBusy) {
@@ -3625,15 +3693,19 @@ function HomeInner() {
     }
 
     const is2k = options?.quality === "2k";
+    const instruction = String(options?.userInstruction || "").trim();
     const meta = await detectRefImageMeta(img.image_url);
     setSelectedImage(img);
     setTextEditBlocks([]);
     setTextEditPanelVisible(false);
     setSemanticSelection(null);
     toast(`正在应用「${material.name}」材质${palette ? `（${palette.name} 配色）` : ""}${is2k ? "（2K 直出）" : ""}...`, "info", 1800);
+    const materialLabel = `材质：${material.name}${palette ? ` · ${palette.name}` : ""}${is2k ? " · 2K" : ""}`;
     await handleGenerate({
-      text: buildMaterialEditPrompt(material, palette),
-      displayLabel: `材质：${material.name}${palette ? ` · ${palette.name}` : ""}${is2k ? " · 2K" : ""}`,
+      text: buildMaterialEditPrompt(material, palette, instruction),
+      // 带指令时标签显示"文案 + 材质小标"，与纯一键换材质区分开
+      displayLabel: instruction || materialLabel,
+      displayMaterialLabel: instruction ? materialLabel : undefined,
       params: {
         ...params,
         ...(is2k ? MATERIAL_2K_PARAMS : null),
@@ -3651,7 +3723,74 @@ function HomeInner() {
     });
   }, [handleGenerate, isBusy, params, toast]);
 
-  /** 组合探索：多材质 + 可选配色方案，基于选中图片发起一次改图；options.quality === "2k" 时用 Pro 2K 模型直出 */
+  /** 多角度：按面板选的机位参数（水平/垂直/推拉）重渲染选中图片的新视角，走与换材质相同的改图链路 */
+  const handleApplyMultiAngle = useCallback(async (angle, img) => {
+    if (!img?.image_url || isDefaultAngle(angle)) return;
+    if (isBusy) {
+      toast("当前有任务进行中，请稍候再试", "info", 1500);
+      return;
+    }
+
+    const label = formatMultiAngleLabel(angle);
+    const meta = await detectRefImageMeta(img.image_url);
+    setSelectedImage(img);
+    setTextEditBlocks([]);
+    setTextEditPanelVisible(false);
+    setSemanticSelection(null);
+    toast(`正在生成新视角（${label.replace(/^多角度：/, "")}）...`, "info", 1800);
+    await handleGenerate({
+      text: buildMultiAnglePrompt(angle),
+      displayLabel: label,
+      params: {
+        ...params,
+        image_size: "auto",
+        _autoRatio: meta.ratio,
+        _autoDimensions: meta.dimensionsLabel || undefined,
+        num: 1,
+      },
+      refImages: [img.image_url],
+      preserveComposer: true,
+      hideConversationMessages: true,
+      disableAgentDefaults: true,
+      composerMode: "manual",
+    });
+  }, [handleGenerate, isBusy, params, toast]);
+
+  /**
+   * 扩图：OutpaintModal 已在前端把原图合成到白底大画布（payload.dataUrl），
+   * 这里以合成图为参考图发起补全生成，输出比例按扩展后的画布比例。
+   */
+  const handleOutpaint = useCallback(async (payload, img) => {
+    if (!payload?.dataUrl || !img?.image_url) return;
+    if (isBusy) {
+      toast("当前有任务进行中，请稍候再试", "info", 1500);
+      return;
+    }
+
+    setSelectedImage(img);
+    setTextEditBlocks([]);
+    setTextEditPanelVisible(false);
+    setSemanticSelection(null);
+    toast("正在扩图...", "info", 1800);
+    await handleGenerate({
+      text: buildOutpaintPrompt(payload),
+      displayLabel: formatOutpaintLabel(payload),
+      params: {
+        ...params,
+        image_size: "auto",
+        _autoRatio: payload.ratioLabel || "1:1",
+        _autoDimensions: payload.dimensionsLabel || undefined,
+        num: 1,
+      },
+      refImages: [payload.dataUrl],
+      preserveComposer: true,
+      hideConversationMessages: true,
+      disableAgentDefaults: true,
+      composerMode: "manual",
+    });
+  }, [handleGenerate, isBusy, params, toast]);
+
+  /** 组合探索：多材质 + 可选配色方案，基于选中图片发起一次改图；options 支持 quality（2K 直出）和 userInstruction（限定替换范围） */
   const handleApplyCombo = useCallback(async (materials, palette, img, options) => {
     if (!img?.image_url || !materials?.length) return;
     if (isBusy) {
@@ -3660,6 +3799,7 @@ function HomeInner() {
     }
 
     const is2k = options?.quality === "2k";
+    const instruction = String(options?.userInstruction || "").trim();
     const meta = await detectRefImageMeta(img.image_url);
     setSelectedImage(img);
     setTextEditBlocks([]);
@@ -3667,9 +3807,11 @@ function HomeInner() {
     setSemanticSelection(null);
     const comboLabel = materials.map((m) => m.name).join("+");
     toast(`正在探索组合「${comboLabel}」${is2k ? "（2K 直出）" : ""}...`, "info", 1800);
+    const materialLabel = `组合：${comboLabel}${palette ? ` · ${palette.name}` : ""}${is2k ? " · 2K" : ""}`;
     await handleGenerate({
-      text: buildComboEditPrompt(materials, palette),
-      displayLabel: `组合：${comboLabel}${palette ? ` · ${palette.name}` : ""}${is2k ? " · 2K" : ""}`,
+      text: buildComboEditPrompt(materials, palette, instruction),
+      displayLabel: instruction || materialLabel,
+      displayMaterialLabel: instruction ? materialLabel : undefined,
       params: {
         ...params,
         ...(is2k ? MATERIAL_2K_PARAMS : null),
@@ -3688,7 +3830,9 @@ function HomeInner() {
   }, [handleGenerate, isBusy, params, toast]);
 
   /**
-   * 右侧对话发送入口：材质面板有点选材质时，把用户文案和材质提示词合并直出。
+   * 右侧对话发送入口：材质面板有点选材质时，把用户文案和材质提示词合并。
+   * - 画布选中了图片：走"改图 + 用户指令"链路，文案用于限定材质替换范围（如"只换服饰，皮肤不变"）；
+   * - 没选图片：按文案直出新内容并应用材质。
    * 聊天记录与画布标签只显示"文案 · 材质：xxx"短标签，不暴露后台材质关键词。
    */
   const handleComposerSubmit = useCallback((event, options) => {
@@ -3700,6 +3844,14 @@ function HomeInner() {
     if (typeof event?.preventDefault === "function") event.preventDefault();
     const is2k = options?.quality === "2k";
     const palette = materialComposerSelection?.palette || null;
+    const targetImg = selectedImage;
+    if (targetImg?.image_url && (targetImg.media_type || "image") === "image") {
+      const applyOptions = { ...(options || null), userInstruction: composerText };
+      if (materials.length === 1) {
+        return handleApplyMaterial(materials[0], palette, targetImg, applyOptions);
+      }
+      return handleApplyCombo(materials, palette, targetImg, applyOptions);
+    }
     const materialNames = materials.map((m) => m.name).join("+");
     return handleGenerate({
       text: buildMaterialCreatePrompt(composerText, materials, palette),
@@ -3712,7 +3864,7 @@ function HomeInner() {
       // 保留输入框文案：方便用同一段文案换不同材质反复生成做对比
       preserveComposer: true,
     });
-  }, [handleGenerate, materialComposerSelection, params, prompt]);
+  }, [handleApplyCombo, handleApplyMaterial, handleGenerate, materialComposerSelection, params, prompt, selectedImage]);
 
   /** 材质面板底部按钮在"无选中图 + 右侧有文案"时的生成入口（options 支持 { quality: "2k" }） */
   const handleComposerMaterialGenerate = useCallback((options) => {
@@ -3844,13 +3996,13 @@ function HomeInner() {
             updateCanvasImageInBoard(activeCanvasBoardId, id, { image_url: url });
           })
           .catch(() => {
-            toast("图片已添加，但云端保存失败，换设备可能无法恢复", "warning", 2200);
+            toastCloudSaveFailure("图片已添加，但云端保存失败，换设备可能无法恢复");
           });
       };
       reader.readAsDataURL(file);
     });
     toast(`已添加 ${files.length} 张图片到画布`, "success");
-  }, [activeCanvasBoardId, appendCanvasImagesToBoard, toast, updateCanvasImageInBoard]);
+  }, [activeCanvasBoardId, appendCanvasImagesToBoard, toast, toastCloudSaveFailure, updateCanvasImageInBoard]);
 
   const handleDropGeneratedImage = useCallback((item, dropX, dropY) => {
     if (!item?.url) return;
@@ -3885,12 +4037,12 @@ function HomeInner() {
             updateCanvasImageInBoard(activeCanvasBoardId, item.id, { image_url: url });
           })
           .catch(() => {
-            toast("粘贴图片云端保存失败，换设备可能无法恢复", "warning", 2200);
+            toastCloudSaveFailure("粘贴图片云端保存失败，换设备可能无法恢复");
           });
       });
       toast(`已粘贴 ${items.length} 张图片`, "success", 1500);
     },
-    [activeCanvasBoardId, appendCanvasImagesToBoard, toast, updateCanvasImageInBoard]
+    [activeCanvasBoardId, appendCanvasImagesToBoard, toast, toastCloudSaveFailure, updateCanvasImageInBoard]
   );
 
   const handleRetry = useCallback((msg) => {
@@ -4646,6 +4798,8 @@ function HomeInner() {
         onQuickUpscaleImage={handleQuickUpscaleImage}
         onApplyMaterial={handleApplyMaterial}
         onApplyCombo={handleApplyCombo}
+        onApplyMultiAngle={handleApplyMultiAngle}
+        onOutpaint={handleOutpaint}
         onMaterialSelectionChange={setMaterialComposerSelection}
         materialComposerHasText={composerHasText}
         onMaterialComposerGenerate={handleComposerMaterialGenerate}

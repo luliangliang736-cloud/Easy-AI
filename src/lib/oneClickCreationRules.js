@@ -59,11 +59,14 @@ function pickLabeledLine(text, labels = [], stopLabels = []) {
   return "";
 }
 
+// 批量提示词里所有可能出现的字段标签；作为截止标签防止字段值吞掉后续行
+const WA_FIELD_STOP_LABELS = ["人物", "服饰", "服装", "穿搭", "风格", "画面风格", "视觉风格", "设计风格", "场景类型", "需求备注", "outfit", "clothing", "style"];
+
 function detectWaOutfitStyle(text = "") {
   const explicit = pickLabeledLine(
     text,
     ["服饰", "服装", "穿搭", "人物服饰", "人物服装", "outfit", "clothing"],
-    ["主标题", "标题", "副标题", "副文案", "headline", "subline", "subtitle"]
+    ["主标题", "标题", "副标题", "副文案", "headline", "subline", "subtitle", ...WA_FIELD_STOP_LABELS]
   );
   if (explicit) return explicit;
 
@@ -426,7 +429,7 @@ function detectWaVisualStyle(text = "") {
   const explicit = pickLabeledLine(
     text,
     ["风格", "画面风格", "视觉风格", "设计风格", "style"],
-    ["主标题", "标题", "副标题", "副文案", "服饰", "服装", "人物服饰", "人物服装", "headline", "subline", "subtitle", "outfit", "clothing"]
+    ["主标题", "标题", "副标题", "副文案", "人物服饰", "人物服装", "headline", "subline", "subtitle", ...WA_FIELD_STOP_LABELS.filter((label) => !/风格|style/i.test(label))]
   );
   if (explicit) {
     const explicitCompact = explicit.toLowerCase().replace(/\s+/g, "");
@@ -463,8 +466,9 @@ export function parseWaTemplateRequest(promptText) {
 
   const headlineLabels = ["主标题", "标题", "headline"];
   const sublineLabels = ["副标题", "副文案", "subline", "subtitle"];
-  const headline = pickLabeledLine(text, headlineLabels, sublineLabels);
-  const subline = pickLabeledLine(text, sublineLabels, headlineLabels);
+  // 截止标签需覆盖全部字段名，避免主/副标题把后续「人物/服装/风格」行吞进文案
+  const headline = pickLabeledLine(text, headlineLabels, [...sublineLabels, ...WA_FIELD_STOP_LABELS]);
+  const subline = pickLabeledLine(text, sublineLabels, [...headlineLabels, ...WA_FIELD_STOP_LABELS]);
   if (!headline || !subline) return null;
 
   return {
@@ -485,8 +489,8 @@ export function parseWaDataPosterRequest(promptText) {
 
   const headlineLabels = ["主标题", "标题", "headline"];
   const sublineLabels = ["副标题", "副文案", "subline", "subtitle"];
-  const headline = pickLabeledLine(text, headlineLabels, sublineLabels);
-  const subline = pickLabeledLine(text, sublineLabels, headlineLabels);
+  const headline = pickLabeledLine(text, headlineLabels, [...sublineLabels, ...WA_FIELD_STOP_LABELS]);
+  const subline = pickLabeledLine(text, sublineLabels, [...headlineLabels, ...WA_FIELD_STOP_LABELS]);
   if (!headline || !subline) return null;
 
   return {
@@ -703,8 +707,10 @@ export function buildWaTemplatePrompt({ headline = "", subline = "", outfitStyle
   const styleSections = keepTemplateStyle
     ? `视觉风格要求（原版锁定模式）：
 - 用户要求沿用第一张参考模板的原版风格：${visualStyle}。
-- 本次是只换文案的小改任务：整体配色、背景、纹理、装饰元素、光影氛围、右侧背板、字体节奏和画面气质必须与第一张参考图保持一致，不做风格重设计。
-- 禁止引入新的色系、新的装饰主题、新的材质质感或新的背景方向；只允许因替换主副标题带来的最小必要调整（如文字长度不同导致的排版微调）。
+- ${outfitStyle
+      ? "本次锁定的是画面风格层：整体配色、背景、纹理、装饰元素、光影氛围、右侧背板、字体节奏和画面气质必须与第一张参考图保持一致，不做风格重设计；人物的服装和姿势按下方「右侧元素要求」中指定的服饰执行，不受锁定限制。"
+      : "本次是只换文案的小改任务：整体配色、背景、纹理、装饰元素、光影氛围、右侧背板、字体节奏和画面气质必须与第一张参考图保持一致，不做风格重设计。"}
+- 禁止引入新的色系、新的装饰主题、新的材质质感或新的背景方向；只允许因替换主副标题${outfitStyle ? "和指定服饰" : ""}带来的最小必要调整（如文字长度不同导致的排版微调）。
 - 如果风格描述里除锁定词外还写了具体小改要求（例如换个道具、换个表情、局部换色），只执行该项小改，其余一律保持参考图原样。
 
 背景变化要求（原版锁定模式）：
@@ -851,7 +857,7 @@ ${isRobotRole ? "- 本次角色是 Robot：不要新增上衣、外套、裙装/
 - 不要把右侧元素移动到新的构图位置。
 - 不要忽略用户指定的人物服饰关键词；如果用户指定制服、医生制服、传统服饰或职业装，禁止生成默认休闲服装。
 ${keepTemplateStyle
-    ? `- 本次是原版锁定模式：不要为了"新鲜感"或"审美差异"改变参考图的配色、背景、装饰、背板或渲染风格；除主副标题以外的任何主动风格变化都视为错误。`
+    ? `- 本次是原版锁定模式：不要为了"新鲜感"或"审美差异"改变参考图的配色、背景、装饰、背板或渲染风格；除主副标题${outfitStyle ? "、指定的人物服饰/姿势" : ""}以外的任何主动风格变化都视为错误。`
     : `- 不要完全忽略用户指定的视觉风格关键词；如果用户指定 ins 小众治愈、炫酷、高级、可爱、极简、科技、赛博、渐变、复古、国潮、电商、节日等风格，需要做出可感知的审美差异，但不得破坏核心版式和品牌规则。
 - 如果用户指定扁平插画、蒙德里安、几何抽象、孟菲斯、手绘、像素等平面类风格，不要生成与画面不匹配的强 3D 人物；人物可以转译为 2D/flat/vector illustration，但必须保留 EZfamily 角色识别度。`}
 - 不要改变左文案右元素的固定版式。`;

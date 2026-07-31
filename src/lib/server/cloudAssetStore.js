@@ -1,5 +1,16 @@
-import { encodeCloudAssetUrl, getOssClient, isOssConfigured, putOssObjectResilient } from "@/lib/server/ossClient";
-import { readGeneratedImage } from "@/lib/server/generatedImageStore";
+import {
+  copyOssObjectResilient,
+  encodeCloudAssetUrl,
+  getOssClient,
+  isOssConfigured,
+  isOssObjectNotFoundError,
+  putOssObjectResilient,
+} from "@/lib/server/ossClient";
+import { getGeneratedImageBackupKey, readGeneratedImage } from "@/lib/server/generatedImageStore";
+
+// 生成图源文件已彻底丢失（本地缓存过期 + OSS 备份不存在），迁移无从谈起。
+// 上传路由据此返回 410，让前端停止对这张图的重复迁移尝试。
+export const CLOUD_ASSET_SOURCE_GONE = "CLOUD_ASSET_SOURCE_GONE";
 
 // 图片上限要能覆盖 4K 高清放大的 PNG(可到 40MB+),否则大图迁移 OSS 会失败,
 // 只能一直依赖容器本地缓存/服务商外链,重新部署或外链过期后图片丢失。
@@ -40,6 +51,13 @@ function inferMediaContentTypeFromUrl(source = "") {
   return "";
 }
 
+function buildCloudAssetObjectKey({ userEmail = "", scope = "canvas", filename = "", ext = "png" } = {}) {
+  const userPart = encodeURIComponent(String(userEmail || "unknown").toLowerCase());
+  const datePart = new Date().toISOString().slice(0, 10);
+  const randomPart = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  return `users/${userPart}/${safeFilename(scope)}/${datePart}/${randomPart}-${safeFilename(filename)}.${ext}`;
+}
+
 function decodeDataUrl(dataUrl = "") {
   const match = String(dataUrl || "").match(/^data:([^;,]+);base64,(.+)$/);
   if (!match) throw new Error("Invalid data URL");
@@ -78,11 +96,7 @@ export async function uploadCloudAssetBuffer({ userEmail = "", buffer, contentTy
   const maxBytes = isVideo || isBinaryFallback ? MAX_MEDIA_UPLOAD_BYTES : MAX_UPLOAD_BYTES;
   if (buffer.byteLength > maxBytes) throw new Error("Media file is too large");
   const ext = contentTypeExt.get(normalizedContentType) || "png";
-  const userPart = encodeURIComponent(String(userEmail || "unknown").toLowerCase());
-  const now = new Date();
-  const datePart = now.toISOString().slice(0, 10);
-  const randomPart = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-  const objectKey = `users/${userPart}/${safeFilename(scope)}/${datePart}/${randomPart}-${safeFilename(filename)}.${ext}`;
+  const objectKey = buildCloudAssetObjectKey({ userEmail, scope, filename, ext });
 
   // 大图/视频分片上传 + 重试，避免跨国单次 put 超时导致迁移失败（迁移失败 = 重部署后图丢失）
   await putOssObjectResilient(objectKey, buffer, {
@@ -112,13 +126,36 @@ export async function copyImageUrlToCloudAsset({ userEmail = "", url = "", filen
     buffer = Buffer.from(dataMatch[2].replace(/\s/g, ""), "base64");
   } else if (/^\/api\/generated-images\//i.test(source)) {
     const localFilename = decodeURIComponent(source.match(/^\/api\/generated-images\/([^/?#]+)/i)?.[1] || "");
+    // 快路径：生成图在 OSS 已有系统备份时，直接桶内服务端复制到用户资产目录。
+    // 数据不经过容器（原方案下载+重传一张 4K 大图要跨国传两次、耗时数分钟），
+    // 批量迁移也不会挤占上传通道。
+    if (isOssConfigured() && localFilename) {
+      try {
+        const ext = localFilename.split(".").pop()?.toLowerCase() || "png";
+        const objectKey = buildCloudAssetObjectKey({ userEmail, scope, filename, ext });
+        await copyOssObjectResilient(objectKey, getGeneratedImageBackupKey(localFilename));
+        return encodeCloudAssetUrl(objectKey);
+      } catch (error) {
+        if (!isOssObjectNotFoundError(error)) throw error;
+        // OSS 备份不存在：可能是刚生成还没备份完，回退读本地缓存走常规上传
+      }
+    }
     const image = await readGeneratedImage(localFilename);
-    if (!image) throw new Error("Local generated image not found");
+    if (!image) {
+      const gone = new Error("生成图源文件已丢失（本地缓存过期且无云端备份）");
+      gone.code = CLOUD_ASSET_SOURCE_GONE;
+      throw gone;
+    }
     contentType = image.mimeType;
     buffer = image.buffer;
   } else if (/^https?:\/\//i.test(source)) {
     const res = await fetch(source);
-    if (!res.ok) throw new Error(`Failed to fetch media for OSS copy (${res.status})`);
+    if (!res.ok) {
+      const error = new Error(`Failed to fetch media for OSS copy (${res.status})`);
+      // 服务商临时外链过期后返回 403/404/410，重试永远不会成功
+      if ([403, 404, 410].includes(res.status)) error.code = CLOUD_ASSET_SOURCE_GONE;
+      throw error;
+    }
     const headerContentType = res.headers.get("content-type")?.split(";")[0]?.trim().toLowerCase() || "";
     contentType = headerContentType && headerContentType !== "application/octet-stream"
       ? headerContentType

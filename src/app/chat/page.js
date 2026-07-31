@@ -671,8 +671,42 @@ function shouldUploadToCloudAsset(url = "") {
   );
 }
 
+// 迁移死链记忆：服务端确认源图已永久丢失（410）的 URL 记下来不再尝试迁移，
+// 否则消息列表每次变化都会对同一批已丢失的图片发起注定失败的上传请求。
+// 与画布页共用同一个 localStorage 键。
+const MIGRATION_DEAD_URLS_KEY = "easyai-cloud-migration-dead-urls";
+const MIGRATION_DEAD_URLS_LIMIT = 500;
+let migrationDeadUrlsCache = null;
+
+function getMigrationDeadUrls() {
+  if (!migrationDeadUrlsCache) {
+    try {
+      const parsed = JSON.parse(window.localStorage.getItem(MIGRATION_DEAD_URLS_KEY) || "[]");
+      migrationDeadUrlsCache = new Set(Array.isArray(parsed) ? parsed : []);
+    } catch {
+      migrationDeadUrlsCache = new Set();
+    }
+  }
+  return migrationDeadUrlsCache;
+}
+
+function markMigrationDeadUrl(url) {
+  if (typeof url !== "string" || !url) return;
+  const deadUrls = getMigrationDeadUrls();
+  if (deadUrls.has(url)) return;
+  deadUrls.add(url);
+  try {
+    window.localStorage.setItem(
+      MIGRATION_DEAD_URLS_KEY,
+      JSON.stringify([...deadUrls].slice(-MIGRATION_DEAD_URLS_LIMIT))
+    );
+  } catch {}
+}
+
 async function uploadImageSourceToCloudAsset(source, filename = "chat-image", scope = "chat-generated") {
   if (!shouldUploadToCloudAsset(source)) return source;
+  // 已确认永久丢失的源图：不再发请求，原样返回
+  if (getMigrationDeadUrls().has(source)) return source;
   const isDataUrl = /^data:image\//i.test(source);
   const body = isDataUrl
     ? {
@@ -687,7 +721,10 @@ async function uploadImageSourceToCloudAsset(source, filename = "chat-image", sc
     body: JSON.stringify(body),
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok || !data?.url) throw new Error(data?.error || "上传云端素材失败");
+  if (!res.ok || !data?.url) {
+    if (res.status === 410 && !isDataUrl) markMigrationDeadUrl(source);
+    throw new Error(data?.error || "上传云端素材失败");
+  }
   return data.url;
 }
 

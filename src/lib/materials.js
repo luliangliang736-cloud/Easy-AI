@@ -347,14 +347,25 @@ function buildPaletteText(palette) {
   return `配色要求：当前选择的配色方案为 ${palette.main} 为主色${auxText}。色值：${[palette.main, ...aux].join("、")}；必须将该配色方案作为画面主要可见配色执行。`;
 }
 
-/** 组装"组合探索"的改图提示词：多材质由模型分配到不同元素，配色方案可选 */
-export function buildComboEditPrompt(materialList, palette) {
+/** 用户补充指令段：限定材质替换范围（如"只换服饰，皮肤不变"），空指令返回空串不影响原模板 */
+function buildUserScopeText(userInstruction) {
+  const instruction = String(userInstruction || "").trim();
+  if (!instruction) return "";
+  return `用户补充要求（优先级最高，与其他要求冲突时以此为准）：${instruction}。材质只应用到用户指定的部位或元素上，用户未提及或要求保持的区域（例如人物皮肤、五官、头发、背景等）必须保持原图完全不变。`;
+}
+
+/** 组装"组合探索"的改图提示词：多材质由模型分配到不同元素，配色方案可选；userInstruction 可选（限定替换范围） */
+export function buildComboEditPrompt(materialList, palette, userInstruction = "") {
   const materialText = materialList.map((m) => `${buildMaterialPromptText(m)}。`).join("；");
   const colorText = buildPaletteText(palette);
+  const scopeText = buildUserScopeText(userInstruction);
   const negative = palette ? `${COMBO_NEGATIVE}；${COMBO_COLOR_NEGATIVE}` : COMBO_NEGATIVE;
   return [
+    scopeText,
     COMBO_RENDER_STYLE,
-    `材质：${materialText} 请将这些材质分配到画面中不同的元素上，相邻元素材质对比明显，材质分层清楚。基于参考图生成目标视觉结果。`,
+    scopeText
+      ? `材质：${materialText} 请按用户补充要求把这些材质分配到指定的元素上，相邻元素材质对比明显，材质分层清楚。基于参考图生成目标视觉结果。`
+      : `材质：${materialText} 请将这些材质分配到画面中不同的元素上，相邻元素材质对比明显，材质分层清楚。基于参考图生成目标视觉结果。`,
     "结构要求：形状以原图为准，严格保留主体轮廓、元素相对位置、图形数量、视觉层级和整体构图，只做材质、体积、光影或风格转译。",
     colorText,
     "输出清晰锐利，材质和小元素可辨。",
@@ -386,14 +397,17 @@ export function buildMaterialCreatePrompt(userText, materialList, palette) {
     .join("  ");
 }
 
-/** 组装"一键换材质"的改图提示词；palette 可选，选了则同时替换配色 */
-export function buildMaterialEditPrompt(material, palette) {
+/** 组装"一键换材质"的改图提示词；palette 可选，选了则同时替换配色；userInstruction 可选（限定替换范围） */
+export function buildMaterialEditPrompt(material, palette, userInstruction = "") {
   const colorText = buildPaletteText(palette);
+  const scopeText = buildUserScopeText(userInstruction);
   const negative = palette
     ? `${MATERIAL_NEGATIVE}、${COMBO_COLOR_NEGATIVE.replaceAll("；", "、")}`
     : MATERIAL_NEGATIVE;
   return [
-    `请将这张参考图中主体的表面材质替换为「${material.name}」。`,
+    scopeText
+      ? `请基于这张参考图改图。${scopeText}目标材质为「${material.name}」。`
+      : `请将这张参考图中主体的表面材质替换为「${material.name}」。`,
     MATERIAL_RENDER_STYLE,
     `目标材质效果：${buildMaterialPromptText(material)}。`,
     "结构要求：形状以原图为准，严格保留主体轮廓、元素相对位置、图形数量、视觉层级和整体构图，姿态、透视、光照方向和背景完全不变，只做材质与质感转译。",

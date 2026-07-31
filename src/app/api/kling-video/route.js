@@ -46,8 +46,9 @@ function signJwt() {
   const header = { alg: "HS256", typ: "JWT" };
   const payload = {
     iss: ACCESS_KEY_ID,
+    // nbf 预留 5 分钟容差：本机时钟偏快会导致可灵判定 token 未生效（Authorization is not active）
     exp: now + 1800,
-    nbf: now - 5,
+    nbf: now - 300,
   };
   const encodedHeader = base64Url(JSON.stringify(header));
   const encodedPayload = base64Url(JSON.stringify(payload));
@@ -193,12 +194,21 @@ function getErrorCode(error) {
   return error?.cause?.code || error?.code || "";
 }
 
-async function persistVideoUrls(urls = [], userEmail = "system-generated") {
-  return copyImageUrlsToCloudAssets({
+// 结果落盘限时：OSS 通道拥堵（如 4K 图迁移占满带宽）时不能拖死整个请求，
+// 超时直接返回上游临时 URL，由前端后台同步接力搬到云端
+const PERSIST_TIMEOUT_MS = Number(process.env.VIDEO_PERSIST_TIMEOUT_MS || 60_000);
+
+async function persistVideoUrls(urls = [], userEmail = "system-generated", meta = null) {
+  const persistPromise = copyImageUrlsToCloudAssets({
     userEmail,
     urls,
     scope: "generated-kling-video",
   });
+  const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve(null), PERSIST_TIMEOUT_MS));
+  const result = await Promise.race([persistPromise, timeoutPromise]);
+  if (Array.isArray(result) && result.length > 0) return result;
+  if (meta) logKlingEvent(meta, "persist_timeout", { budgetMs: PERSIST_TIMEOUT_MS });
+  return urls;
 }
 
 async function resolveKlingImageSource(source = "") {
@@ -513,7 +523,7 @@ export async function POST(request) {
     if (!taskId) {
       const immediateUrls = extractVideoUrls(createData);
       if (immediateUrls.length > 0) {
-        const persistedUrls = await persistVideoUrls(immediateUrls, storageUserEmail);
+        const persistedUrls = await persistVideoUrls(immediateUrls, storageUserEmail, meta);
         logKlingEvent(meta, "success", {
           generationType,
           taskMode: "immediate",
@@ -535,7 +545,7 @@ export async function POST(request) {
 
     logKlingEvent(meta, "task_created", { generationType, taskId });
     const urls = await pollTask(path, taskId, meta);
-    const persistedUrls = await persistVideoUrls(urls, storageUserEmail);
+    const persistedUrls = await persistVideoUrls(urls, storageUserEmail, meta);
     logKlingEvent(meta, "success", {
       generationType,
       taskId,

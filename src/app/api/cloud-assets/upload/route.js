@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getRequestUser } from "@/lib/server/authUser";
-import { copyImageUrlToCloudAsset, uploadCloudAsset } from "@/lib/server/cloudAssetStore";
+import { CLOUD_ASSET_SOURCE_GONE, copyImageUrlToCloudAsset, uploadCloudAsset } from "@/lib/server/cloudAssetStore";
 
 export const runtime = "nodejs";
 
@@ -31,6 +31,8 @@ export async function POST(request) {
     return NextResponse.json({ ok: true, ...result });
   } catch (error) {
     console.error("[CloudAssets] Upload failed:", error);
-    return NextResponse.json({ error: error?.message || "上传云端素材失败" }, { status: 500 });
+    // 410：源图已永久丢失，前端据此停止重试（区别于可重试的 500）
+    const status = error?.code === CLOUD_ASSET_SOURCE_GONE ? 410 : 500;
+    return NextResponse.json({ error: error?.message || "上传云端素材失败" }, { status });
   }
 }

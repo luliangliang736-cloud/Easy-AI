@@ -7,13 +7,15 @@ import {
 import {
   Maximize2, Download, Trash2, Copy,
   MessageSquare, Lock, Unlock, FileDown, Image as ImageIcon,
-  Minus, Plus, Scissors, Type, Play, Pause, Spline, FileText, SwatchBook,
+  Minus, Plus, Scissors, Type, Play, Pause, Spline, FileText, SwatchBook, Rotate3d, Expand,
 } from "lucide-react";
 import { flushSync } from "react-dom";
 import { useToast } from "@/components/Toast";
 import { useCanvasT } from "@/lib/canvasI18n";
 import Toolbar from "@/components/Toolbar";
 import MaterialPanel from "@/components/MaterialPanel";
+import MultiAnglePanel from "@/components/MultiAnglePanel";
+import OutpaintOverlay from "@/components/OutpaintOverlay";
 import { getQuickSwapMaterials } from "@/lib/materials";
 
 // 选中图片时快捷换材质条的推荐材质（官方静态数据，模块级取一次即可）
@@ -398,7 +400,7 @@ function getUpscalePreviewSize(meta, targetLongSide) {
 
 export default function Canvas({
   images, selectedImage, onSelectImage, onDeleteImage,
-  onUpdateImage, onSendToChat, onQuickEditImage, onQuickUpscaleImage, onApplyMaterial, onApplyCombo, onMaterialSelectionChange, materialComposerHasText = false, onMaterialComposerGenerate, materialComposerText = "", onMaterialComposerTextChange, onDropImages, onDropGeneratedImage, onPasteImages,
+  onUpdateImage, onSendToChat, onQuickEditImage, onQuickUpscaleImage, onApplyMaterial, onApplyCombo, onApplyMultiAngle, onOutpaint, onMaterialSelectionChange, materialComposerHasText = false, onMaterialComposerGenerate, materialComposerText = "", onMaterialComposerTextChange, onDropImages, onDropGeneratedImage, onPasteImages,
   activeTool, onToolChange, zoom, onZoomChange,
   ref,
   generatingItems = [],
@@ -443,6 +445,10 @@ export default function Canvas({
   const [, forceRender] = useReducer((c) => c + 1, 0);
 
   const [upscaleMenuFor, setUpscaleMenuFor] = useState(null);
+  // 多角度弹层当前挂在哪张图上（null 表示关闭）
+  const [multiAngleMenuFor, setMultiAngleMenuFor] = useState(null);
+  // 扩图编辑器当前编辑的图片对象（null 表示关闭）
+  const [outpaintImage, setOutpaintImage] = useState(null);
   const lockedRef = useRef(new Set());
   const [fileDragOver, setFileDragOver] = useState(false);
   const [selectedTextId, setSelectedTextId] = useState(null);
@@ -731,6 +737,26 @@ export default function Canvas({
     return () => window.removeEventListener("pointerdown", handlePointerDown);
   }, [upscaleMenuFor]);
 
+  // 多角度面板：点画布空白处关闭；点面板本身、触发按钮、画布上的图片不关（右侧聊天等画布外区域也不关）
+  useEffect(() => {
+    if (!multiAngleMenuFor) return undefined;
+    const handlePointerDown = (event) => {
+      const target = event.target;
+      if (
+        target?.closest?.("[data-multi-angle-menu]") ||
+        target?.closest?.("[data-multi-angle-trigger]") ||
+        target?.closest?.("[data-canvas-item]")
+      ) {
+        return;
+      }
+      if (containerRef.current?.contains(target)) {
+        setMultiAngleMenuFor(null);
+      }
+    };
+    window.addEventListener("pointerdown", handlePointerDown);
+    return () => window.removeEventListener("pointerdown", handlePointerDown);
+  }, [multiAngleMenuFor]);
+
   useEffect(() => {
     if (!isCanvasColorPickerOpen && !activeShapeColorPickerId) return undefined;
     const handlePointerDown = (event) => {
@@ -765,7 +791,11 @@ export default function Canvas({
     return () => window.removeEventListener("pointerdown", handlePointerDown);
   }, [isCreativeToolsOpen]);
 
-  /** 材质面板点选：校验选中目标后交给上层发起改图；面板保持打开方便连续测试；palette / options（如 { quality: "2k" }）可选 */
+  /**
+   * 材质面板点选：校验选中目标后交给上层发起改图；面板保持打开方便连续测试；palette / options（如 { quality: "2k" }）可选。
+   * 输入框有文案时并入 options.userInstruction，限定材质替换范围（如"只换服饰，皮肤不变"）；
+   * 图片悬浮快捷换材质条不走这里，保持不带指令的纯净一键换。
+   */
   const handlePickMaterial = useCallback((material, palette, options) => {
     const target = selectedImage;
     if (!target?.image_url) {
@@ -777,10 +807,13 @@ export default function Canvas({
       toast("换材质暂只支持图片元素", "info", 1800);
       return;
     }
-    onApplyMaterial?.(material, palette || null, target, options || null);
-  }, [onApplyMaterial, selectedImage, toast]);
+    onApplyMaterial?.(material, palette || null, target, {
+      ...(options || null),
+      userInstruction: String(materialComposerText || "").trim(),
+    });
+  }, [materialComposerText, onApplyMaterial, selectedImage, toast]);
 
-  /** 组合探索点选：校验同单材质，交给上层发起一次多材质+配色改图 */
+  /** 组合探索点选：校验同单材质，交给上层发起一次多材质+配色改图（同样携带输入框文案作为范围指令） */
   const handlePickCombo = useCallback((materials, palette, options) => {
     const target = selectedImage;
     if (!target?.image_url) {
@@ -792,8 +825,11 @@ export default function Canvas({
       toast("组合探索暂只支持图片元素", "info", 1800);
       return;
     }
-    onApplyCombo?.(materials, palette, target, options || null);
-  }, [onApplyCombo, selectedImage, toast]);
+    onApplyCombo?.(materials, palette, target, {
+      ...(options || null),
+      userInstruction: String(materialComposerText || "").trim(),
+    });
+  }, [materialComposerText, onApplyCombo, selectedImage, toast]);
 
   /** 空格按住：可左键拖拽平移画布（输入框内不抢占空格） */
   useEffect(() => {
@@ -2359,6 +2395,45 @@ export default function Canvas({
                         </button>
                       );
                     })}
+                    {/* 多角度：参数化改变机位重渲染同一主体（同换材质走 /api/edit 链路） */}
+                    {!isVideo && !isSvgImage && !img.isGeneratingPlaceholder && onApplyMultiAngle && (
+                      <div className="relative">
+                        <button
+                          type="button"
+                          data-multi-angle-trigger
+                          onPointerDown={(e) => e.stopPropagation()}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setMultiAngleMenuFor((prev) => (prev === img.id ? null : img.id));
+                          }}
+                          className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] transition-colors whitespace-nowrap ${
+                            multiAngleMenuFor === img.id
+                              ? "text-accent bg-accent/12"
+                              : "text-text-secondary hover:text-text-primary hover:bg-bg-hover"
+                          }`}
+                          title={t("多角度：换个视角重新渲染这个主体")}
+                        >
+                          <Rotate3d size={12} />
+                          <span>{t("多角度")}</span>
+                        </button>
+                      </div>
+                    )}
+                    {/* 扩图：自由拖拽扩展方向与大小，支持提示词约束扩展内容 */}
+                    {!isVideo && !isSvgImage && !img.isGeneratingPlaceholder && onOutpaint && (
+                      <button
+                        type="button"
+                        onPointerDown={(e) => e.stopPropagation()}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setOutpaintImage(img);
+                        }}
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] text-text-secondary hover:text-text-primary hover:bg-bg-hover transition-colors whitespace-nowrap"
+                        title={t("扩图：向任意方向扩展画面")}
+                      >
+                        <Expand size={12} />
+                        <span>{t("扩图")}</span>
+                      </button>
+                    )}
                     {!isSvgImage && <div className="h-5 w-px bg-border-primary" />}
                     {!isSvgImage && img.prompt && (
                       <div className="relative">
@@ -2525,8 +2600,12 @@ export default function Canvas({
                       </button>
                     </div>
                   )}
+                  {/* 宽度跟随图片显示宽度而非操作栏，让名称/尺寸与图片左右边缘对齐（仿 Lovart） */}
                   {!isSvgImage && (
-                  <div className="flex w-full items-center justify-between gap-2 text-[10px] text-text-primary pointer-events-none">
+                  <div
+                    className="flex items-center justify-between gap-2 text-[10px] text-text-primary pointer-events-none"
+                    style={{ width: pos.w }}
+                  >
                     <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden px-1.5 py-0.5">
                       <ImageIcon size={10} />
                       <span className="truncate">
@@ -2539,6 +2618,39 @@ export default function Canvas({
                   </div>
                   )}
                 </div>
+              )}
+
+              {/* 多角度面板：挂在图片右侧常驻（不随画布点击关闭），点面板的 × / 生成 / 再点按钮才收起 */}
+              {multiAngleMenuFor === img.id && (
+                <div
+                  data-multi-angle-menu
+                  className={`absolute left-full top-0 z-20 ml-3 rounded-2xl border border-border-primary bg-bg-primary/96 backdrop-blur-xl pointer-events-auto ${
+                    isLightTheme ? "shadow-[0_16px_40px_rgba(15,23,42,0.14)]" : "shadow-2xl"
+                  }`}
+                  onPointerDown={(e) => e.stopPropagation()}
+                >
+                  <MultiAnglePanel
+                    imageUrl={img.image_url}
+                    onClose={() => setMultiAngleMenuFor(null)}
+                    onGenerate={(angle) => {
+                      // 生成后面板保持打开，方便连续试不同角度
+                      onApplyMultiAngle?.(angle, img);
+                    }}
+                  />
+                </div>
+              )}
+
+              {/* 扩图覆盖层：扩展框直接套在画布图片四周（就地扩图，不用全屏） */}
+              {outpaintImage?.id === img.id && (
+                <OutpaintOverlay
+                  imageUrl={img.image_url}
+                  displayWidth={pos.w}
+                  onClose={() => setOutpaintImage(null)}
+                  onGenerate={(payload) => {
+                    setOutpaintImage(null);
+                    onOutpaint?.(payload, img);
+                  }}
+                />
               )}
 
               {/* 选区手柄相对图片线框定位，避免与下方标题栏错位 */}

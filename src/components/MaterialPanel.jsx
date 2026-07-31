@@ -1651,7 +1651,7 @@ export default function MaterialPanel({ selectedImage, onPick, onPickCombo, onCl
                 }
               }}
               placeholder={hasTarget
-                ? t("提示词与右侧输入框实时同步（材质改图按选中图进行，不使用文案）")
+                ? t("可选：限定换材质范围，如「只换服饰，人物皮肤保持不变」")
                 : t("描述想生成的画面，点选材质后回车直接生成")}
               rows={2}
               className={`block w-full resize-none overflow-y-auto rounded-xl border border-border-primary bg-bg-secondary py-2 pl-2.5 pr-8 text-[12px] leading-relaxed text-text-primary outline-none transition-colors placeholder:text-text-tertiary focus:border-accent/60 ${

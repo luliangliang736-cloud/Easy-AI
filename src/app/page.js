@@ -1082,7 +1082,8 @@ export default function HomePage() {
   const profileMenuRef = useRef(null);
   const profileAvatarInputRef = useRef(null);
   const initialAuthCheckAbortRef = useRef(null);
-  const { theme, toggleTheme } = useTheme("dark");
+  // 首页主题独立存储，与工作台（easy-ai-theme）互不影响
+  const { theme, toggleTheme } = useTheme("dark", "easy-ai-home-theme");
   const copy = getHomeCopy(homeLanguage);
   const floatingEntryMode = floatingIsGenerating
     ? floatingRuntimeMode

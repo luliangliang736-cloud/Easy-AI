@@ -25,6 +25,11 @@ const MAX_DURATION = 15;
 const POLL_INTERVAL_MS = Number(process.env.SEEDANCE_POLL_INTERVAL_MS || 8_000);
 const POLL_TIMEOUT_MS  = Number(process.env.SEEDANCE_POLL_TIMEOUT_MS  || 8 * 60 * 1000);
 const REQUEST_TIMEOUT_MS = Number(process.env.SEEDANCE_REQUEST_TIMEOUT_MS || 60_000);
+const REQUEST_RETRY_ATTEMPTS = Number(process.env.SEEDANCE_REQUEST_RETRY_ATTEMPTS || 4);
+const REQUEST_RETRY_BASE_MS = Number(process.env.SEEDANCE_REQUEST_RETRY_BASE_MS || 1200);
+// 结果落盘限时：OSS 通道拥堵（如 4K 图迁移占满带宽）时不能拖死整个请求，
+// 超时直接返回上游临时 URL，由前端后台同步接力搬到云端
+const PERSIST_TIMEOUT_MS = Number(process.env.VIDEO_PERSIST_TIMEOUT_MS || 60_000);
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
 
@@ -162,8 +167,53 @@ async function fetchJson(url, options = {}) {
   }
 }
 
-async function createTask(body) {
-  return fetchJson(`${API_BASE}/contents/generations/tasks`, { method: "POST", body: JSON.stringify(body) });
+// 瞬时性错误（网络抖动/网关 5xx）可安全重试；上游任务本身的失败不在此列
+function isTransientSeedanceError(error) {
+  const code = error?.cause?.code || error?.code || "";
+  const message = String(error?.message || "");
+  return (
+    error?.name === "AbortError"
+    || message === "fetch failed"
+    || message.includes("Seedance API returned non-JSON (502)")
+    || message.includes("Seedance API returned non-JSON (503)")
+    || message.includes("Seedance API returned non-JSON (504)")
+    || message.includes("terminated")
+    || ["ECONNRESET", "ECONNREFUSED", "ETIMEDOUT", "UND_ERR_CONNECT_TIMEOUT", "UND_ERR_SOCKET", "EAI_AGAIN", "ENOTFOUND"].includes(code)
+  );
+}
+
+async function fetchJsonWithRetry(url, options = {}, { meta, action = "request" } = {}) {
+  let lastError = null;
+  for (let attempt = 1; attempt <= REQUEST_RETRY_ATTEMPTS; attempt += 1) {
+    try {
+      return await fetchJson(url, options);
+    } catch (error) {
+      lastError = error;
+      if (!isTransientSeedanceError(error) || attempt >= REQUEST_RETRY_ATTEMPTS) {
+        throw error;
+      }
+      const delayMs = REQUEST_RETRY_BASE_MS * attempt + Math.floor(Math.random() * 400);
+      if (meta) {
+        log(meta, "retry", {
+          action,
+          attempt,
+          nextAttempt: attempt + 1,
+          delayMs,
+          message: error?.message || "request failed",
+        });
+      }
+      await sleep(delayMs);
+    }
+  }
+  throw lastError;
+}
+
+async function createTask(body, meta) {
+  return fetchJsonWithRetry(
+    `${API_BASE}/contents/generations/tasks`,
+    { method: "POST", body: JSON.stringify(body) },
+    { meta, action: "create_task" }
+  );
 }
 
 async function pollTask(taskId, meta) {
@@ -171,7 +221,7 @@ async function pollTask(taskId, meta) {
   const start = Date.now();
 
   while (Date.now() - start < POLL_TIMEOUT_MS) {
-    const data = await fetchJson(url);
+    const data = await fetchJsonWithRetry(url, {}, { meta, action: "poll_task" });
     const status = normalizeSeedanceStatus(data?.status);
 
     if (status === "succeeded") {
@@ -188,6 +238,19 @@ async function pollTask(taskId, meta) {
   }
 
   throw new Error("Seedance 视频生成超时，请稍后重试。");
+}
+
+async function persistWithBudget(urls, userEmail, meta) {
+  const persistPromise = copyImageUrlsToCloudAssets({
+    userEmail,
+    urls,
+    scope: "generated-seedance-video",
+  });
+  const timeoutPromise = new Promise((resolve) => setTimeout(() => resolve(null), PERSIST_TIMEOUT_MS));
+  const result = await Promise.race([persistPromise, timeoutPromise]);
+  if (Array.isArray(result) && result.length > 0) return result;
+  log(meta, "persist_timeout", { budgetMs: PERSIST_TIMEOUT_MS });
+  return urls;
 }
 
 // ─── handler ─────────────────────────────────────────────────────────────────
@@ -213,7 +276,7 @@ export async function POST(request) {
     }
 
     const model      = normalizeModel(body?.model);
-    const resolution = normalizeResolution(body?.resolution || body?.mode, model);
+    let resolution   = normalizeResolution(body?.resolution || body?.mode, model);
     const ratio      = normalizeRatio(body?.ratio || body?.aspect_ratio || body?.image_size);
     const duration   = normalizeDuration(body?.duration);
     const generateAudio = String(body?.generate_audio || "false").toLowerCase() !== "false"
@@ -222,6 +285,9 @@ export async function POST(request) {
     const refImages = Array.isArray(body?.ref_images)
       ? body.ref_images.filter(Boolean).slice(0, 2)
       : [];
+
+    // 上游限制：Seedance 2.0 带参考图（i2v/首尾帧）最高 1080p，2K 仅文生视频可用
+    if (refImages.length > 0 && resolution === "2K") resolution = "1080p";
 
     const content = await buildContentArray(prompt, refImages);
     const generationType = refImages.length >= 2 ? "首尾帧生视频"
@@ -239,14 +305,14 @@ export async function POST(request) {
 
     log(meta, "start", { generationType, model, resolution, ratio, duration, generateAudio, refCount: refImages.length });
 
-    const createData = await createTask(taskBody);
+    const createData = await createTask(taskBody, meta);
     const taskId = createData?.id || createData?.task_id || createData?.data?.id;
 
     if (!taskId) {
       // 极少数情况立即返回视频 URL
       const immediateUrl = extractVideoUrl(createData);
       if (immediateUrl) {
-        const [persistedUrl] = await copyImageUrlsToCloudAssets({ userEmail: storageUserEmail, urls: [immediateUrl], scope: "generated-seedance-video" });
+        const [persistedUrl] = await persistWithBudget([immediateUrl], storageUserEmail, meta);
         log(meta, "success_immediate", { generationType, url: persistedUrl });
         return NextResponse.json({ success: true, data: { urls: [persistedUrl], mediaType: "video", generationType, tasks: [{ id: "seedance-0", index: 0, url: persistedUrl, status: "completed", type: "video" }] } });
       }
@@ -257,11 +323,7 @@ export async function POST(request) {
 
     const videoUrl = await pollTask(taskId, meta);
 
-    const [persistedUrl] = await copyImageUrlsToCloudAssets({
-      userEmail: storageUserEmail,
-      urls: [videoUrl],
-      scope: "generated-seedance-video",
-    });
+    const [persistedUrl] = await persistWithBudget([videoUrl], storageUserEmail, meta);
 
     log(meta, "success", { taskId, generationType, url: persistedUrl });
 
