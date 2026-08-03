@@ -14,6 +14,7 @@ export const runtime = "nodejs";
 const BASE_TOKEN = process.env.FEISHU_WA_BASE_TOKEN || "R2edbyyrZaGixJsH0v2cD1Mcnkg";
 const TABLE_ID = process.env.FEISHU_WA_TABLE_ID || "tbl5LlkOa5yLoGQf";
 const AI_IMAGE_FIELD_NAME = "AI设计图";
+const DATA_IMAGE_FIELD_NAME = "WA数据版海报";
 
 const FIELD_ALIASES = {
   scene: ["场景类型", "标签"],
@@ -57,7 +58,7 @@ function resolveTableTarget() {
 
 // 视图与附件字段按表自动解析并缓存，换表时只需要更新 TABLE_ID
 const resolvedViewIdByTable = new Map();
-const resolvedAiImageFieldByTable = new Map();
+const resolvedAttachmentFieldCache = new Map();
 
 async function resolveViewId(tableId = TABLE_ID) {
   if (process.env.FEISHU_WA_VIEW_ID) return process.env.FEISHU_WA_VIEW_ID;
@@ -83,9 +84,15 @@ async function resolveViewId(tableId = TABLE_ID) {
   return viewId;
 }
 
-async function resolveAiImageFieldId(tableId = TABLE_ID) {
-  if (tableId === TABLE_ID && process.env.FEISHU_WA_AI_IMAGE_FIELD) return process.env.FEISHU_WA_AI_IMAGE_FIELD;
-  const cached = resolvedAiImageFieldByTable.get(tableId);
+async function resolveAttachmentFieldId(tableId = TABLE_ID, fieldName = AI_IMAGE_FIELD_NAME) {
+  if (tableId === TABLE_ID && fieldName === AI_IMAGE_FIELD_NAME && process.env.FEISHU_WA_AI_IMAGE_FIELD) {
+    return process.env.FEISHU_WA_AI_IMAGE_FIELD;
+  }
+  if (tableId === TABLE_ID && fieldName === DATA_IMAGE_FIELD_NAME && process.env.FEISHU_WA_DATA_IMAGE_FIELD) {
+    return process.env.FEISHU_WA_DATA_IMAGE_FIELD;
+  }
+  const cacheKey = `${tableId}:${fieldName}`;
+  const cached = resolvedAttachmentFieldCache.get(cacheKey);
   if (cached) return cached;
   const data = await runLarkCliJson([
     "base", "+field-list",
@@ -96,9 +103,9 @@ async function resolveAiImageFieldId(tableId = TABLE_ID) {
     "--jq", ".",
   ]);
   const fields = Array.isArray(data?.data?.fields) ? data.data.fields : [];
-  const field = fields.find((item) => item?.name === AI_IMAGE_FIELD_NAME && item?.type === "attachment");
-  if (!field?.id) throw new Error("未找到飞书 AI设计图 附件字段");
-  resolvedAiImageFieldByTable.set(tableId, field.id);
+  const field = fields.find((item) => item?.name === fieldName && item?.type === "attachment");
+  if (!field?.id) throw new Error(`未找到飞书 ${fieldName} 附件字段`);
+  resolvedAttachmentFieldCache.set(cacheKey, field.id);
   return field.id;
 }
 
@@ -179,8 +186,10 @@ function inferWaFields({ headline = "", subline = "", scene = "" } = {}) {
   };
 }
 
-function buildPrompt({ scene, headline, subline, role, outfit, style }, index) {
-  return `第${index}张
+function buildPrompt({ scene, headline, subline, role, outfit, style }, index, poster = "") {
+  // 「WA数据图」是前端 parseWaDataPosterRequest 的触发词，会自动切换到 1:1 数据版模板链路
+  const header = poster === "data" ? `WA数据图 第${index}张` : `第${index}张`;
+  return `${header}
 场景类型：${scene || "WA海报"}
 主标题：${headline}
 副标题：${subline}
@@ -189,7 +198,8 @@ function buildPrompt({ scene, headline, subline, role, outfit, style }, index) {
 风格：${style}`;
 }
 
-async function prepareBatch({ limit = 5, start = 0, end = 0, tail = false } = {}) {
+async function prepareBatch({ limit = 5, start = 0, end = 0, tail = false, poster = "" } = {}) {
+  const posterType = poster === "data" ? "data" : "";
   const safeLimit = Math.min(Math.max(Number(limit) || 5, 1), 500);
   const safeStart = Math.max(Number(start) || 0, 0);
   const safeEnd = Math.max(Number(end) || 0, 0);
@@ -266,16 +276,17 @@ async function prepareBatch({ limit = 5, start = 0, end = 0, tail = false } = {}
 
     items.push({
       index,
-      label: `第${index + 1}张`,
+      label: posterType === "data" ? `第${index + 1}张（数据版）` : `第${index + 1}张`,
       recordId,
       tableId: target.tableId,
       tableName: target.tableName,
+      poster: posterType,
       headline,
       subline,
       role,
       outfit,
       style,
-      prompt: buildPrompt({ scene, headline, subline, role, outfit, style }, index + 1),
+      prompt: buildPrompt({ scene, headline, subline, role, outfit, style }, index + 1, posterType),
     });
   }
 
@@ -314,12 +325,13 @@ async function imageSourceToTempFile(source) {
   return writeTempBinary(buffer, ext);
 }
 
-async function uploadGeneratedImage({ recordId, imageUrl }) {
+async function uploadGeneratedImage({ recordId, imageUrl, poster = "" }) {
   if (!recordId || !imageUrl) throw new Error("recordId 和 imageUrl 必填");
   const target = resolveTableTarget();
   const tempFile = await imageSourceToTempFile(imageUrl);
   try {
-    const aiImageFieldId = await resolveAiImageFieldId(target.tableId);
+    const fieldName = poster === "data" ? DATA_IMAGE_FIELD_NAME : AI_IMAGE_FIELD_NAME;
+    const aiImageFieldId = await resolveAttachmentFieldId(target.tableId, fieldName);
     console.log("[feishu-upload] recordId=%s fieldId=%s file=%s", recordId, aiImageFieldId, tempFile.cliPath);
     const result = await runLarkCliJson([
       "base", "+record-upload-attachment",

@@ -141,28 +141,31 @@ function parseFeishuWaBatchRequest(text = "") {
   const source = String(text || "").replace(/\s+/g, "");
   if (!/(飞书|表格|多维表|base|文档)/i.test(source) || !/(WA|wa|海报)/i.test(source)) return null;
   if (!/(生成|制作|生图|批量生成|批量制作)/.test(source)) return null;
+  // 提到「数据版/数据图/数据海报」时走 1:1 WA数据图链路，回填到「WA数据版海报」列
+  const poster = /(数据版|数据图|数据海报)/.test(source) ? "data" : "";
+  const withPoster = (range) => (poster ? { ...range, poster } : range);
   const rangeMatch = source.match(/第([0-9一二两三四五六七八九十]+)(?:张|条|个)?(?:到|至|-|—)(?:第)?([0-9一二两三四五六七八九十]+)(?:张|条|个)?/);
   if (rangeMatch) {
     const start = chineseNumberToInt(rangeMatch[1]);
     const end = chineseNumberToInt(rangeMatch[2]);
-    if (start > 0 && end >= start) return { start, end, limit: end - start + 1 };
+    if (start > 0 && end >= start) return withPoster({ start, end, limit: end - start + 1 });
   }
   const singleMatch = source.match(/第([0-9一二两三四五六七八九十]+)(?:张|条|个)/);
   if (singleMatch) {
     const start = chineseNumberToInt(singleMatch[1]);
-    if (start > 0) return { start, end: start, limit: 1 };
+    if (start > 0) return withPoster({ start, end: start, limit: 1 });
   }
   const tailMatch = source.match(/(?:后|最后)([0-9一二两三四五六七八九十]+)(?:张|条|个)/);
   if (tailMatch) {
     const limit = chineseNumberToInt(tailMatch[1]);
-    if (limit > 0) return { limit, tail: true };
+    if (limit > 0) return withPoster({ limit, tail: true });
   }
   const headMatch = source.match(/前([0-9一二两三四五六七八九十]+)(?:张|条|个)/);
   if (headMatch) {
     const limit = chineseNumberToInt(headMatch[1]);
-    if (limit > 0) return { limit };
+    if (limit > 0) return withPoster({ limit });
   }
-  if (/(所有|全部|全表)/.test(source)) return { start: 1, end: 9999 };
+  if (/(所有|全部|全表)/.test(source)) return withPoster({ start: 1, end: 9999 });
   return null;
 }
 
@@ -178,12 +181,12 @@ async function fetchFeishuWaBatchPrompts(request) {
   return Array.isArray(data?.data?.items) ? data.data.items : [];
 }
 
-async function uploadFeishuWaImage({ recordId, imageUrl, name, tableId, tableName }) {
+async function uploadFeishuWaImage({ recordId, imageUrl, name, tableId, tableName, poster }) {
   if (!recordId || !imageUrl) return;
   const res = await fetch("/api/feishu-wa-batch", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ action: "upload", recordId, imageUrl, name, tableId, tableName }),
+    body: JSON.stringify({ action: "upload", recordId, imageUrl, name, tableId, tableName, poster }),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data?.error || "飞书回填失败");
@@ -1691,8 +1694,9 @@ export default function ChatPage() {
                   recordId: item.recordId,
                   tableId: item.tableId,
                   tableName: item.tableName,
+                  poster: item.poster,
                   imageUrl: result.urls[0],
-                  name: `wa-${item.index + 1}-${Date.now()}.png`,
+                  name: `wa-${item.poster === "data" ? "data-" : ""}${item.index + 1}-${Date.now()}.png`,
                 });
                 updateBatchMessage((items) => items.map((current) => (
                   current.id === `wa-${item.index}`

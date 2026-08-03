@@ -17,13 +17,16 @@ import { useCloudLocalStorageSync } from "@/lib/useCloudLocalStorageSync";
 import { getGenerationStageCopy } from "@/lib/generationStages";
 import {
   buildEzFamilyTriggerPrompt,
+  buildWaDataPosterPrompt,
   buildWaTemplatePrompt,
+  chooseWaDataPosterIpRole,
   chooseWaTemplateIpRole,
   detectEzFamilyTrigger,
   detectOneClickEntryMode,
   getLatestGeneratedImages,
   isObviousOneClickGenerateRequest,
   parseBatchWaTemplatePrompts,
+  parseWaDataPosterRequest,
   parseWaTemplateRequest,
   shouldReusePreviousGeneratedImages,
 } from "@/lib/oneClickCreationRules";
@@ -51,6 +54,8 @@ const EZLOGO_ASSET_URL = "/ip-assets/EZlogo/EZlogo.jpg";
 const WA_TEMPLATE_ASSET_URL = "/api/wa-templates";
 const WA_LOCKUP_ASSET_URL = "/api/wa-lockup";
 const WA_SMILE_LOGO_ASSET_URL = "/api/wa-smile-logo";
+const WA_DATA_TEMPLATE_ASSET_URL = "/api/wa-data-templates";
+const WA_DATA_LOCKUP_ASSET_URL = "/api/wa-data-lockup";
 const FLOATING_MAX_STORED_DATA_IMAGE_CHARS = 900_000;
 const GENERATION_STAGE_MIN_MS = 650;
 const GENERATION_SAVING_STAGE_MS = 350;
@@ -143,28 +148,31 @@ function parseFeishuWaBatchRequest(text = "") {
   const source = String(text || "").replace(/\s+/g, "");
   if (!/(飞书|表格|多维表|base|文档)/i.test(source) || !/(WA|wa|海报)/i.test(source)) return null;
   if (!/(生成|制作|生图|批量生成|批量制作)/.test(source)) return null;
+  // 提到「数据版/数据图/数据海报」时走 1:1 WA数据图链路，回填到「WA数据版海报」列
+  const poster = /(数据版|数据图|数据海报)/.test(source) ? "data" : "";
+  const withPoster = (range) => (poster ? { ...range, poster } : range);
   const rangeMatch = source.match(/第([0-9一二两三四五六七八九十]+)(?:张|条|个)?(?:到|至|-|—)(?:第)?([0-9一二两三四五六七八九十]+)(?:张|条|个)?/);
   if (rangeMatch) {
     const start = chineseNumberToInt(rangeMatch[1]);
     const end = chineseNumberToInt(rangeMatch[2]);
-    if (start > 0 && end >= start) return { start, end, limit: end - start + 1 };
+    if (start > 0 && end >= start) return withPoster({ start, end, limit: end - start + 1 });
   }
   const singleMatch = source.match(/第([0-9一二两三四五六七八九十]+)(?:张|条|个)/);
   if (singleMatch) {
     const start = chineseNumberToInt(singleMatch[1]);
-    if (start > 0) return { start, end: start, limit: 1 };
+    if (start > 0) return withPoster({ start, end: start, limit: 1 });
   }
   const tailMatch = source.match(/(?:后|最后)([0-9一二两三四五六七八九十]+)(?:张|条|个)/);
   if (tailMatch) {
     const limit = chineseNumberToInt(tailMatch[1]);
-    if (limit > 0) return { limit, tail: true };
+    if (limit > 0) return withPoster({ limit, tail: true });
   }
   const headMatch = source.match(/前([0-9一二两三四五六七八九十]+)(?:张|条|个)/);
   if (headMatch) {
     const limit = chineseNumberToInt(headMatch[1]);
-    if (limit > 0) return { limit };
+    if (limit > 0) return withPoster({ limit });
   }
-  if (/(所有|全部|全表)/.test(source)) return { start: 1, end: 9999 };
+  if (/(所有|全部|全表)/.test(source)) return withPoster({ start: 1, end: 9999 });
   return null;
 }
 
@@ -180,12 +188,12 @@ async function fetchFeishuWaBatchPrompts(request) {
   return Array.isArray(data?.data?.items) ? data.data.items : [];
 }
 
-async function uploadFeishuWaImage({ recordId, imageUrl, name, tableId, tableName }) {
+async function uploadFeishuWaImage({ recordId, imageUrl, name, tableId, tableName, poster }) {
   if (!recordId || !imageUrl) return;
   const res = await fetch("/api/feishu-wa-batch", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ action: "upload", recordId, imageUrl, name, tableId, tableName }),
+    body: JSON.stringify({ action: "upload", recordId, imageUrl, name, tableId, tableName, poster }),
   });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data?.error || "飞书回填失败");
@@ -1835,8 +1843,9 @@ export default function HomePage() {
                   recordId: item.recordId,
                   tableId: item.tableId,
                   tableName: item.tableName,
+                  poster: item.poster,
                   imageUrl: result.urls[0],
-                  name: `wa-${item.index + 1}-${Date.now()}.png`,
+                  name: `wa-${item.poster === "data" ? "data-" : ""}${item.index + 1}-${Date.now()}.png`,
                 });
                 updateBatchMessage((items) => items.map((current) => (
                   current.id === `wa-${item.index}`
@@ -1878,18 +1887,19 @@ export default function HomePage() {
     // ── WA 模板 / EZfamily / EZlogo 关键词自动触发参考图 ─────────────
     let autoRefImages = [];
     let apiPromptText = prompt; // 对 API 使用的 prompt（场景二会被增强）
-    const waTemplateRequest = parseWaTemplateRequest(prompt);
+    const waDataPosterRequest = parseWaDataPosterRequest(prompt);
+    const waTemplateRequest = waDataPosterRequest ? null : parseWaTemplateRequest(prompt);
     const ezFamilyRole = detectEzFamilyTrigger(prompt);
     const hasEzLogoTrigger = /ezlogo/i.test(prompt);
     const ipSceneRequest = detectIpSceneExtension(prompt, {
       hasUserReferenceImages: activeRefImages.length > 0,
-      isWaTemplate: Boolean(waTemplateRequest),
+      isWaTemplate: Boolean(waTemplateRequest || waDataPosterRequest),
     });
     const inheritedImages = shouldReusePreviousGeneratedImages(prompt, activeRefImages)
       ? getLatestGeneratedImages(floatingMessages)
       : [];
     const submittedAttachments = [...activeAttachments];
-    const hasAutoReferenceIntent = Boolean(waTemplateRequest || ipSceneRequest || ezFamilyRole || hasEzLogoTrigger);
+    const hasAutoReferenceIntent = Boolean(waDataPosterRequest || waTemplateRequest || ipSceneRequest || ezFamilyRole || hasEzLogoTrigger);
     const displayRefImages = hasAutoReferenceIntent ? activeRefImages : [...activeRefImages, ...inheritedImages];
     const nextUserMessage = createFloatingMessage("user", prompt, {
       refImages: displayRefImages,
@@ -1915,7 +1925,22 @@ export default function HomePage() {
     }
     setFloatingOutputError("");
 
-    if (waTemplateRequest) {
+    let useWaDataPosterMask = false;
+    if (waDataPosterRequest) {
+      try {
+        const templateImage = await fetchImageAsDataUrl(`${WA_DATA_TEMPLATE_ASSET_URL}?random=1`);
+        if (templateImage) autoRefImages.push(templateImage);
+        const role = ezFamilyRole || chooseWaDataPosterIpRole(waDataPosterRequest);
+        const roleReferenceImages = await fetchEzFamilyReferenceImages(role);
+        autoRefImages.push(...roleReferenceImages);
+        const lockupImage = await fetchImageAsDataUrl(WA_DATA_LOCKUP_ASSET_URL);
+        if (lockupImage) autoRefImages.push(lockupImage);
+        // WA数据海报：所有角色都发两次参考图以加强身份一致性
+        autoRefImages.push(...roleReferenceImages);
+        apiPromptText = buildWaDataPosterPrompt(waDataPosterRequest, role);
+        useWaDataPosterMask = true;
+      } catch { /* 静默跳过 */ }
+    } else if (waTemplateRequest) {
       try {
         const templateImage = await fetchImageAsDataUrl(`${WA_TEMPLATE_ASSET_URL}?random=1`);
         if (templateImage) autoRefImages.push(templateImage);
@@ -1971,7 +1996,7 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
     // WA 模板：系统资产必须作为第一参考图；EZlogo 有用户图时让用户图优先引导风格/版式
     // 无触发：正常使用 floatingRefImages
     const submittedImages = autoRefImages.length > 0
-      ? (waTemplateRequest
+      ? ((waTemplateRequest || waDataPosterRequest)
         ? [...autoRefImages, ...activeRefImages, ...inheritedImages]
         : hasEzLogoTrigger
           ? (activeRefImages.length > 0
@@ -2074,6 +2099,7 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
             image_size: imageSize,
             num: 1,
             service_tier: isAgentMode ? agentParams.service_tier : FLOATING_DEFAULT_SERVICE_TIER,
+            ...(useWaDataPosterMask ? { waDataPosterMask: true } : {}),
             clientRequestId: activeClientRequestId,
           }
         : {

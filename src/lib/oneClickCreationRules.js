@@ -655,6 +655,14 @@ function normalizeWaEmphasisText(text = "") {
   };
 }
 
+// “s.d.”（sampai dengan，印尼语“最高可达”）是限定词，出现时要求排版上弱化处理
+function buildWaSdDeEmphasisInstruction(headline = "", subline = "") {
+  const hasSd = /(^|[\s(（>])s\.\s*d\.?(?=[\s.)）]|$)/i.test(`${headline} ${subline}`);
+  if (!hasSd) return "";
+  return `- 文案里的 “s.d.” 是印尼语 “sampai dengan”（最高可达）的缩写限定词，属于需要弱化的次要信息：它的字号必须明显小于同一行的金额/数字（约为金额字号的 40%-60%），字重更细、颜色更低调，不要加粗、不要高亮、不要用强调色或标签底板；视觉重点放在金额/数字本身。
+- “s.d.” 必须保留且拼写原样（小写 s.d.，两个句点都要有），保持清晰可读；禁止删除、改写、放大它，或把它做成与金额同等的视觉强度。`;
+}
+
 export function buildWaTemplatePrompt({ headline = "", subline = "", outfitStyle = "", visualStyle = "" } = {}, role = "Girl") {
   const headlineCopy = normalizeWaEmphasisText(headline);
   const sublineCopy = normalizeWaEmphasisText(subline);
@@ -664,6 +672,7 @@ export function buildWaTemplatePrompt({ headline = "", subline = "", outfitStyle
   const emphasisInstruction = emphasisTerms.length > 0
     ? `- 强调标记只用于设计理解，不属于最终文案。最终画面里禁止出现【】、[]、「」、《》这些括号符号；请把 ${emphasisTerms.map((item) => `“${item}”`).join("、")} 作为重点词，用更醒目的字号、字重、品牌绿色/金色高亮、标签底板或局部描边强调。`
     : "- 如果主标题或副标题里出现【...】、[...]、「...」、《...》，这些括号只表示括号内文案需要强调；最终画面必须去掉括号符号，只保留括号内文字并高亮强调。";
+  const sdInstruction = buildWaSdDeEmphasisInstruction(displayHeadline, displaySubline);
   const isRealisticRole = String(role || "").includes("真人版");
   const baseRole = String(role || "").replace("真人版", "") || role;
   const isRobotRole = String(baseRole || "").toLowerCase() === "robot";
@@ -791,7 +800,7 @@ export function buildWaTemplatePrompt({ headline = "", subline = "", outfitStyle
 - 主标题必须放在第一张参考模板的主标题原始区域内，继承原始左边距、上边距和基线位置；不要整体下移。
 - 主标题垂直位置最多只能相对参考模板微调约 3%，优先保持偏上且稳定的标题重心。
 - 主标题必须是最大字号和最高视觉层级。
-${emphasisInstruction}
+${emphasisInstruction}${sdInstruction ? `\n${sdInstruction}` : ""}
 - 副标题必须放在主标题下方的副标题原始区域内，不能侵入主标题区域。
 - 副标题字号必须明显小于主标题，建议为主标题字号的 35%-55%，不要接近主标题大小。
 - 副标题行高和字重保持次级信息，不要用过粗或过大的样式。
@@ -876,6 +885,7 @@ export function buildWaDataPosterPrompt({ headline = "", subline = "", outfitSty
   const emphasisInstruction = emphasisTerms.length > 0
     ? `- 强调标记只用于设计理解，不属于最终文案。最终画面里禁止出现【】、[]、「」、《》这些括号符号；请把 ${emphasisTerms.map((item) => `“${item}”`).join("、")} 作为重点词，在上半部分文案区用更醒目的字号、字重、品牌绿色/金色高亮、标签底板或局部描边强调。`
     : "- 如果主标题或副标题里出现【...】、[...]、「」、《》等强调标记，最终画面必须去掉括号符号，只保留括号内文字并高亮强调。";
+  const sdInstruction = buildWaSdDeEmphasisInstruction(displayHeadline, displaySubline);
   const isRealisticRole = String(role || "").includes("真人版");
   const baseRole = String(role || "").replace("真人版", "") || role;
   const isRobotRole = String(baseRole || "").toLowerCase() === "robot";
@@ -951,7 +961,7 @@ export function buildWaDataPosterPrompt({ headline = "", subline = "", outfitSty
 
 文案排版要求：
 - 主标题必须是上半部分最大字号和最高视觉层级。
-${emphasisInstruction}
+${emphasisInstruction}${sdInstruction ? `\n${sdInstruction}` : ""}
 - 副标题必须明显小于主标题，建议为主标题字号的 35%-55%，不要接近主标题大小。
 - 主标题和副标题必须保持高对比度和高可读性，不要被人物、道具、光效或背景纹理遮挡。
 - 文案组不要下沉到黑色数据板块附近；文案与黑色数据板块顶部必须保留清晰安全距离。
