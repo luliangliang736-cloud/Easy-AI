@@ -1124,6 +1124,9 @@ export default function ChatPage() {
   const [isDragging, setIsDragging] = useState(false);
   const dragCounterRef = useRef(0);
   const abortControllerRef = useRef(null);
+  const chatAbortControllersRef = useRef(new Set());
+  const activeGenerationCountRef = useRef(0);
+  const generationEpochRef = useRef(0);
   const batchWaStoppedRef = useRef(false);
   const batchWaAbortControllersRef = useRef(new Set());
   const feishuWaTaskPollingRef = useRef(false);
@@ -1138,6 +1141,24 @@ export default function ChatPage() {
   const isLightTheme = theme === "light";
   const generationStageCopy = getGenerationStageCopy(generationStage);
   const activeGenerationStageIndex = Math.max(0, GENERATION_STAGE_ORDER.indexOf(generationStage));
+
+  // 一键创作支持并发：isGenerating 由活跃任务计数维护，任务开始/结束时增减；
+  // epoch 用于「停止全部」后让旧任务的收尾不再影响计数。
+  const beginGeneration = () => {
+    activeGenerationCountRef.current += 1;
+    setIsGenerating(true);
+    return generationEpochRef.current;
+  };
+  const endGeneration = (epoch) => {
+    if (epoch !== generationEpochRef.current) return;
+    activeGenerationCountRef.current = Math.max(0, activeGenerationCountRef.current - 1);
+    if (activeGenerationCountRef.current === 0) setIsGenerating(false);
+  };
+  const resetGenerationState = () => {
+    generationEpochRef.current += 1;
+    activeGenerationCountRef.current = 0;
+    setIsGenerating(false);
+  };
   useAuthSessionGuard();
   useCloudLocalStorageSync(CHAT_CLOUD_STATE_KEYS, { overwriteOnFirstRestore: true });
 
@@ -1417,7 +1438,7 @@ export default function ChatPage() {
     batchWaStoppedRef.current = true;
     batchWaAbortControllersRef.current.forEach((controller) => controller.abort());
     batchWaAbortControllersRef.current.clear();
-    setIsGenerating(false);
+    // isGenerating 交给批量流程自身收尾（endGeneration），避免误清并发中的其它任务
     setGenerationStage("understanding");
     setMessages((prev) => prev.map((message) => {
       if (!Array.isArray(message.batchWaItems)) return message;
@@ -1552,20 +1573,18 @@ export default function ChatPage() {
   const handleSubmit = async (override = null) => {
     const activePrompt = override?.prompt ?? prompt;
     const activeRefImages = Array.isArray(override?.refImages) ? override.refImages : refImages;
-    const allowConcurrent = Boolean(override?.allowConcurrent);
     const collectResult = Boolean(override?.collectResult);
     const suppressUserMessage = Boolean(override?.suppressUserMessage);
     const hideGenerationCard = Boolean(override?.hideGenerationCard);
     const text = String(activePrompt || "").trim();
     if (!override?.skipBatch && !collectResult && detectFeishuWaCommand(text)) {
       if (!text) return undefined;
-      if (!allowConcurrent && isGenerating) return { aborted: true };
       const userMsg = createMessage("user", text);
       setMessages((prev) => [...prev, userMsg]);
       setPrompt("");
       setRefImages([]);
       setGenerationStage("understanding");
-      setIsGenerating(true);
+      const commandEpoch = beginGeneration();
       try {
         const result = await runFeishuWaCommand(text);
         setMessages((prev) => [...prev, createMessage("assistant", result.reply, {
@@ -1575,7 +1594,7 @@ export default function ChatPage() {
       } catch (error) {
         setMessages((prev) => [...prev, createMessage("assistant", error?.message || "飞书表格指令处理失败", { modelLabel: "飞书表格助手" })]);
       } finally {
-        setIsGenerating(false);
+        endGeneration(commandEpoch);
         setGenerationStage("understanding");
       }
       return undefined;
@@ -1583,6 +1602,7 @@ export default function ChatPage() {
     let batchWaPrompts = [];
     let feishuBatchRequest = null;
     let pendingBatchUserMessage = null;
+    let batchEpoch = null;
     if (!override?.skipBatch) {
       feishuBatchRequest = parseFeishuWaBatchRequest(text);
       if (feishuBatchRequest && !collectResult) {
@@ -1591,7 +1611,7 @@ export default function ChatPage() {
         setPrompt("");
         setRefImages([]);
         setGenerationStage("preparing");
-        setIsGenerating(true);
+        batchEpoch = beginGeneration();
       }
       try {
         batchWaPrompts = feishuBatchRequest
@@ -1607,7 +1627,10 @@ export default function ChatPage() {
           })]);
           setPrompt("");
           setRefImages([]);
-          setIsGenerating(false);
+          if (batchEpoch !== null) {
+            endGeneration(batchEpoch);
+            batchEpoch = null;
+          }
           setGenerationStage("understanding");
         }
         return collectResult ? { urls: [], error: error?.message || "读取飞书 WA 表格失败" } : undefined;
@@ -1638,7 +1661,7 @@ export default function ChatPage() {
         setRefImages([]);
       }
       setGenerationStage("generating");
-      setIsGenerating(true);
+      if (batchEpoch === null) batchEpoch = beginGeneration();
 
       const updateBatchMessage = (updater) => {
         setMessages((prev) => prev.map((message) => {
@@ -1727,12 +1750,11 @@ export default function ChatPage() {
           ? { ...item, status: "stopped", error: "已停止" }
           : item
       )));
-      setIsGenerating(false);
+      if (batchEpoch !== null) endGeneration(batchEpoch);
       setGenerationStage("understanding");
       return;
     }
     if (!text && activeRefImages.length === 0) return collectResult ? { urls: [] } : undefined;
-    if (!allowConcurrent && isGenerating) return { aborted: true };
     const qualityFixPrompt = buildWaQualityFixPrompt(override?.qualityCheck);
 
     // ── WA 数据图 / WA 模板 / EZfamily / EZlogo 关键词自动触发参考图 ─────────────
@@ -1765,9 +1787,10 @@ export default function ChatPage() {
       setPrompt("");
       setRefImages([]);
     }
+    let singleEpoch = null;
     if (!hideGenerationCard) {
       setGenerationStage("understanding");
-      setIsGenerating(true);
+      singleEpoch = beginGeneration();
     }
 
     let useWaDataPosterMask = false;
@@ -1858,6 +1881,7 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
       batchWaAbortControllersRef.current.add(abortController);
     } else {
       abortControllerRef.current = abortController;
+      chatAbortControllersRef.current.add(abortController);
     }
 
     try {
@@ -2035,11 +2059,14 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
         batchWaAbortControllersRef.current.delete(abortController);
       }
       if (!hideGenerationCard) {
-        setIsGenerating(false);
+        if (singleEpoch !== null) endGeneration(singleEpoch);
         setGenerationStage("understanding");
       }
       if (!collectResult) {
-        abortControllerRef.current = null;
+        chatAbortControllersRef.current.delete(abortController);
+        if (abortControllerRef.current === abortController) {
+          abortControllerRef.current = null;
+        }
       }
     }
   };
@@ -2088,7 +2115,6 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
   }, [isGenerating]);
 
   const handleRegenerateMessage = (messageId) => {
-    if (isGenerating) return;
     const messageIndex = messages.findIndex((item) => item.id === messageId);
     if (messageIndex <= 0) return;
     const targetMessage = messages[messageIndex];
@@ -2102,12 +2128,13 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
   };
 
   const handleCancel = () => {
-    abortControllerRef.current?.abort();
+    chatAbortControllersRef.current.forEach((controller) => controller.abort());
+    chatAbortControllersRef.current.clear();
     batchWaAbortControllersRef.current.forEach((controller) => controller.abort());
     batchWaAbortControllersRef.current.clear();
     batchWaStoppedRef.current = true;
     abortControllerRef.current = null;
-    setIsGenerating(false);
+    resetGenerationState();
     setGenerationStage("understanding");
   };
 
@@ -2459,7 +2486,6 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
                               <button
                                 type="button"
                                 onClick={() => handleRegenerateMessage(message.id)}
-                                disabled={isGenerating}
                                 className={`inline-flex items-center gap-1.5 rounded-lg px-2 py-1 text-[11px] transition-all disabled:cursor-not-allowed disabled:opacity-40 ${
                                   isLightTheme
                                     ? "text-black/35 hover:bg-black/[0.04] hover:text-black/70"
@@ -2690,10 +2716,10 @@ ${buildEzLogoReferenceInstructions(activeRefImages.length > 0)}
                 className={`flex-1 min-h-[28px] max-h-40 bg-transparent text-[15px] outline-none resize-none leading-7 overflow-y-hidden py-0.5 ${isLightTheme ? "text-[#111] placeholder:text-black/28" : "text-white placeholder:text-white/28"}`}
               />
 
-              <button type="button" onClick={() => handleSubmit()} disabled={!canSubmit || isGenerating}
-                className={`shrink-0 w-8 h-8 rounded-full flex items-center justify-center transition-all self-end mb-0.5 ${!canSubmit || isGenerating ? `${isLightTheme ? "bg-black/[0.05] text-black/25" : "bg-white/[0.05] text-white/25"} cursor-not-allowed` : "bg-[#0d0d0d] text-white hover:bg-black/80 dark:bg-white dark:text-black dark:hover:bg-white/90"}`}
+              <button type="button" onClick={() => handleSubmit()} disabled={!canSubmit}
+                className={`shrink-0 w-8 h-8 rounded-full flex items-center justify-center transition-all self-end mb-0.5 ${!canSubmit ? `${isLightTheme ? "bg-black/[0.05] text-black/25" : "bg-white/[0.05] text-white/25"} cursor-not-allowed` : "bg-[#0d0d0d] text-white hover:bg-black/80 dark:bg-white dark:text-black dark:hover:bg-white/90"}`}
               >
-                {isGenerating ? <Loader2 size={15} className="animate-spin" /> : <Send size={14} />}
+                {!canSubmit && isGenerating ? <Loader2 size={15} className="animate-spin" /> : <Send size={14} />}
               </button>
             </div>
 
