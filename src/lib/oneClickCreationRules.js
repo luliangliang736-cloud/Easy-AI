@@ -655,6 +655,11 @@ function normalizeWaEmphasisText(text = "") {
   };
 }
 
+// 用户在风格里明确要求文案居中时，居中升级为一等排版指令（默认版式继承模板左对齐，会压制居中要求）
+function wantsWaCenteredCopy(visualStyle = "") {
+  return /(居中|置中|center)/i.test(String(visualStyle || ""));
+}
+
 // “s.d.”（sampai dengan，印尼语“最高可达”）是限定词，出现时要求排版上弱化处理
 function buildWaSdDeEmphasisInstruction(headline = "", subline = "") {
   const hasSd = /(^|[\s(（>])s\.\s*d\.?(?=[\s.)）]|$)/i.test(`${headline} ${subline}`);
@@ -674,6 +679,7 @@ export function buildWaTemplatePrompt({ headline = "", subline = "", outfitStyle
     ? `- 强调标记只用于设计理解，不属于最终文案。最终画面里禁止出现【】、[]、「」、《》这些括号符号；请把 ${emphasisTerms.map((item) => `“${item}”`).join("、")} 作为重点词，用更醒目的字号、字重、品牌绿色/金色高亮、标签底板或局部描边强调。`
     : "- 如果主标题或副标题里出现【...】、[...]、「...」、《...》，这些括号只表示括号内文案需要强调；最终画面必须去掉括号符号，只保留括号内文字并高亮强调。";
   const sdInstruction = buildWaSdDeEmphasisInstruction(displayHeadline, displaySubline);
+  const centeredCopy = wantsWaCenteredCopy(visualStyle);
   const isRealisticRole = String(role || "").includes("真人版");
   const baseRole = String(role || "").replace("真人版", "") || role;
   const isRobotRole = String(baseRole || "").toLowerCase() === "robot";
@@ -798,8 +804,12 @@ export function buildWaTemplatePrompt({ headline = "", subline = "", outfitStyle
 副标题：${displaySubline}
 
 文案排版要求：
-- 主标题必须放在第一张参考模板的主标题原始区域内，继承原始左边距、上边距和基线位置；不要整体下移。
-- 主标题垂直位置最多只能相对参考模板微调约 3%，优先保持偏上且稳定的标题重心。
+${centeredCopy
+    ? `- 用户明确要求文案居中对齐，这是本次最高优先级的排版要求：主标题和副标题的每一行文字都必须水平居中（center alignment），整个主副文案组作为一个整体在左侧文案区/文案卡片内水平居中排布；本条优先于“继承参考模板左边距/左对齐”的默认规则。
+- 居中只改变水平对齐方式：文案组仍保持在参考模板原文案区域内，保持原上边距和偏上重心（垂直位置最多微调约 3%），不得侵入右侧人物区、不得遮挡 Logo + OJK。
+- 如果文案放在白色卡片/底板上，卡片内的文字必须居中对齐，卡片本身也在其所在区域内居中；禁止出现文字整体贴左、右侧留大片空白的排版。`
+    : `- 主标题必须放在第一张参考模板的主标题原始区域内，继承原始左边距、上边距和基线位置；不要整体下移。
+- 主标题垂直位置最多只能相对参考模板微调约 3%，优先保持偏上且稳定的标题重心。`}
 - 主标题必须是最大字号和最高视觉层级。
 ${emphasisInstruction}${sdInstruction ? `\n${sdInstruction}` : ""}
 - 副标题必须放在主标题下方的副标题原始区域内，不能侵入主标题区域。
@@ -887,6 +897,7 @@ export function buildWaDataPosterPrompt({ headline = "", subline = "", outfitSty
     ? `- 强调标记只用于设计理解，不属于最终文案。最终画面里禁止出现【】、[]、「」、《》这些括号符号；请把 ${emphasisTerms.map((item) => `“${item}”`).join("、")} 作为重点词，在上半部分文案区用更醒目的字号、字重、品牌绿色/金色高亮、标签底板或局部描边强调。`
     : "- 如果主标题或副标题里出现【...】、[...]、「」、《》等强调标记，最终画面必须去掉括号符号，只保留括号内文字并高亮强调。";
   const sdInstruction = buildWaSdDeEmphasisInstruction(displayHeadline, displaySubline);
+  const centeredCopy = wantsWaCenteredCopy(visualStyle);
   const isRealisticRole = String(role || "").includes("真人版");
   const baseRole = String(role || "").replace("真人版", "") || role;
   const isRobotRole = String(baseRole || "").toLowerCase() === "robot";
@@ -962,7 +973,7 @@ export function buildWaDataPosterPrompt({ headline = "", subline = "", outfitSty
 
 文案排版要求：
 - 主标题必须是上半部分最大字号和最高视觉层级。
-${emphasisInstruction}${sdInstruction ? `\n${sdInstruction}` : ""}
+${centeredCopy ? `- 用户明确要求文案居中对齐，这是本次最高优先级的排版要求：主标题和副标题的每一行文字都必须水平居中（center alignment），整个文案组作为一个整体在上半部分文案区内水平居中排布；本条优先于沿用参考模板默认对齐方式的规则。\n` : ""}${emphasisInstruction}${sdInstruction ? `\n${sdInstruction}` : ""}
 - 副标题必须明显小于主标题，建议为主标题字号的 35%-55%，不要接近主标题大小。
 - 主标题和副标题必须保持高对比度和高可读性，不要被人物、道具、光效或背景纹理遮挡。
 - 文案组不要下沉到黑色数据板块附近；文案与黑色数据板块顶部必须保留清晰安全距离。
