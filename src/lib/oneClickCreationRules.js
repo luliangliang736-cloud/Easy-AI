@@ -660,13 +660,21 @@ function wantsWaCenteredCopy(visualStyle = "") {
   return /(居中|置中|center)/i.test(String(visualStyle || ""));
 }
 
-// “s.d.”（sampai dengan，印尼语“最高可达”）是限定词，出现时要求排版上弱化处理
+// “s.d.”（sampai dengan，最高可达）、“mulai dari / dari”（起/低至）是印尼语限定词，出现时要求排版上弱化处理
 function buildWaSdDeEmphasisInstruction(headline = "", subline = "") {
-  const hasSd = /(^|[\s(（>])s\.\s*d\.?(?=[\s.)）]|$)/i.test(`${headline} ${subline}`);
-  if (!hasSd) return "";
-  return `- 文案里的 “s.d.” 是印尼语 “sampai dengan”（最高可达）的缩写限定词，属于需要弱化的次要信息：它的字号必须明显小于同一行的金额/数字（约为金额字号的 40%-60%），字重更细、颜色更低调，不要加粗、不要高亮、不要用强调色或标签底板；视觉重点放在金额/数字本身。
-- “s.d.” 必须和它后面的金额/数字排在同一行、紧挨在金额前面，作为一个整体短语（例如 “s.d. 80 JUTA”）；禁止把 “s.d.” 和金额拆成两行。如果标题需要换行，只能在 “s.d.” 之前断行，让 “s.d. + 金额” 完整地留在同一行。
-- “s.d.” 必须保留且拼写原样（小写 s.d.，两个句点都要有），保持清晰可读；禁止删除、改写、放大它，或把它做成与金额同等的视觉强度。`;
+  const text = `${headline} ${subline}`;
+  const found = [];
+  if (/(^|[\s(（>])s\.\s*d\.?(?=[\s.)）]|$)/i.test(text)) found.push("s.d.");
+  if (/\bmulai\s+dari\b/i.test(text)) {
+    found.push("mulai dari");
+  } else if (/\bdari\b/i.test(text)) {
+    found.push("dari");
+  }
+  if (found.length === 0) return "";
+  const termList = found.map((t) => `“${t}”`).join("、");
+  return `- 文案里的 ${termList} 是印尼语限定词（“s.d.” = sampai dengan，最高可达；“mulai dari / dari” = 起/低至），属于需要弱化的次要信息：它的字号必须明显小于同一行的金额/数字（约为金额字号的 40%-60%），字重更细、颜色更低调，不要加粗、不要高亮、不要用强调色或标签底板；视觉重点放在金额/数字本身。
+- 限定词必须和它后面的金额/数字排在同一行、紧挨在金额前面，作为一个整体短语（例如 “s.d. 80 JUTA”、“mulai dari 0.06%”）；禁止把限定词和金额拆成两行。如果标题需要换行，只能在限定词之前断行，让 “限定词 + 金额” 完整地留在同一行。
+- 限定词必须保留且拼写原样（例如 s.d. 保持小写且两个句点都要有），保持清晰可读；禁止删除、改写、放大它，或把它做成与金额同等的视觉强度。`;
 }
 
 export function buildWaTemplatePrompt({ headline = "", subline = "", outfitStyle = "", visualStyle = "" } = {}, role = "Girl") {
