@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { flushSync } from "react-dom";
 import { useToast } from "@/components/Toast";
+import { downloadMediaFile } from "@/lib/downloadMedia";
 import { useCanvasT } from "@/lib/canvasI18n";
 import Toolbar from "@/components/Toolbar";
 import MaterialPanel from "@/components/MaterialPanel";
@@ -1947,18 +1948,13 @@ export default function Canvas({
         break;
       case "export": {
         try {
-          const res = await fetch(img.image_url);
-          const blob = await res.blob();
-          const url = URL.createObjectURL(blob);
-          const a = document.createElement("a");
-          a.href = url;
           const isVideo = img.media_type === "video" || img.mediaType === "video";
           const isSvgItem = img.media_type === "svg";
-          a.download = isSvgItem ? `vector-${Date.now()}.svg` : `${isVideo ? "video" : "image"}-${Date.now()}.${isVideo ? "mp4" : "png"}`;
-          a.click();
-          URL.revokeObjectURL(url);
+          await downloadMediaFile(img.image_url, { isVideo, isSvg: isSvgItem });
           toast("已导出", "success", 1200);
-        } catch { window.open(img.image_url, "_blank"); }
+        } catch {
+          toast("导出失败", "error", 1800);
+        }
         break;
       }
       case "lock":

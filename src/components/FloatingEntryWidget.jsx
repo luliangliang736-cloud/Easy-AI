@@ -3,6 +3,7 @@
 import Image from "next/image";
 import { useEffect, useMemo, useRef, useState } from "react";
 import BrandLogo from "@/components/BrandLogo";
+import { downloadMediaFile } from "@/lib/downloadMedia";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
@@ -1307,25 +1308,9 @@ export default function FloatingEntryWidget({
     if (!imageSrc) return;
 
     try {
-      const response = await fetch(imageSrc);
-      const blob = await response.blob();
-      const blobUrl = URL.createObjectURL(blob);
-      const anchor = document.createElement("a");
-      anchor.href = blobUrl;
-      anchor.download = `easy-ai-${Date.now()}-${index + 1}.png`;
-      document.body.appendChild(anchor);
-      anchor.click();
-      anchor.remove();
-      window.setTimeout(() => URL.revokeObjectURL(blobUrl), 1000);
+      await downloadMediaFile(imageSrc, { filename: `easy-ai-${Date.now()}-${index + 1}.png` });
     } catch {
-      const anchor = document.createElement("a");
-      anchor.href = imageSrc;
-      anchor.download = `easy-ai-${Date.now()}-${index + 1}.png`;
-      anchor.target = "_blank";
-      anchor.rel = "noopener noreferrer";
-      document.body.appendChild(anchor);
-      anchor.click();
-      anchor.remove();
+      window.open(imageSrc, "_blank", "noopener,noreferrer");
     }
   };
 

@@ -8,6 +8,7 @@ import TextEditBlocksPanel from "@/components/TextEditBlocksPanel";
 import { ToastProvider, useToast } from "@/components/Toast";
 import BrandLogo from "@/components/BrandLogo";
 import { compressImage } from "@/lib/imageUtils";
+import { downloadMediaFile } from "@/lib/downloadMedia";
 import { useHistory } from "@/lib/useHistory";
 import { useTheme } from "@/lib/useTheme";
 import { useAuthSessionGuard } from "@/lib/useAuthSessionGuard";
@@ -4079,17 +4080,10 @@ function HomeInner() {
     if (!url) return;
     const isVideo = msg.mediaType === "video" || msg.media_type === "video";
     try {
-      const res = await fetch(url);
-      const blob = await res.blob();
-      const blobUrl = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = blobUrl;
-      a.download = `${isVideo ? "video" : "image"}-${Date.now()}.${isVideo ? "mp4" : "png"}`;
-      a.click();
-      URL.revokeObjectURL(blobUrl);
+      await downloadMediaFile(url, { isVideo });
       toast("已下载", "success", 1200);
     } catch {
-      window.open(url, "_blank");
+      toast("下载失败", "error", 1800);
     }
   }, [toast]);
 

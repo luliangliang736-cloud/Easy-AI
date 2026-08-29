@@ -24,6 +24,7 @@ import {
   X,
 } from "lucide-react";
 import { compressImage } from "@/lib/imageUtils";
+import { downloadMediaFile } from "@/lib/downloadMedia";
 import { useAuthSessionGuard } from "@/lib/useAuthSessionGuard";
 import { useCloudLocalStorageSync } from "@/lib/useCloudLocalStorageSync";
 import { CLOUD_STATE_DELETIONS_KEY, recordCloudDeletions } from "@/lib/cloudStateDeletions";
@@ -1295,17 +1296,9 @@ export default function ChatPage() {
     const imageSrc = resolveImageSrc(src);
     if (!imageSrc) return;
     try {
-      const res = await fetch(imageSrc);
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url; a.download = `easy-ai-${Date.now()}-${index + 1}.png`;
-      document.body.appendChild(a); a.click(); a.remove();
-      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      await downloadMediaFile(imageSrc, { filename: `easy-ai-${Date.now()}-${index + 1}.png` });
     } catch {
-      const a = document.createElement("a");
-      a.href = imageSrc; a.download = `easy-ai-${Date.now()}-${index + 1}.png`;
-      a.target = "_blank"; document.body.appendChild(a); a.click(); a.remove();
+      window.open(imageSrc, "_blank", "noopener,noreferrer");
     }
   };
 
