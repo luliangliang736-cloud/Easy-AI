@@ -28,7 +28,7 @@ export const HOME_COPY = {
     },
     login: {
       title: "内测登录",
-      subtitle: "登录后可使用创作功能",
+      subtitle: "仅限公司邮箱登录后使用创作功能",
       closeAria: "关闭登录",
       emailLabel: "公司邮箱",
       emailPlaceholder: "请输入公司邮箱",
@@ -195,7 +195,7 @@ export const HOME_COPY = {
     },
     login: {
       title: "Internal Beta Login",
-      subtitle: "Log in to use creation features",
+      subtitle: "Company email required to use creation features",
       closeAria: "Close login",
       emailLabel: "Company Email",
       emailPlaceholder: "Enter your company email",

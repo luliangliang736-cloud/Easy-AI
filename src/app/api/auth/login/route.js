@@ -4,6 +4,7 @@ import {
   AUTH_SESSION_MAX_AGE_SECONDS,
   createSessionId,
   createSessionValue,
+  isCompanyEmailAllowed,
   isSharedPasswordValid,
   normalizeAuthEmail,
 } from "@/lib/authSession";
@@ -14,6 +15,10 @@ export async function POST(request) {
     const body = await request.json();
     const email = normalizeAuthEmail(body?.email || "");
     const password = String(body?.password || "");
+
+    if (!isCompanyEmailAllowed(email)) {
+      return NextResponse.json({ error: "仅限公司邮箱登录" }, { status: 403 });
+    }
 
     if (!isSharedPasswordValid(email, password)) {
       return NextResponse.json({ error: "邮箱或密码不正确" }, { status: 401 });

@@ -10,6 +10,31 @@ function getAuthSecret() {
   return "";
 }
 
+export const COMPANY_EMAIL_DOMAIN = "fintopia.tech";
+
+const BLOCKED_PERSONAL_EMAIL_DOMAINS = new Set([
+  "gmail.com",
+  "googlemail.com",
+  "qq.com",
+  "163.com",
+  "126.com",
+  "yeah.net",
+  "sina.com",
+  "sina.cn",
+  "foxmail.com",
+  "outlook.com",
+  "hotmail.com",
+  "live.com",
+  "msn.com",
+  "yahoo.com",
+  "icloud.com",
+  "me.com",
+  "proton.me",
+  "protonmail.com",
+  "139.com",
+  "sohu.com",
+]);
+
 export function normalizeAuthEmail(email = "") {
   return String(email).trim().toLowerCase();
 }
@@ -47,15 +72,38 @@ async function sign(value) {
   return bytesToBase64Url(new Uint8Array(signature));
 }
 
+function normalizeEmailDomain(value = "") {
+  return String(value || "").trim().toLowerCase().replace(/^@/, "");
+}
+
+function isBlockedPersonalEmailDomain(domain = "") {
+  return BLOCKED_PERSONAL_EMAIL_DOMAINS.has(normalizeEmailDomain(domain));
+}
+
+function isSafeExtraCompanyDomain(domain = "") {
+  const normalized = normalizeEmailDomain(domain);
+  if (!normalized || normalized === COMPANY_EMAIL_DOMAIN) return false;
+  if (isBlockedPersonalEmailDomain(normalized)) return false;
+  return /^[a-z0-9-]+(?:\.[a-z0-9-]+)+$/.test(normalized);
+}
+
 export function getAllowedEmailDomains() {
-  const configured = splitCsv(process.env.AUTH_ALLOWED_EMAIL_DOMAINS || process.env.AUTH_ALLOWED_EMAIL_DOMAIN);
-  return configured.length > 0 ? configured.map((domain) => domain.replace(/^@/, "")) : ["fintopia.tech"];
+  // 生产环境只允许公司域名，避免环境变量误把 gmail 等个人邮箱加进来。
+  if (process.env.NODE_ENV === "production") {
+    return [COMPANY_EMAIL_DOMAIN];
+  }
+
+  const extras = splitCsv(process.env.AUTH_ALLOWED_EMAIL_DOMAINS || process.env.AUTH_ALLOWED_EMAIL_DOMAIN)
+    .map((domain) => normalizeEmailDomain(domain))
+    .filter((domain) => isSafeExtraCompanyDomain(domain));
+  return [COMPANY_EMAIL_DOMAIN, ...extras];
 }
 
 export function isCompanyEmailAllowed(rawEmail = "") {
   const email = normalizeAuthEmail(rawEmail);
-  if (!email || !email.includes("@")) return false;
-  const domain = email.split("@").pop();
+  if (!email || !email.includes("@") || email.includes(" ")) return false;
+  const domain = normalizeEmailDomain(email.split("@").pop());
+  if (!domain || isBlockedPersonalEmailDomain(domain)) return false;
   return getAllowedEmailDomains().includes(domain);
 }
 
@@ -72,6 +120,9 @@ export function createSessionId() {
 
 export async function createSessionValue(rawEmail = "", rawSessionId = "") {
   const email = normalizeAuthEmail(rawEmail);
+  if (!isCompanyEmailAllowed(email)) {
+    throw new Error("Only company email can create a session");
+  }
   const sessionId = String(rawSessionId || createSessionId());
   const payload = {
     email,

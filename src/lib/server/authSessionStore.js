@@ -1,3 +1,4 @@
+import { isCompanyEmailAllowed, normalizeAuthEmail } from "@/lib/authSession";
 import { ensureCloudDbSchema, getCloudDbPool, isCloudDbConfigured } from "@/lib/server/cloudDb";
 
 const MAX_ACTIVE_SESSIONS_PER_USER = Number(process.env.AUTH_MAX_ACTIVE_SESSIONS_PER_USER || 2);
@@ -33,6 +34,10 @@ function clearCachedSessionsForUser(userEmail) {
 }
 
 export async function registerAuthSession(userEmail = "", sessionId = "", userAgent = "") {
+  const email = normalizeAuthEmail(userEmail);
+  if (!isCompanyEmailAllowed(email)) {
+    throw new Error("Only company email can register a session");
+  }
   if (!isCloudDbConfigured()) return { configured: false };
   await ensureCloudDbSchema();
   const pool = getCloudDbPool();
@@ -46,7 +51,7 @@ export async function registerAuthSession(userEmail = "", sessionId = "", userAg
         ON CONFLICT (session_id)
         DO UPDATE SET user_email = EXCLUDED.user_email, user_agent = EXCLUDED.user_agent, revoked_at = NULL, last_seen_at = NOW()
       `,
-      [sessionId, userEmail, String(userAgent || "").slice(0, 500)],
+      [sessionId, email, String(userAgent || "").slice(0, 500)],
     );
 
     await client.query(
@@ -61,11 +66,11 @@ export async function registerAuthSession(userEmail = "", sessionId = "", userAg
           OFFSET $2
         )
       `,
-      [userEmail, Math.max(1, MAX_ACTIVE_SESSIONS_PER_USER)],
+      [email, Math.max(1, MAX_ACTIVE_SESSIONS_PER_USER)],
     );
     await client.query("COMMIT");
     // 新登录可能踢掉了该用户最早的 session，清掉缓存让踢下线尽快生效
-    clearCachedSessionsForUser(userEmail);
+    clearCachedSessionsForUser(email);
     return { configured: true };
   } catch (error) {
     await client.query("ROLLBACK").catch(() => {});
