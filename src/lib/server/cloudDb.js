@@ -47,8 +47,9 @@ export async function ensureCloudDbSchema() {
   }
 
   const pool = getCloudDbPool();
-  const initPromise = Promise.all([
-    pool.query(`
+  // 顺序执行：索引依赖表，空库上并发执行会因表尚未创建而报错。
+  const initPromise = (async () => {
+    await pool.query(`
       CREATE TABLE IF NOT EXISTS user_cloud_state (
         user_email TEXT NOT NULL,
         state_key TEXT NOT NULL,
@@ -57,12 +58,30 @@ export async function ensureCloudDbSchema() {
         server_updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         PRIMARY KEY (user_email, state_key)
       )
-    `),
-    pool.query(`
+    `);
+    await pool.query(`
       CREATE INDEX IF NOT EXISTS user_cloud_state_user_updated_idx
       ON user_cloud_state (user_email, server_updated_at DESC)
-    `),
-    pool.query(`
+    `);
+    // 云端状态每日快照：给记录层上"后悔药"。若某天有 bug 把非空但错误的数据
+    // 同步上云覆盖了正确数据，可用快照回滚到之前任意一天（见 scripts/restore-cloud-state-snapshot.mjs）
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS user_cloud_state_snapshots (
+        id BIGSERIAL PRIMARY KEY,
+        snapshot_date DATE NOT NULL,
+        user_email TEXT NOT NULL,
+        state_key TEXT NOT NULL,
+        state_value TEXT NOT NULL,
+        client_updated_at BIGINT NOT NULL DEFAULT 0,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (snapshot_date, user_email, state_key)
+      )
+    `);
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS user_cloud_state_snapshots_user_idx
+      ON user_cloud_state_snapshots (user_email, state_key, snapshot_date DESC)
+    `);
+    await pool.query(`
       CREATE TABLE IF NOT EXISTS auth_sessions (
         session_id TEXT PRIMARY KEY,
         user_email TEXT NOT NULL,
@@ -71,12 +90,12 @@ export async function ensureCloudDbSchema() {
         last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         revoked_at TIMESTAMPTZ
       )
-    `),
-    pool.query(`
+    `);
+    await pool.query(`
       CREATE INDEX IF NOT EXISTS auth_sessions_user_active_idx
       ON auth_sessions (user_email, revoked_at, created_at DESC)
-    `),
-  ]).then(() => {
+    `);
+  })().then(() => {
     initialized = true;
   }).catch((err) => {
     // Clear the cached promise on failure so the next request retries.

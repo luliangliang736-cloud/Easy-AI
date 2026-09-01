@@ -50,3 +50,5 @@ tailwindcss-*.log
 *.tsbuildinfo
 next-env.d.ts
 
+
+scripts/migrate-env-openlux.local.mjs

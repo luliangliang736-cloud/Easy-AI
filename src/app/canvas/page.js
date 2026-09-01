@@ -12,7 +12,7 @@ import { downloadMediaFile } from "@/lib/downloadMedia";
 import { useHistory } from "@/lib/useHistory";
 import { useTheme } from "@/lib/useTheme";
 import { useAuthSessionGuard } from "@/lib/useAuthSessionGuard";
-import { CLOUD_STATE_RESTORED_EVENT, useCloudLocalStorageSync } from "@/lib/useCloudLocalStorageSync";
+import { CLOUD_STATE_RESTORED_EVENT, CLOUD_STATE_RESTORE_STARTED_EVENT, CLOUD_STATE_RESTORE_FINISHED_EVENT, useCloudLocalStorageSync } from "@/lib/useCloudLocalStorageSync";
 import { CLOUD_STATE_DELETIONS_KEY, findCloudDeletionMatches, normalizeCloudStateDeletions, recordCloudDeletions, removeCloudDeletions } from "@/lib/cloudStateDeletions";
 import { MAX_GEN_COUNT } from "@/lib/genLimits";
 import { useCanvasT } from "@/lib/canvasI18n";
@@ -850,9 +850,12 @@ function dedupeTasksByUrl(tasks) {
 function normalizeResultMessage(message) {
   if (!message || typeof message !== "object") return message;
   const tasks = dedupeTasksByUrl(message.tasks);
-  const urls = Array.isArray(tasks)
-    ? sanitizeUrlList(tasks.map((task) => task?.url))
-    : sanitizeUrlList(message.urls);
+  // tasks 有 url 时以任务为准（任务是生成进度的事实来源）；
+  // ⚠️ 但 tasks 为空数组/全部无 url 时必须回退到 message.urls——
+  // 云端合并、多设备同步等路径会产生 tasks=[] 而 urls 完整的已完成消息，
+  // 不回退会把已生成的图在加载时"规范化"丢掉（消息显示为空白）。
+  const taskUrls = Array.isArray(tasks) ? sanitizeUrlList(tasks.map((task) => task?.url)) : [];
+  const urls = taskUrls.length > 0 ? taskUrls : sanitizeUrlList(message.urls);
   return {
     ...message,
     tasks,
@@ -1125,6 +1128,18 @@ function sanitizeCanvasBoardsForStorage(boards) {
     texts: Array.isArray(board?.texts) ? board.texts.slice(0, 100) : [],
     shapes: Array.isArray(board?.shapes) ? board.shapes.slice(0, 200) : [],
   }));
+}
+
+/**
+ * 轻量内容签名（id+坐标+尺寸+样式）：用于判断"把 React 状态写回 board 对象"这步
+ * 是否真的携带了内容变化。只有真变化才允许把 board.updatedAt 顶到当前时间——
+ * 否则刚打开页面时旧数据会穿上新时间戳，跨设备合并时反过来压掉其他设备的新数据。
+ */
+function computeBoardContentSignature(images, refImages, texts, shapes) {
+  const imgSig = (images || []).map((i) => `${i?.id}:${i?.image_url?.length || 0}:${Math.round(i?.layout?.x ?? 0)},${Math.round(i?.layout?.y ?? 0)},${Math.round(i?.layout?.w ?? 0)}`).join("|");
+  const shapeSig = (shapes || []).map((s) => `${s?.id}:${Math.round(s?.x || 0)},${Math.round(s?.y || 0)},${Math.round(s?.w || 0)},${Math.round(s?.h || 0)}:${s?.fill || ""}`).join("|");
+  const textSig = (texts || []).map((t) => `${t?.id}:${String(t?.text || "").length}:${Math.round(t?.x || 0)},${Math.round(t?.y || 0)}`).join("|");
+  return `${imgSig}#${shapeSig}#${textSig}#${(refImages || []).filter(Boolean).join(",")}`;
 }
 
 function persistCanvasBoardsToLocalStorage(boards, activeBoardId = "") {
@@ -1629,6 +1644,20 @@ function HomeInner() {
   const [persistReady, setPersistReady] = useState(false);
   // 标记 localStorage 已加载完毕，加载前禁止持久化 effect 写入（避免覆盖已保存的数据）
   const persistReadyRef = useRef(false);
+  // 活跃画布的内容签名：区分"状态写回"与"内容真变化"，见 computeBoardContentSignature
+  const activeBoardContentSigRef = useRef({ boardId: "", sig: "" });
+  // 云端恢复进行中：显示顶部"正在同步云端数据"提示
+  const [isCloudRestoring, setIsCloudRestoring] = useState(false);
+  useEffect(() => {
+    const handleRestoreStarted = () => setIsCloudRestoring(true);
+    const handleRestoreFinished = () => setIsCloudRestoring(false);
+    window.addEventListener(CLOUD_STATE_RESTORE_STARTED_EVENT, handleRestoreStarted);
+    window.addEventListener(CLOUD_STATE_RESTORE_FINISHED_EVENT, handleRestoreFinished);
+    return () => {
+      window.removeEventListener(CLOUD_STATE_RESTORE_STARTED_EVENT, handleRestoreStarted);
+      window.removeEventListener(CLOUD_STATE_RESTORE_FINISHED_EVENT, handleRestoreFinished);
+    };
+  }, []);
   useAuthSessionGuard();
   useCloudLocalStorageSync(CANVAS_CLOUD_STATE_KEYS, { overwriteOnFirstRestore: true, intervalMs: 6000 });
   const activeCanvasBoard = canvasBoards.find((board) => board.id === activeCanvasBoardId) || canvasBoards[0];
@@ -2137,6 +2166,14 @@ function HomeInner() {
 
   useEffect(() => {
     if (!persistReady || !activeCanvasBoardId) return;
+    // ⚠️ board.updatedAt 只在内容真变化时才顶到当前时间。
+    // 加载完成/切换画布后的首次写回内容与 board 完全一致，若无条件盖 Date.now()，
+    // "刚打开页面的旧数据"会在跨设备合并（服务端与恢复合并都按 updatedAt 判新旧）
+    // 中被误判为最新，把其他设备今天的改动整体压掉。
+    const sig = computeBoardContentSignature(canvasImages, refImages, canvasTexts, canvasShapes);
+    const prevSig = activeBoardContentSigRef.current;
+    const contentChanged = prevSig.boardId === activeCanvasBoardId && prevSig.sig !== sig;
+    activeBoardContentSigRef.current = { boardId: activeCanvasBoardId, sig };
     setCanvasBoards((prev) => prev.map((board) => (
       board.id === activeCanvasBoardId
         ? {
@@ -2145,7 +2182,7 @@ function HomeInner() {
             refImages: Array.isArray(refImages) ? refImages.filter(Boolean) : [],
             texts: canvasTexts,
             shapes: canvasShapes,
-            updatedAt: Date.now(),
+            updatedAt: contentChanged ? Date.now() : (board.updatedAt || board.createdAt || Date.now()),
           }
         : board
     )));
@@ -2232,8 +2269,10 @@ function HomeInner() {
   }, [canvasShapesHistory]);
 
   const handleUpdateCanvasShape = useCallback((id, patch) => {
+    // 条目级时间戳：跨设备云同步合并按 item.updatedAt 判断哪边的几何/样式更新，
+    // 不盖时间戳的话两边平局，合并结果取决于上传顺序，可能被旧设备回退
     canvasShapesHistory.push((prev) =>
-      prev.map((s) => (s.id === id ? { ...s, ...patch } : s))
+      prev.map((s) => (s.id === id ? { ...s, ...patch, updatedAt: Date.now() } : s))
     );
   }, [canvasShapesHistory]);
 
@@ -2351,10 +2390,12 @@ function HomeInner() {
 
   const updateCanvasImageInBoard = useCallback((boardId, imageId, patch) => {
     if (!boardId || !imageId || !patch) return;
+    // 条目级时间戳：内容/链接/尺寸变更后,云同步合并以这台设备的该条目为准
+    const stampedPatch = { ...patch, updatedAt: Date.now() };
     let activeBoardImages = null;
     if (activeCanvasBoardIdRef.current === boardId) {
       activeBoardImages = (canvasImagesRef.current || []).map((item) => (
-        item.id === imageId ? { ...item, ...patch } : item
+        item.id === imageId ? { ...item, ...stampedPatch } : item
       ));
       canvasHistory.setState(activeBoardImages);
     }
@@ -2364,7 +2405,7 @@ function HomeInner() {
           ? {
               ...board,
               images: activeBoardImages || (board.images || []).map((item) => (
-                item.id === imageId ? { ...item, ...patch } : item
+                item.id === imageId ? { ...item, ...stampedPatch } : item
               )),
               updatedAt: Date.now(),
             }
@@ -4447,6 +4488,18 @@ function HomeInner() {
 
   return (
     <div className="h-screen flex overflow-hidden">
+      {/* 云端同步提示：首次恢复完成前，画布展示的是本地缓存，跨设备场景下
+          （尤其大账号跨国拉取需数十秒）提示用户稍候，避免误以为数据丢失/错乱 */}
+      {isCloudRestoring && (
+        <div
+          className={`pointer-events-none fixed left-1/2 top-4 z-[120] flex -translate-x-1/2 items-center gap-2 rounded-full px-4 py-2 text-xs shadow-lg backdrop-blur ${
+            theme === "light" ? "bg-white/90 text-black/70 shadow-black/10" : "bg-[#1a1a1c]/90 text-white/75 shadow-black/40"
+          }`}
+        >
+          <Loader2 size={13} className="animate-spin" />
+          {t("正在同步云端最新数据，画布与对话可能稍后更新…")}
+        </div>
+      )}
       <div
         className="absolute top-0 z-30 flex h-12 items-center gap-2 transition-[left]"
         style={{ left: isInspirationMode ? inspirationPanelWidth + 12 : 12 }}

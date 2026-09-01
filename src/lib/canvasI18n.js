@@ -148,6 +148,7 @@ const EXACT = {
   "重新加载": "Reload",
   "内容已完成极速加载中": "Ready, loading at full speed",
   "图片加载失败，点击重试": "Image failed to load, click to retry",
+  "正在同步云端最新数据，画布与对话可能稍后更新…": "Syncing latest cloud data; canvas and chats may update shortly…",
   "暂停视频": "Pause video",
   "播放视频": "Play video",
   "暂停": "Pause",

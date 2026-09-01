@@ -13,7 +13,7 @@ import { useTheme } from "@/lib/useTheme";
 import { getHomeCopy, HOME_LANGUAGE_STORAGE_KEY } from "@/lib/homeI18n";
 import { compressImage } from "@/lib/imageUtils";
 import { useAuthSessionGuard } from "@/lib/useAuthSessionGuard";
-import { useCloudLocalStorageSync } from "@/lib/useCloudLocalStorageSync";
+import { claimLocalStateOwner, useCloudLocalStorageSync } from "@/lib/useCloudLocalStorageSync";
 import { getGenerationStageCopy } from "@/lib/generationStages";
 import {
   buildEzFamilyTriggerPrompt,
@@ -1124,6 +1124,11 @@ export default function HomePage() {
       .then((data) => {
         if (controller.signal.aborted) return;
         setAuthUser(data?.user || null);
+        // 换账号登录时清空上一账号残留的本地数据（生成记录、会话、资料等），
+        // 清空后页面账号相关写入已被护栏拦截，必须刷新让页面用干净状态重载。
+        if (data?.authenticated && claimLocalStateOwner(data?.user?.email)) {
+          window.location.reload();
+        }
       })
       .catch((err) => {
         if (err?.name === "AbortError" || controller.signal.aborted) return;
