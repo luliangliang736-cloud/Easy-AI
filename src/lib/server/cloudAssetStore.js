@@ -149,7 +149,8 @@ export async function copyImageUrlToCloudAsset({ userEmail = "", url = "", filen
     contentType = image.mimeType;
     buffer = image.buffer;
   } else if (/^https?:\/\//i.test(source)) {
-    const res = await fetch(source);
+    // 外链下载必须带硬超时：跨境链路偶发挂死会让整个请求无限等待
+    const res = await fetch(source, { signal: AbortSignal.timeout(120_000) });
     if (!res.ok) {
       const error = new Error(`Failed to fetch media for OSS copy (${res.status})`);
       // 服务商临时外链过期后返回 403/404/410，重试永远不会成功

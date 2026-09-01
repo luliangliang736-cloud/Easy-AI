@@ -33,15 +33,48 @@ export function getOssClient() {
   return globalThis[globalKey];
 }
 
-// 超过该体积的对象改用分片上传：单次 put 一个 40MB+ 的大图（4K 高清放大）
-// 跨国传到 OSS 经常撞 180s 超时，备份失败后一旦容器重部署图就永久丢了。
-// 分片上传的超时按"每个分片请求"计算，小分片几乎不会超时，且失败可断点续传。
-const MULTIPART_THRESHOLD_BYTES = Number(process.env.OSS_MULTIPART_THRESHOLD_BYTES || 8 * 1024 * 1024);
+// 上传专用客户端：OSS_UPLOAD_ENDPOINT 设为传输加速域名（oss-accelerate.aliyuncs.com）时，
+// 上传走阿里全球加速网络（海外就近接入 + 跨境专线进北京），绕开拥堵的公网入境通道。
+// 只对上传生效——下载/读取仍走普通域名，避免每次看图都产生按量的加速费用。
+const uploadClientKey = "__easyaiOssUploadClient";
+
+function getOssUploadClient() {
+  const uploadEndpoint = process.env.OSS_UPLOAD_ENDPOINT;
+  if (!uploadEndpoint) return getOssClient();
+  if (!isOssConfigured()) {
+    throw new Error("OSS is not configured");
+  }
+  if (!globalThis[uploadClientKey]) {
+    globalThis[uploadClientKey] = new OSS({
+      endpoint: uploadEndpoint,
+      accessKeyId: process.env.OSS_ACCESS_KEY_ID,
+      accessKeySecret: process.env.OSS_ACCESS_KEY_SECRET,
+      bucket: process.env.OSS_BUCKET,
+      secure: true,
+      timeout: Number(process.env.OSS_TIMEOUT_MS || 180_000),
+    });
+  }
+  return globalThis[uploadClientKey];
+}
+
+// 超过该体积的对象改用分片上传。8/8-8/9 事故：Railway → OSS 北京链路劣化到
+// 只有几百 KB 的小文件能在 60s 内传完，5MB 级生成图（2K PNG）整块 put 必超时，
+// 备份+迁移成批静默失败，重部署后图片永久丢失。阈值从 8MB 降到 1MB：
+// 弱网下 1MB 分片各自有独立超时、失败可断点续传，大图也能一片一片挤过去。
+const MULTIPART_THRESHOLD_BYTES = Number(process.env.OSS_MULTIPART_THRESHOLD_BYTES || 1 * 1024 * 1024);
+// 并发闸门的大小图分界维持 8MB 不变：若跟随分片阈值降到 1MB，多数生成图会被
+// 塞进"1 并发 + 8 队列"的大图通道，正常时段反而会队列打满连环失败。
+const LARGE_GATE_THRESHOLD_BYTES = Number(process.env.OSS_LARGE_GATE_THRESHOLD_BYTES || 8 * 1024 * 1024);
 const UPLOAD_MAX_ATTEMPTS = Number(process.env.OSS_UPLOAD_MAX_ATTEMPTS || 3);
+// 单次 put 的独立超时。客户端默认 180s 是给分片上传的（按每个分片请求计），
+// <8MB 的单次 put 正常几秒完成；链路拥堵时挂死的连接若按 180s×3 次重试算，
+// 一个对象能占住并发位 9 分钟，4 个小图位全被占死后队列雪崩（queue is full 连环报错、
+// 前端连环弹"云端保存失败"）。60s 快速失败 + 重试，让并发位以 3 倍速回收。
+const PUT_TIMEOUT_MS = Number(process.env.OSS_PUT_TIMEOUT_MS || 60_000);
 
 // ============================================================
 // OSS 上传并发闸门（大小图分通道）
-// 跨国到北京 OSS 的出口带宽有限。多个 40MB+ 大图（4K 高清放大）无节制并发
+// Railway → 北京 OSS 的出口带宽有限。多个 40MB+ 大图（4K 高清放大）无节制并发
 // 上传时，容器网络被打满：曾出现 900+ 超时 socket、50 个并发挂起连接，
 // 连带同容器的数据库连接超时（登录/扣积分报 timeout exceeded when trying to
 // connect），线上生图整体不可用。
@@ -92,25 +125,25 @@ function sleep(ms) {
 }
 
 export async function putOssObjectResilient(objectKey, buffer, headers = {}) {
-  const client = getOssClient();
-  const isLarge = Buffer.isBuffer(buffer) && buffer.byteLength > MULTIPART_THRESHOLD_BYTES;
-  const gate = isLarge ? largeUploadGate : smallUploadGate;
+  const client = getOssUploadClient();
+  const byteLength = Buffer.isBuffer(buffer) ? buffer.byteLength : 0;
+  const gate = byteLength > LARGE_GATE_THRESHOLD_BYTES ? largeUploadGate : smallUploadGate;
   await gate.acquire();
   try {
     let checkpoint;
     let lastError;
     for (let attempt = 1; attempt <= UPLOAD_MAX_ATTEMPTS; attempt += 1) {
       try {
-        if (Buffer.isBuffer(buffer) && buffer.byteLength > MULTIPART_THRESHOLD_BYTES) {
+        if (byteLength > MULTIPART_THRESHOLD_BYTES) {
           return await client.multipartUpload(objectKey, buffer, {
-            partSize: 2 * 1024 * 1024,
+            partSize: 1 * 1024 * 1024,
             parallel: 2,
             checkpoint,
             progress: (_percent, cpt) => { checkpoint = cpt; },
             headers,
           });
         }
-        return await client.put(objectKey, buffer, { headers });
+        return await client.put(objectKey, buffer, { headers, timeout: PUT_TIMEOUT_MS });
       } catch (error) {
         lastError = error;
         // 最后一次重试前丢弃断点，避免损坏的 checkpoint 让重试必然失败
