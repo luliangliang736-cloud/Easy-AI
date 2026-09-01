@@ -107,12 +107,14 @@ const MODEL_TIERS = [
     id: "seedance-video",
     name: "Seedance 视频",
     icon: Video,
-    desc: "字节 · 文生/图生视频",
+    desc: "字节 · 文生/图生/参考/编辑视频",
     variants: [
       { model: "dreamina-seedance-2-0-260128", label: "标准版", credits: { default: 0, priority: 0 } },
       { model: "dreamina-seedance-2-0-fast-260128", label: "快速版", credits: { default: 0, priority: 0 } },
+      { model: "dreamina-seedance-2-5-260628", label: "2.5 全能版", credits: { default: 0, priority: 0 } },
     ],
-    maxInputImages: 2,
+    // 2.5 支持多素材参考（图最多 30、视频 10、音频 10）；2.0 仍只用前 2 张图
+    maxInputImages: 10,
     extendedRatios: false,
     serviceTierOptions: false,
     mediaType: "video",
@@ -896,8 +898,12 @@ export default function ChatPanel({
       ? "Kling-V2-6 首尾帧不支持声音控制。"
       : "Kling-V2-6 文生/图生可选有声；有声会自动使用 1080p。"
     : "Kling-V3 / V3-Omni 不支持声音控制。";
+  const isSeedance25 = isSeedanceVideoTier && String(params.model || "").includes("2-5");
   const availableRatios = (isKlingVideoTier || isSeedanceVideoTier)
-    ? ["16:9", "9:16", "1:1", "4:3", "3:4", "21:9"]
+    ? (isSeedance25
+        // 2.5 支持 adaptive（跟随输入素材）；编辑/延长/首尾帧任务服务端会自动锁 adaptive
+        ? ["adaptive", "16:9", "9:16", "1:1", "4:3", "3:4", "21:9"]
+        : ["16:9", "9:16", "1:1", "4:3", "3:4", "21:9"])
     : currentTier.extendedRatios
       ? [...STANDARD_RATIOS, ...EXTENDED_RATIOS]
       : STANDARD_RATIOS;
@@ -1884,28 +1890,30 @@ export default function ChatPanel({
                 <CollapsibleParamSection
                   title={t("Seedance 视频参数")}
                   summary={[
-                    `${t("比例")} ${params.image_size || "16:9"}`,
+                    `${t("比例")} ${(params.image_size || "16:9") === "adaptive" ? t("自适应") : (params.image_size || "16:9")}`,
                     `${params.duration || "5"}s`,
-                    params.resolution || (String(params.model || "").includes("fast") ? "720p" : "1080p"),
-                    t((refImages?.length || 0) === 0 ? "文生视频" : (refImages?.length || 0) === 1 ? "图生视频" : "首尾帧视频"),
+                    params.resolution || (isSeedance25 || String(params.model || "").includes("fast") ? "720p" : "1080p"),
+                    (refImages?.length || 0) === 0 ? t("文生视频") : isSeedance25 ? `${refImages?.length || 0} ${t("素材")}` : t((refImages?.length || 0) === 1 ? "图生视频" : "首尾帧视频"),
                   ].join(" · ")}
                   open={videoParamsOpen}
                   onToggle={() => setVideoParamsOpen((prev) => !prev)}
                 >
                   {(() => {
                     const isSeedanceFast = String(params.model || "").includes("fast");
-                    // 上游限制：带参考图（i2v/首尾帧）最高 1080p，2K 仅文生视频可用
-                    const seedanceHasRefImages = (refImages?.length || 0) > 0;
-                    const seedanceResolutions = isSeedanceFast
+                    // BytePlus 国际站 Ark 通道无 2K 档（实测被上游拒绝），标准版最高 1080p；2.5 只有 480p/720p
+                    const seedanceResolutions = (isSeedanceFast || isSeedance25)
                       ? [{ value: "480p", label: "480p" }, { value: "720p", label: "720p" }]
                       : [
                           { value: "480p", label: "480p" },
                           { value: "720p", label: "720p" },
                           { value: "1080p", label: "1080p" },
-                          ...(seedanceHasRefImages ? [] : [{ value: "2K", label: "2K" }]),
                         ];
-                    const rawResolution = params.resolution || (isSeedanceFast ? "720p" : "1080p");
-                    const currentResolution = seedanceHasRefImages && rawResolution === "2K" ? "1080p" : rawResolution;
+                    const rawResolution = params.resolution || (isSeedanceFast || isSeedance25 ? "720p" : "1080p");
+                    // 老参数里可能残留 2K/1080p（切到 2.5 时）：统一落到当前档位上限
+                    const currentResolution = rawResolution === "2K"
+                      ? "1080p"
+                      : (isSeedance25 && rawResolution === "1080p" ? "720p" : rawResolution);
+                    const maxSeedanceDuration = isSeedance25 ? 30 : 15;
                     return (
                       <div className="pt-2 space-y-3">
                         <div>
@@ -1922,7 +1930,7 @@ export default function ChatPanel({
                                     : "bg-bg-tertiary text-text-secondary hover:bg-bg-hover border border-border-primary"
                                 }`}
                               >
-                                {r}
+                                {r === "adaptive" ? t("自适应") : r}
                               </button>
                             ))}
                           </div>
@@ -1937,15 +1945,17 @@ export default function ChatPanel({
                             <input
                               type="range"
                               min={4}
-                              max={15}
+                              max={maxSeedanceDuration}
                               step={1}
-                              value={Number(params.duration || 5)}
+                              value={Math.min(Number(params.duration || 5), maxSeedanceDuration)}
                               onChange={(event) => onParamsChange({ ...params, duration: String(event.target.value) })}
                               className="w-full accent-green-500"
                             />
-                            <span className="text-right text-[11px] text-text-tertiary">15s</span>
+                            <span className="text-right text-[11px] text-text-tertiary">{maxSeedanceDuration}s</span>
                           </div>
-                          <p className="text-[10px] text-text-tertiary mt-1">{t("支持 4–15 秒。")}</p>
+                          <p className="text-[10px] text-text-tertiary mt-1">
+                            {t(isSeedance25 ? "2.5 支持 4–30 秒；视频编辑任务时长自动跟随原视频。" : "支持 4–15 秒。")}
+                          </p>
                         </div>
                         <div>
                           <span className="block text-[11px] text-text-tertiary mb-1.5">{t("分辨率")}</span>
@@ -1966,8 +1976,17 @@ export default function ChatPanel({
                             ))}
                           </div>
                           <p className="text-[10px] text-text-tertiary mt-1.5">
-                            {t(isSeedanceFast ? "快速版最高 720p。" : "标准版文生视频最高 2K，带参考图最高 1080p。")}
-                            {" "}{t("0 张参考图为文生视频，1 张为图生视频（首帧），2 张为首尾帧生视频。")}
+                            {isSeedance25 ? (
+                              <>
+                                {t("2.5 最高 720p。图/视频都可作参考素材（图最多 30、视频 10）；1–2 张图默认作首尾帧。")}
+                                {t("提示词里写「编辑/替换/删除」并带视频可改视频，写「延长/继续」可续片，按「图1/视频1」编号引用素材。")}
+                              </>
+                            ) : (
+                              <>
+                                {t(isSeedanceFast ? "快速版最高 720p。" : "标准版最高 1080p。")}
+                                {" "}{t("纯图片素材时：1 张为图生视频（首帧），2 张为首尾帧。带视频素材时全部作参考（按「图1/视频1」编号引用）。")}
+                              </>
+                            )}
                           </p>
                         </div>
                       </div>

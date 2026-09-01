@@ -574,11 +574,18 @@ function parseAspectRatio(imageSize) {
 const REQUEST_TIMEOUT_MS = 90000;
 const IMAGE_REQUEST_TIMEOUT_MS = 5 * 60 * 1000;
 const GPT_IMAGE_2_REQUEST_TIMEOUT_MS = 10 * 60 * 1000;
-const VIDEO_REQUEST_TIMEOUT_MS = 10 * 60 * 1000;
+// Seedance 2.5 重参考任务（多图+视频、30 秒长片）上游可跑 20 分钟+，需盖过服务端 25 分钟轮询上限
+const VIDEO_REQUEST_TIMEOUT_MS = 28 * 60 * 1000;
 const GENERATION_STALE_MS = IMAGE_REQUEST_TIMEOUT_MS + 30 * 1000;
 const VIDEO_GENERATION_STALE_MS = VIDEO_REQUEST_TIMEOUT_MS + 30 * 1000;
 const GENERATION_RECOVERY_POLL_MS = 2000;
 const GENERATION_RECOVERY_MAX_ATTEMPTS = Math.ceil((12 * 60 * 1000) / GENERATION_RECOVERY_POLL_MS);
+// 视频任务耗时更长：放慢轮询频率、拉长恢复窗口，覆盖服务端 25 分钟的轮询上限
+const VIDEO_RECOVERY_POLL_MS = 10 * 1000;
+const VIDEO_RECOVERY_OPTIONS = {
+  pollMs: VIDEO_RECOVERY_POLL_MS,
+  maxAttempts: Math.ceil((30 * 60 * 1000) / VIDEO_RECOVERY_POLL_MS),
+};
 const MAX_PARALLEL_GENERATIONS = 1;
 const STORAGE_VERSION = "9";
 const DEFAULT_CONVERSATION_TITLE = "新建对话";
@@ -1342,9 +1349,12 @@ function shouldAttemptGenerationRecovery(error) {
   );
 }
 
-async function recoverGenerationResult(clientRequestId) {
+async function recoverGenerationResult(clientRequestId, {
+  pollMs = GENERATION_RECOVERY_POLL_MS,
+  maxAttempts = GENERATION_RECOVERY_MAX_ATTEMPTS,
+} = {}) {
   if (!clientRequestId) return null;
-  for (let attempt = 0; attempt < GENERATION_RECOVERY_MAX_ATTEMPTS; attempt += 1) {
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     try {
       const res = await fetch(`/api/generation-results/${encodeURIComponent(clientRequestId)}`, {
         cache: "no-store",
@@ -1357,13 +1367,13 @@ async function recoverGenerationResult(clientRequestId) {
       }
       if (res.status !== 202) return null;
     } catch {}
-    await new Promise((resolve) => window.setTimeout(resolve, GENERATION_RECOVERY_POLL_MS));
+    await new Promise((resolve) => window.setTimeout(resolve, pollMs));
   }
   return null;
 }
 
-async function waitForRecoveredGenerationResult(clientRequestId) {
-  const recovered = await recoverGenerationResult(clientRequestId);
+async function waitForRecoveredGenerationResult(clientRequestId, options) {
+  const recovered = await recoverGenerationResult(clientRequestId, options);
   if (recovered) return { data: recovered, recovered: true };
   return new Promise(() => {});
 }
@@ -1401,6 +1411,7 @@ const MODEL_LABELS = {
   "kling-v3-omni": "Kling-V3-Omni 视频",
   "dreamina-seedance-2-0-260128": "Seedance 视频",
   "dreamina-seedance-2-0-fast-260128": "Seedance 快速视频",
+  "dreamina-seedance-2-5-260628": "Seedance 2.5 视频",
 };
 
 const GPT_IMAGE_2_MODEL = "gpt-image-2";
@@ -1409,7 +1420,7 @@ const NANO_PRO_UPSCALE_MODEL = "gemini-3-pro-image-preview";
 // 与"Nano Pro 高清放大"同通道；网关没有给 -2k 模型别名配渠道，直接请求别名会 503。
 const MATERIAL_2K_PARAMS = { model: NANO_PRO_UPSCALE_MODEL, _nanoResolution: "2K" };
 const KLING_VIDEO_MODELS = new Set(["kling-v2-6", "kling-v3", "kling-v3-omni"]);
-const SEEDANCE_VIDEO_MODELS = new Set(["dreamina-seedance-2-0-260128", "dreamina-seedance-2-0-fast-260128"]);
+const SEEDANCE_VIDEO_MODELS = new Set(["dreamina-seedance-2-0-260128", "dreamina-seedance-2-0-fast-260128", "dreamina-seedance-2-5-260628"]);
 
 function isKlingVideoModel(model) {
   const value = String(model || "").trim().toLowerCase();
@@ -2961,7 +2972,10 @@ function HomeInner() {
             return { status: "completed" };
           };
           const tryRecoverTaskResult = async () => {
-            const recovered = await recoverGenerationResult(clientRequestId);
+            const recovered = await recoverGenerationResult(
+              clientRequestId,
+              isAnyVideoRequest ? VIDEO_RECOVERY_OPTIONS : undefined
+            );
             const recoveredUrls = Array.isArray(recovered?.data?.urls)
               ? recovered.data.urls.filter(Boolean)
               : [];
@@ -3006,6 +3020,7 @@ function HomeInner() {
                 mode: requestParams.mode || "pro",
                 sound: requestParams.sound || "off",
                 ref_images: preparedImages.slice(0, 2),
+                clientRequestId,
               };
             } else if (isSeedanceVideoRequest) {
               requestUrl = "/api/seedance-video";
@@ -3016,7 +3031,9 @@ function HomeInner() {
                 aspect_ratio: imageSize || "16:9",
                 duration: requestParams.duration || "5",
                 resolution: requestParams.resolution || "720p",
-                ref_images: preparedImages.slice(0, 2),
+                // 多素材参考统一放行（服务端按模型分类限流：2.5 图 30/视频 10/音频 10；2.0 纯图时只用前 2 张）
+                ref_images: preparedImages.slice(0, 40),
+                clientRequestId,
               };
             } else if (shouldUseEditApi) {
               requestUrl = "/api/edit";
@@ -3049,7 +3066,7 @@ function HomeInner() {
               return { res, data: responseData, recovered: false };
             })();
             const recoveredPromise = isAnyVideoRequest
-              ? new Promise(() => {})
+              ? waitForRecoveredGenerationResult(clientRequestId, VIDEO_RECOVERY_OPTIONS)
               : waitForRecoveredGenerationResult(clientRequestId);
             const { res, data, recovered } = await Promise.race([
               requestPromise,
@@ -4029,23 +4046,30 @@ function HomeInner() {
   // Drop image files onto canvas → show immediately, then replace with cloud URL for cross-device restore.
   const handleDropImages = useCallback((files, dropX, dropY) => {
     files.forEach((file, i) => {
+      const isVideoFile = String(file.type || "").startsWith("video/");
       const reader = new FileReader();
       reader.onload = (e) => {
         const dataUrl = e.target.result;
         const id = `drop-${Date.now()}-${i}`;
-        const newImg = { id, image_url: dataUrl, prompt: file.name, canvasBoardId: activeCanvasBoardId };
+        const newImg = {
+          id,
+          image_url: dataUrl,
+          ...(isVideoFile ? { media_type: "video" } : {}),
+          prompt: file.name,
+          canvasBoardId: activeCanvasBoardId,
+        };
         appendCanvasImagesToBoard(activeCanvasBoardId, [newImg]);
         void uploadMediaSourceToCloudAsset(dataUrl, file.name, "canvas-upload")
           .then((url) => {
             updateCanvasImageInBoard(activeCanvasBoardId, id, { image_url: url });
           })
           .catch(() => {
-            toastCloudSaveFailure("图片已添加，但云端保存失败，换设备可能无法恢复");
+            toastCloudSaveFailure(`${isVideoFile ? "视频" : "图片"}已添加，但云端保存失败，换设备可能无法恢复`);
           });
       };
       reader.readAsDataURL(file);
     });
-    toast(`已添加 ${files.length} 张图片到画布`, "success");
+    toast(`已添加 ${files.length} 个素材到画布`, "success");
   }, [activeCanvasBoardId, appendCanvasImagesToBoard, toast, toastCloudSaveFailure, updateCanvasImageInBoard]);
 
   const handleDropGeneratedImage = useCallback((item, dropX, dropY) => {

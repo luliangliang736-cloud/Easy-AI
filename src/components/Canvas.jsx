@@ -2131,7 +2131,10 @@ export default function Canvas({
         /* ignore invalid drag payload */
       }
     }
-    const files = Array.from(e.dataTransfer.files).filter((f) => f.type.startsWith("image/"));
+    // 图片和视频都可拖入画布（视频可作 Seedance 2.5 的编辑/延长/参考素材）
+    const files = Array.from(e.dataTransfer.files).filter(
+      (f) => f.type.startsWith("image/") || f.type.startsWith("video/")
+    );
     if (files.length > 0 && onDropImages) {
       onDropImages(files, dropX, dropY);
     }

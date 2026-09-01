@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { copyImageUrlsToCloudAssets, readCloudAssetImage } from "@/lib/server/cloudAssetStore";
 import { getRequestUser } from "@/lib/server/authUser";
 import { readGeneratedImage } from "@/lib/server/generatedImageStore";
+import { saveGenerationResult } from "@/lib/server/generationResultStore";
 
 export const runtime = "nodejs";
 export const maxDuration = 600;
@@ -499,6 +500,8 @@ export async function POST(request) {
       logKlingEvent(meta, "validation_error", { reason: "missing_prompt" });
       return NextResponse.json({ error: "Prompt is required" }, { status: 400 });
     }
+    // 客户端断连/超时后可凭此 ID 找回结果（与生图路由同一套恢复机制）
+    const clientRequestId = String(body?.clientRequestId || "").trim();
 
     const resolvedBody = await resolveKlingImageInputs(body);
     const { path, payload, generationType } = buildTaskPayload(resolvedBody);
@@ -529,7 +532,7 @@ export async function POST(request) {
           taskMode: "immediate",
           urlCount: persistedUrls.length,
         });
-        return NextResponse.json({
+        const immediateBody = {
           success: true,
           data: {
             urls: persistedUrls,
@@ -537,7 +540,9 @@ export async function POST(request) {
             generationType,
             tasks: buildVideoTasks(persistedUrls),
           },
-        });
+        };
+        await saveGenerationResult(clientRequestId, immediateBody);
+        return NextResponse.json(immediateBody);
       }
       logKlingEvent(meta, "missing_task_id", { generationType });
       throw new Error("Kling API 未返回 task_id");
@@ -551,7 +556,7 @@ export async function POST(request) {
       taskId,
       urlCount: persistedUrls.length,
     });
-    return NextResponse.json({
+    const responseBody = {
       success: true,
       data: {
         urls: persistedUrls,
@@ -560,7 +565,9 @@ export async function POST(request) {
         taskId,
         tasks: buildVideoTasks(persistedUrls, taskId || "kling-video"),
       },
-    });
+    };
+    await saveGenerationResult(clientRequestId, responseBody);
+    return NextResponse.json(responseBody);
   } catch (error) {
     console.error("[KlingVideo] Error:", error);
     const message = error?.name === "AbortError"
