@@ -30,6 +30,11 @@ const MIN_SHAPE_PIXELS = 4;
 const CANVAS_IMAGE_MIME = "application/x-easy-ai-canvas-image";
 const CANVAS_CLIPBOARD_TEXT_PREFIX = "__EASY_AI_CANVAS_CLIPBOARD__:";
 const TEXT_COLOR_PRESETS = ["#ffffff", "#111827", "#9CFF3F", "#60A5FA", "#F97316", "#EF4444"];
+
+// 图片加载失败自动重试：间隔递增，重试完仍失败才显示失败占位
+const IMAGE_LOAD_RETRY_DELAYS_MS = [1500, 4000, 9000];
+// 请求挂死（不触发 onError/onLoad）时的兜底：超时后走同一套重试，避免骨架永远转
+const IMAGE_LOAD_STALL_MS = 60_000;
 const SHAPE_COLOR_PRESETS = ["rgba(63, 202, 88, 0.18)", "rgba(255, 255, 255, 0.16)", "rgba(17, 24, 39, 0.14)", "rgba(96, 165, 250, 0.22)", "rgba(249, 115, 22, 0.22)", "rgba(239, 68, 68, 0.22)"];
 
 function clampNumber(value, min, max) {
@@ -470,7 +475,56 @@ export default function Canvas({
   const [semanticPickCursorPos, setSemanticPickCursorPos] = useState(null);
   const [playingVideoIds, setPlayingVideoIds] = useState([]);
   // 以 "id|url" 记录加载失败的图片，URL 被云端迁移替换后会自动重试加载。
+  // 一次 onError 不代表图真失效（网络慢/OSS 限流也会触发）：先自动重试 3 次（骨架占位），
+  // 全部失败才落入 failedImageKeys 显示失败占位，占位上仍可手动重试
   const [failedImageKeys, setFailedImageKeys] = useState([]);
+  const [retryingImageKeys, setRetryingImageKeys] = useState([]);
+  const [imageRetryNonces, setImageRetryNonces] = useState({});
+  const imageRetryCountsRef = useRef({});
+  const imageStallTimersRef = useRef({});
+  // 按 "id|url" 记已成功解码的图。同一张图换 URL（本地临时链 → OSS）时必须重新占位，
+  // 不能沿用旧 url 的 meta，否则新 <img> 加载期间高度塌成小框。
+  const loadedImageKeysRef = useRef(new Set());
+  // 每张图上次成功出过的地址：换云端 URL 时继续显示已出的画面，避免闪回「加载中」
+  const settledSrcByImageIdRef = useRef(new Map());
+  const handleCanvasImageError = useCallback((imageFailKey) => {
+    const attempts = imageRetryCountsRef.current[imageFailKey] || 0;
+    if (attempts < IMAGE_LOAD_RETRY_DELAYS_MS.length) {
+      // 先当作瞬时故障：骨架占位 + 延迟后换 key 重挂载重新请求
+      imageRetryCountsRef.current[imageFailKey] = attempts + 1;
+      setRetryingImageKeys((prev) => (
+        prev.includes(imageFailKey) ? prev : [...prev, imageFailKey]
+      ));
+      window.setTimeout(() => {
+        setImageRetryNonces((prev) => ({
+          ...prev,
+          [imageFailKey]: (prev[imageFailKey] || 0) + 1,
+        }));
+        setRetryingImageKeys((prev) => prev.filter((key) => key !== imageFailKey));
+      }, IMAGE_LOAD_RETRY_DELAYS_MS[attempts]);
+    } else {
+      setRetryingImageKeys((prev) => prev.filter((key) => key !== imageFailKey));
+      setFailedImageKeys((prev) => (
+        prev.includes(imageFailKey) ? prev : [...prev, imageFailKey]
+      ));
+    }
+  }, []);
+  const clearImageStallTimer = useCallback((imageFailKey) => {
+    if (!imageStallTimersRef.current[imageFailKey]) return;
+    window.clearTimeout(imageStallTimersRef.current[imageFailKey]);
+    delete imageStallTimersRef.current[imageFailKey];
+  }, []);
+  const armImageStallTimer = useCallback((imageFailKey) => {
+    clearImageStallTimer(imageFailKey);
+    imageStallTimersRef.current[imageFailKey] = window.setTimeout(() => {
+      delete imageStallTimersRef.current[imageFailKey];
+      handleCanvasImageError(imageFailKey);
+    }, IMAGE_LOAD_STALL_MS);
+  }, [clearImageStallTimer, handleCanvasImageError]);
+  useEffect(() => () => {
+    Object.values(imageStallTimersRef.current).forEach((timer) => window.clearTimeout(timer));
+    imageStallTimersRef.current = {};
+  }, []);
   // 当前展开提示词浮层的图片 id，null 表示关闭。
   const [promptPopoverId, setPromptPopoverId] = useState(null);
   /** 按住空格临时平移（与 Figma 类似）；与 handlePointerDown 同步读取 */
@@ -2296,18 +2350,35 @@ export default function Canvas({
             : isVideo
               ? Math.round((pos.w * 9) / 16)
               : Math.round(pos.w);
+          const imageFailKey = `${img.id}|${img.image_url}`;
+          const isImageBroken = !isVideo && failedImageKeys.includes(imageFailKey);
+          const isImageRetrying = !isVideo && !isImageBroken && retryingImageKeys.includes(imageFailKey);
+          const imageRetryNonce = imageRetryNonces[imageFailKey] || 0;
+          const settledSrc = settledSrcByImageIdRef.current.get(img.id) || "";
+          const isCurrentUrlLoaded = loadedImageKeysRef.current.has(imageFailKey);
+          const isImagePending = !isVideo && !isImageBroken && (isImageRetrying || !isCurrentUrlLoaded);
+          // 已出过图、只是地址从临时链换成云端：保持像素，不要再盖「加载中」
+          const keepPixelsWhileSwap = isImagePending && Boolean(settledSrc);
+          // 生成刚完成、像素还在下载时：用生成中同款占位尺寸，避免塌成可点的小方框
+          const pendingRatio = Number(img.placeholderAspectRatio) > 0
+            ? Number(img.placeholderAspectRatio)
+            : (meta?.width && meta?.height ? meta.width / meta.height : 1);
+          const usePendingBox = isImagePending && !keepPixelsWhileSwap;
+          const displayW = usePendingBox
+            ? Math.max(Number(pos.w) || 0, INITIAL_IMG_WIDTH)
+            : pos.w;
+          const pendingDisplayHeight = Math.max(160, Math.round(displayW / pendingRatio));
+          const boxHeight = usePendingBox ? pendingDisplayHeight : displayHeight;
           const sizeLabel =
             meta?.width && meta?.height
               ? `${meta.width} × ${meta.height} px`
               : `${Math.round(pos.w)} × ${displayHeight}`;
-          const imageFailKey = `${img.id}|${img.image_url}`;
-          const isImageBroken = !isVideo && failedImageKeys.includes(imageFailKey);
           return (
             <div
               key={img.id}
               data-canvas-item={img.id}
               className={`absolute group ${isLocked ? "opacity-90" : ""}`}
-              style={{ left: pos.x, top: pos.y, width: pos.w }}
+              style={{ left: pos.x, top: pos.y, width: displayW }}
             >
               {isChromeSingle && (
                 <div className="absolute left-1/2 bottom-full mb-2 z-10 flex -translate-x-1/2 flex-col items-center gap-2">
@@ -2655,7 +2726,7 @@ export default function Canvas({
                 {isHighlighted && (
                   <div className="pointer-events-none absolute inset-0 z-[8] bg-[#0D99FF]/25" />
                 )}
-                <div className={`overflow-hidden border transition-colors ${
+                <div className={`relative overflow-hidden border transition-colors ${
                   isHighlighted ? "border-[#0D99FF] ring-1 ring-[#0D99FF]" : "border-transparent hover:border-border-secondary"
                 }`}>
                   {isVideo ? (
@@ -2695,37 +2766,127 @@ export default function Canvas({
                         <path d="m21 15-3.5-3.5L9 20" />
                         <path d="m2 2 20 20" />
                       </svg>
-                      <span className="text-xs">{t("图片已失效")}</span>
+                      <span className="text-xs">{t("图片加载失败")}</span>
+                      <button
+                        type="button"
+                        onPointerDown={(e) => e.stopPropagation()}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          imageRetryCountsRef.current[imageFailKey] = 0;
+                          setFailedImageKeys((prev) => prev.filter((key) => key !== imageFailKey));
+                          setImageRetryNonces((prev) => ({
+                            ...prev,
+                            [imageFailKey]: (prev[imageFailKey] || 0) + 1,
+                          }));
+                        }}
+                        className="pointer-events-auto rounded-lg border border-border-primary bg-bg-primary/80 px-2.5 py-1 text-[11px] text-text-secondary transition-colors hover:text-text-primary hover:border-border-secondary"
+                      >
+                        {t("重新加载")}
+                      </button>
                       {img.prompt ? (
                         <span className="max-w-[80%] truncate text-[10px] opacity-70">{img.prompt}</span>
                       ) : null}
                     </div>
-                  ) : (
-                    <img
-                      src={img.image_url}
-                      alt={img.prompt}
-                      className="w-full block pointer-events-none"
-                      draggable={false}
-                      onLoad={(e) => {
-                        const { naturalWidth, naturalHeight } = e.currentTarget;
-                        if (naturalWidth && naturalHeight) {
-                          imageMetaRef.current[img.id] = {
-                            width: naturalWidth,
-                            height: naturalHeight,
-                          };
-                          forceRender();
-                        }
-                        setFailedImageKeys((prev) => (
-                          prev.includes(imageFailKey) ? prev.filter((key) => key !== imageFailKey) : prev
-                        ));
-                      }}
-                      onError={() => {
-                        setFailedImageKeys((prev) => (
-                          prev.includes(imageFailKey) ? prev : [...prev, imageFailKey]
-                        ));
-                      }}
-                    />
-                  )}
+                  ) : (() => {
+                    // 未加载完成时必须占住高度：<img> 没有固有尺寸，加载期间高度为 0，
+                    // 画板看起来像空的、图像"丢了"。弱网/刷新后大量图排队时尤其明显。
+                    const showImageSkeleton = isImagePending && !keepPixelsWhileSwap;
+                    const visibleSrc = keepPixelsWhileSwap ? settledSrc : img.image_url;
+                    const applyDecoded = (url, naturalWidth, naturalHeight) => {
+                      const key = `${img.id}|${url}`;
+                      clearImageStallTimer(key);
+                      if (!naturalWidth || !naturalHeight) {
+                        handleCanvasImageError(key);
+                        return;
+                      }
+                      loadedImageKeysRef.current.add(key);
+                      settledSrcByImageIdRef.current.set(img.id, url);
+                      imageMetaRef.current[img.id] = {
+                        width: naturalWidth,
+                        height: naturalHeight,
+                      };
+                      forceRender();
+                      imageRetryCountsRef.current[key] = 0;
+                      setFailedImageKeys((prev) => (
+                        prev.includes(key) ? prev.filter((item) => item !== key) : prev
+                      ));
+                      setRetryingImageKeys((prev) => (
+                        prev.includes(key) ? prev.filter((item) => item !== key) : prev
+                      ));
+                    };
+                    return (
+                      <>
+                        {showImageSkeleton && (
+                          <div
+                            className="flex w-full items-center justify-center animate-pulse bg-bg-secondary/80 text-[11px] font-medium text-accent"
+                            style={{ height: boxHeight }}
+                          >
+                            {t("内容已完成极速加载中")}
+                          </div>
+                        )}
+                        {!isImageRetrying && (
+                          <img
+                            key={`${img.id}|${visibleSrc}#${visibleSrc === img.image_url ? imageRetryNonce : 0}`}
+                            src={visibleSrc}
+                            alt={img.prompt}
+                            decoding="async"
+                            className={`w-full block pointer-events-none${showImageSkeleton ? " absolute inset-0 h-full object-contain opacity-0" : ""}`}
+                            draggable={false}
+                            ref={(el) => {
+                              if (visibleSrc !== img.image_url) return;
+                              if (!el) {
+                                clearImageStallTimer(imageFailKey);
+                                return;
+                              }
+                              if (el.complete && el.naturalWidth > 0) return;
+                              armImageStallTimer(imageFailKey);
+                            }}
+                            onLoad={(e) => {
+                              if (visibleSrc !== img.image_url) return;
+                              const { naturalWidth, naturalHeight } = e.currentTarget;
+                              applyDecoded(img.image_url, naturalWidth, naturalHeight);
+                            }}
+                            onError={() => {
+                              if (visibleSrc !== img.image_url) return;
+                              clearImageStallTimer(imageFailKey);
+                              loadedImageKeysRef.current.delete(imageFailKey);
+                              handleCanvasImageError(imageFailKey);
+                            }}
+                          />
+                        )}
+                        {keepPixelsWhileSwap && !isImageRetrying && (
+                          <img
+                            key={`${imageFailKey}#${imageRetryNonce}`}
+                            src={img.image_url}
+                            alt=""
+                            decoding="async"
+                            className="hidden"
+                            draggable={false}
+                            ref={(el) => {
+                              if (!el) {
+                                clearImageStallTimer(imageFailKey);
+                                return;
+                              }
+                              if (el.complete && el.naturalWidth > 0) {
+                                applyDecoded(img.image_url, el.naturalWidth, el.naturalHeight);
+                                return;
+                              }
+                              armImageStallTimer(imageFailKey);
+                            }}
+                            onLoad={(e) => {
+                              const { naturalWidth, naturalHeight } = e.currentTarget;
+                              applyDecoded(img.image_url, naturalWidth, naturalHeight);
+                            }}
+                            onError={() => {
+                              clearImageStallTimer(imageFailKey);
+                              loadedImageKeysRef.current.delete(imageFailKey);
+                              handleCanvasImageError(imageFailKey);
+                            }}
+                          />
+                        )}
+                      </>
+                    );
+                  })()}
                   {isVideo && (
                     <button
                       type="button"

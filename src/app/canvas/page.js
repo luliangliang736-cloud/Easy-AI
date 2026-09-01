@@ -2905,6 +2905,7 @@ function HomeInner() {
                 media_type: mediaType,
                 prompt: displayText,
                 hidePromptText: hidePlaceholderPrompt,
+                placeholderAspectRatio,
               }]
             );
             syncGeneratedResultToCloudInBackground({
@@ -3064,6 +3065,7 @@ function HomeInner() {
                 media_type: mediaType,
                 prompt: displayText,
                 hidePromptText: hidePlaceholderPrompt,
+                placeholderAspectRatio,
               }]
             );
             syncGeneratedResultToCloudInBackground({

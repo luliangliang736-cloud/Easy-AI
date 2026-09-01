@@ -349,6 +349,58 @@ function isVideoReferenceSource(src) {
     || /\.(mp4|webm|mov|m4v|ogg)(\?|#|$)/i.test(value);
 }
 
+/**
+ * 结果图缩略图（带失败自动重试）：OSS/服务端拥堵时首次加载失败的图，
+ * 原来会永久停在裂图态（点开预览却能正常加载）。现在失败后按 2s/4s/6s
+ * 自动重试 3 次（加 retry 查询参数绕开浏览器对失败请求的缓存），
+ * 仍失败则显示"点击重试"手动兜底。
+ */
+function ResultImage({ src, alt = "", className = "" }) {
+  const { t } = useCanvasT();
+  const [attempt, setAttempt] = useState(0);
+  const [failed, setFailed] = useState(false);
+  const retryTimerRef = useRef(null);
+  useEffect(() => () => clearTimeout(retryTimerRef.current), []);
+  useEffect(() => {
+    setAttempt(0);
+    setFailed(false);
+  }, [src]);
+  if (!src) return null;
+  if (failed) {
+    return (
+      <button
+        type="button"
+        onPointerDown={(e) => e.stopPropagation()}
+        onClick={(e) => {
+          e.stopPropagation();
+          setFailed(false);
+          setAttempt((a) => a + 1);
+        }}
+        className="flex w-full flex-col items-center justify-center gap-1.5 bg-bg-secondary/60 py-8 text-[11px] text-text-tertiary transition-colors hover:text-text-primary"
+      >
+        <RotateCw size={14} />
+        {t("图片加载失败，点击重试")}
+      </button>
+    );
+  }
+  const effectiveSrc = attempt > 0 ? `${src}${src.includes("?") ? "&" : "?"}retry=${attempt}` : src;
+  return (
+    <img
+      src={effectiveSrc}
+      alt={alt}
+      className={className}
+      onError={() => {
+        if (attempt < 3) {
+          clearTimeout(retryTimerRef.current);
+          retryTimerRef.current = setTimeout(() => setAttempt((a) => a + 1), (attempt + 1) * 2000);
+        } else {
+          setFailed(true);
+        }
+      }}
+    />
+  );
+}
+
 function ReferenceThumb({ src, index, sizeClass = "h-14 w-14", onClick }) {
   const { t } = useCanvasT();
   const isVideo = isVideoReferenceSource(src);
@@ -640,7 +692,7 @@ function MessageBubble({ message, onRetry, onDownload, onImageClick, onPreview, 
                       </button>
                     </>
                   ) : (
-                    <img src={url} alt={message.text} className="w-full hover:opacity-95 transition-opacity" />
+                    <ResultImage src={url} alt={message.text} className="w-full hover:opacity-95 transition-opacity" />
                   )}
                   {(() => {
                     const infoLabel = [
