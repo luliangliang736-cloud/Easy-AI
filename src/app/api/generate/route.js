@@ -3,6 +3,7 @@ import { MAX_GEN_COUNT } from "@/lib/genLimits";
 import { resolveNanoServiceTier } from "@/lib/nanoConfig";
 import { generateWithGptImage2, isGptImage2Model } from "@/lib/server/gptImage2";
 import {
+  generateWithGeminiNativeImage,
   generateWithOpenAICompatibleChatImage,
   generateWithOpenAICompatibleImage,
 } from "@/lib/server/openaiImageCompat";
@@ -50,6 +51,36 @@ function resolveOpenAICompatNanoModel(model) {
   return requestedModel || "gemini-3.1-flash-image-preview";
 }
 
+function normalizeNativeNanoResolution(value) {
+  const resolution = String(value || "").trim().toUpperCase();
+  // 1K 也允许显式指定：chat 通道不带档位时输出分辨率由上游随机决定，
+  // 明确选档的请求必须走原生通道锁定输出
+  return ["1K", "2K", "4K"].includes(resolution) ? resolution : "";
+}
+
+// 与 /api/edit 同款判定：支持原生通道锁分辨率的模型 + 显式档位时走 Gemini 原生通道。
+// Flash/Lite 也必须锁档：chat 通道不带档位时输出分辨率由上游随机决定，
+// 上游 Flash 会随机给 2K/4K，且 chat 通道耗时高数倍。
+const GEMINI_NATIVE_CAPABLE_MODELS = new Set([
+  "gemini-3-pro-image-preview",
+  "gemini-3.1-flash-image-preview",
+  "gemini-3.1-flash-lite-image",
+]);
+
+function shouldUseGeminiNativeImage(model, nanoResolution) {
+  return (
+    GEMINI_NATIVE_CAPABLE_MODELS.has(resolveOpenAICompatNanoModel(model)) &&
+    Boolean(normalizeNativeNanoResolution(nanoResolution))
+  );
+}
+
+/** 上游 200 但内容里没有任何图片（模型拒答/审核拦截/格式异常）：必须按失败处理 */
+function hasRenderedImage(urls = []) {
+  return urls.some((url) => typeof url === "string" && url);
+}
+
+const EMPTY_RESULT_MESSAGE = "生成未返回图片（可能被内容审核拦截或模型拒绝），请调整提示词后重试";
+
 function formatRouteError(err) {
   const code = err?.cause?.code || err?.code || "";
   const host = err?.cause?.hostname || "图片服务";
@@ -91,6 +122,8 @@ export async function POST(request) {
       output_format,
       output_compression,
       moderation,
+      _nanoResolution,
+      _autoRatio,
       clientRequestId: requestIdFromClient,
     } = body;
     clientRequestId = String(requestIdFromClient || "").trim();
@@ -110,6 +143,42 @@ export async function POST(request) {
       return NextResponse.json({ error: "Prompt is required" }, { status: 400 });
     }
 
+    if (shouldUseGeminiNativeImage(model, _nanoResolution)) {
+      const imageSize = normalizeNativeNanoResolution(_nanoResolution);
+      try {
+        const urls = await generateWithGeminiNativeImage({
+          apiBase: API_BASE,
+          apiKey: API_KEY,
+          model: resolveOpenAICompatNanoModel(model),
+          prompt,
+          imageSize,
+          aspectRatio: _autoRatio || image_size || "1:1",
+        });
+        const displayUrls = await normalizeGeneratedImageUrls(urls);
+        // 原生通道空结果抛错落入 fallback，让 chat 通道再试一次
+        if (!hasRenderedImage(displayUrls)) throw new Error("原生通道未返回图片");
+        const tasks = buildCompletedTasks(displayUrls, "gemini-native");
+        logGenerateEvent(meta, "success", {
+          provider: "gemini-native",
+          imageSize,
+          urlCount: displayUrls.filter(Boolean).length,
+        });
+        const responseBody = {
+          success: true,
+          data: { urls: displayUrls, tasks },
+        };
+        await saveGenerationResult(clientRequestId, responseBody);
+        return NextResponse.json(responseBody);
+      } catch (nativeError) {
+        // 原生 generateContent 渠道池会整体波动（No available channel / 503），
+        // 失败时回退 chat 通道保证生成不中断；代价是回退期间输出分辨率由上游决定
+        logGenerateEvent(meta, "native_fallback_chat", {
+          imageSize,
+          reason: String(nativeError?.message || nativeError).slice(0, 200),
+        });
+      }
+    }
+
     if (isGptImage2Model(model)) {
       const urls = await generateWithGptImage2({
         prompt,
@@ -121,6 +190,10 @@ export async function POST(request) {
         moderation,
       });
       const displayUrls = await normalizeGeneratedImageUrls(urls);
+      if (!hasRenderedImage(displayUrls)) {
+        logGenerateEvent(meta, "empty_result", { provider: "gpt-image-2" });
+        return NextResponse.json({ error: EMPTY_RESULT_MESSAGE }, { status: 502 });
+      }
       const tasks = buildCompletedTasks(displayUrls, "gpt-image-2");
       logGenerateEvent(meta, "success", {
         provider: "gpt-image-2",
@@ -154,6 +227,10 @@ export async function POST(request) {
             num: Math.min(Math.max(num || 1, 1), MAX_GEN_COUNT),
           });
       const displayUrls = await normalizeGeneratedImageUrls(urls);
+      if (!hasRenderedImage(displayUrls)) {
+        logGenerateEvent(meta, "empty_result", { provider: "openai-compatible" });
+        return NextResponse.json({ error: EMPTY_RESULT_MESSAGE }, { status: 502 });
+      }
       const tasks = buildCompletedTasks(displayUrls, "nano-openai");
       logGenerateEvent(meta, "success", {
         provider: "openai-compatible",
@@ -220,6 +297,10 @@ export async function POST(request) {
 
     const urls = Array.isArray(data.data?.url) ? data.data.url : [data.data?.url];
     const displayUrls = await normalizeGeneratedImageUrls(urls);
+    if (!hasRenderedImage(displayUrls)) {
+      logGenerateEvent(meta, "empty_result", { provider: "nano" });
+      return NextResponse.json({ error: EMPTY_RESULT_MESSAGE }, { status: 502 });
+    }
     const tasks = buildCompletedTasks(displayUrls, "nano");
 
     const responseBody = {

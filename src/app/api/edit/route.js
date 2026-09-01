@@ -8,9 +8,11 @@ import {
   editWithOpenAICompatibleImage,
 } from "@/lib/server/openaiImageCompat";
 import { saveGenerationResult } from "@/lib/server/generationResultStore";
-import { normalizeGeneratedImageUrls, readGeneratedImage } from "@/lib/server/generatedImageStore";
-import { copyImageUrlsToCloudAssets, readCloudAssetImage } from "@/lib/server/cloudAssetStore";
+import { getGeneratedImageBackupKey, normalizeGeneratedImageUrls, readGeneratedImage } from "@/lib/server/generatedImageStore";
+import { copyImageUrlsToCloudAssets, copyImageUrlToCloudAsset, readCloudAssetImage } from "@/lib/server/cloudAssetStore";
+import { getOssClient, isOssConfigured } from "@/lib/server/ossClient";
 import { getRequestUser } from "@/lib/server/authUser";
+import { isPicwishConfigured, runPicwishCutout } from "@/lib/server/picwishCutout";
 
 const API_BASE = process.env.NANO_API_BASE || "https://api.nanobananaapi.dev";
 const API_KEY = process.env.NANO_API_KEY;
@@ -53,12 +55,23 @@ function resolveOpenAICompatNanoModel(model) {
 
 function normalizeNativeNanoResolution(value) {
   const resolution = String(value || "").trim().toUpperCase();
-  return ["2K", "4K"].includes(resolution) ? resolution : "";
+  // 1K 也允许显式指定：chat 通道不带档位时输出分辨率由上游随机决定，
+  // 明确选档的请求必须走原生通道锁定输出
+  return ["1K", "2K", "4K"].includes(resolution) ? resolution : "";
 }
+
+// 支持原生 Gemini 通道显式锁分辨率的模型（实测三者均遵守 imageSize）。
+// Flash/Lite 也必须锁档：chat 通道不带档位时输出分辨率由上游随机决定，
+// 上游 Flash 会随机给 2K/4K，且 chat 通道耗时高数倍。
+const GEMINI_NATIVE_CAPABLE_MODELS = new Set([
+  "gemini-3-pro-image-preview",
+  "gemini-3.1-flash-image-preview",
+  "gemini-3.1-flash-lite-image",
+]);
 
 function shouldUseGeminiNativeImage(model, nanoResolution) {
   return (
-    resolveOpenAICompatNanoModel(model) === "gemini-3-pro-image-preview" &&
+    GEMINI_NATIVE_CAPABLE_MODELS.has(resolveOpenAICompatNanoModel(model)) &&
     Boolean(normalizeNativeNanoResolution(nanoResolution))
   );
 }
@@ -84,6 +97,13 @@ async function persistGeneratedUrls(urls = [], scope = "edited", userEmail = "sy
     scope,
   });
 }
+
+/** 上游 200 但内容里没有任何图片（模型拒答/审核拦截/格式异常）：必须按失败处理 */
+function hasRenderedImage(urls = []) {
+  return urls.some((url) => typeof url === "string" && url);
+}
+
+const EMPTY_RESULT_MESSAGE = "生成未返回图片（可能被内容审核拦截或模型拒绝），请调整提示词后重试";
 
 function buildCompletedTasks(urls = [], idPrefix = "image") {
   return urls
@@ -138,6 +158,25 @@ async function runLocalCutout(image) {
   return blobToDataUrl(result);
 }
 
+/**
+ * 把抠图源图解析成 OSS 对象 key（画布图基本都已在 OSS 上）。
+ * 拿到 key 就能签出直链给佐糖（国内→国内秒级下载），
+ * 避免从容器跨境上传图片二进制（极慢且曾挂死请求）。
+ */
+function resolveCutoutOssKey(image) {
+  const source = Array.isArray(image) ? image[0] : image;
+  if (!source || typeof source !== "string") return "";
+  const cloudMatch = source.match(/^\/api\/cloud-assets\/([^?#]+)/i);
+  if (cloudMatch) {
+    return cloudMatch[1].split("/").map((part) => decodeURIComponent(part)).join("/");
+  }
+  const generatedMatch = source.match(/^\/api\/generated-images\/([^/?#]+)/i);
+  if (generatedMatch) {
+    return getGeneratedImageBackupKey(decodeURIComponent(generatedMatch[1]));
+  }
+  return "";
+}
+
 export async function POST(request) {
   const meta = createRequestMeta("edit");
   let clientRequestId = "";
@@ -187,8 +226,51 @@ export async function POST(request) {
     }
 
     if (mode === "cutout") {
-      const url = await runLocalCutout(image);
-      const urls = await persistGeneratedUrls([url], "cutout", storageUserEmail);
+      let urls;
+      let cutoutProvider;
+      if (isPicwishConfigured()) {
+        // 佐糖抠图：效果远优于本地小模型。
+        // ⚠️ 佐糖结果链接仅 1 小时有效，必须先永久化到 OSS 成功后才返回；
+        // 永久化失败按整体失败处理（抛错），绝不把临时链接下发给前端。
+        cutoutProvider = "picwish";
+        const picwishLog = (event, details) => logEditEvent(meta, event, details);
+        let tempUrl = "";
+        // 首选：签名直链模式（佐糖国内服务器直接从 OSS 下载源图，秒级）
+        const ossKey = resolveCutoutOssKey(image);
+        if (ossKey && isOssConfigured()) {
+          try {
+            const signedUrl = getOssClient().signatureUrl(ossKey, { expires: 3600 });
+            tempUrl = await runPicwishCutout({ imageUrl: signedUrl, log: picwishLog });
+          } catch (urlModeError) {
+            // 直链失败（如 OSS 备份缺失导致佐糖下载不到）：回退二进制上传兜底
+            logEditEvent(meta, "picwish_url_mode_fallback", {
+              reason: String(urlModeError?.message || urlModeError).slice(0, 200),
+            });
+          }
+        }
+        if (!tempUrl) {
+          const sourceBlob = await normalizeCutoutSource(image);
+          tempUrl = await runPicwishCutout({ blob: sourceBlob, log: picwishLog });
+        }
+        const persistStartedAt = Date.now();
+        const persistedUrl = await copyImageUrlToCloudAsset({
+          userEmail: storageUserEmail,
+          url: tempUrl,
+          filename: "cutout",
+          scope: "cutout",
+        });
+        logEditEvent(meta, "picwish_result_persisted", { persistMs: Date.now() - persistStartedAt });
+        urls = [persistedUrl];
+      } else {
+        // 未配置佐糖 key 时回退本地抠图，保证功能不断
+        cutoutProvider = "local-cutout";
+        const url = await runLocalCutout(image);
+        urls = await persistGeneratedUrls([url], "cutout", storageUserEmail);
+      }
+      if (!hasRenderedImage(urls)) {
+        logEditEvent(meta, "empty_result", { provider: cutoutProvider });
+        return NextResponse.json({ error: EMPTY_RESULT_MESSAGE }, { status: 502 });
+      }
       const responseBody = {
         success: true,
         data: {
@@ -198,7 +280,7 @@ export async function POST(request) {
       };
       await saveGenerationResult(clientRequestId, responseBody);
       logEditEvent(meta, "success", {
-        provider: "local-cutout",
+        provider: cutoutProvider,
         urlCount: 1,
       });
       return NextResponse.json(responseBody);
@@ -218,6 +300,10 @@ export async function POST(request) {
         waDataPosterOverlay: Boolean(waDataPosterOverlay),
       });
       const displayUrls = await normalizeGeneratedImageUrls(urls);
+      if (!hasRenderedImage(displayUrls)) {
+        logEditEvent(meta, "empty_result", { provider: "gpt-image-2" });
+        return NextResponse.json({ error: EMPTY_RESULT_MESSAGE }, { status: 502 });
+      }
       const tasks = buildCompletedTasks(displayUrls, "gpt-image-2");
       logEditEvent(meta, "success", {
         provider: "gpt-image-2",
@@ -241,29 +327,40 @@ export async function POST(request) {
 
     if (shouldUseGeminiNativeImage(model, _nanoResolution)) {
       const imageSize = normalizeNativeNanoResolution(_nanoResolution);
-      const urls = await editWithGeminiNativeImage({
-        apiBase: API_BASE,
-        apiKey: API_KEY,
-        model: "gemini-3-pro-image-preview",
-        prompt,
-        image,
-        imageSize,
-        aspectRatio: _autoRatio || image_size || "1:1",
-      });
-      const displayUrls = await normalizeGeneratedImageUrls(urls);
-      const tasks = buildCompletedTasks(displayUrls, "gemini-native-edit");
-      logEditEvent(meta, "success", {
-        provider: "gemini-native",
-        imageSize,
-        aspectRatio: _autoRatio || null,
-        urlCount: displayUrls.filter(Boolean).length,
-      });
-      const responseBody = {
-        success: true,
-        data: { urls: displayUrls, tasks },
-      };
-      await saveGenerationResult(clientRequestId, responseBody);
-      return NextResponse.json(responseBody);
+      try {
+        const urls = await editWithGeminiNativeImage({
+          apiBase: API_BASE,
+          apiKey: API_KEY,
+          model: resolveOpenAICompatNanoModel(model),
+          prompt,
+          image,
+          imageSize,
+          aspectRatio: _autoRatio || image_size || "1:1",
+        });
+        const displayUrls = await normalizeGeneratedImageUrls(urls);
+        // 原生通道空结果抛错落入 fallback，让 chat 通道再试一次
+        if (!hasRenderedImage(displayUrls)) throw new Error("原生通道未返回图片");
+        const tasks = buildCompletedTasks(displayUrls, "gemini-native-edit");
+        logEditEvent(meta, "success", {
+          provider: "gemini-native",
+          imageSize,
+          aspectRatio: _autoRatio || null,
+          urlCount: displayUrls.filter(Boolean).length,
+        });
+        const responseBody = {
+          success: true,
+          data: { urls: displayUrls, tasks },
+        };
+        await saveGenerationResult(clientRequestId, responseBody);
+        return NextResponse.json(responseBody);
+      } catch (nativeError) {
+        // 原生 generateContent 渠道池会整体波动（No available channel / 503），
+        // 失败时回退 chat 通道保证生成不中断；代价是回退期间输出分辨率由上游决定
+        logEditEvent(meta, "native_fallback_chat", {
+          imageSize,
+          reason: String(nativeError?.message || nativeError).slice(0, 200),
+        });
+      }
     }
 
     if (API_STYLE === "openai") {
@@ -288,6 +385,10 @@ export async function POST(request) {
             num: Math.min(Math.max(num || 1, 1), MAX_GEN_COUNT),
           });
       const displayUrls = await normalizeGeneratedImageUrls(urls);
+      if (!hasRenderedImage(displayUrls)) {
+        logEditEvent(meta, "empty_result", { provider: "openai-compatible" });
+        return NextResponse.json({ error: EMPTY_RESULT_MESSAGE }, { status: 502 });
+      }
       const tasks = buildCompletedTasks(displayUrls, "nano-openai-edit");
       logEditEvent(meta, "success", {
         provider: "openai-compatible",
@@ -351,6 +452,10 @@ export async function POST(request) {
 
     const urls = Array.isArray(data.data?.url) ? data.data.url : [data.data?.url];
     const displayUrls = await normalizeGeneratedImageUrls(urls);
+    if (!hasRenderedImage(displayUrls)) {
+      logEditEvent(meta, "empty_result", { provider: "nano" });
+      return NextResponse.json({ error: EMPTY_RESULT_MESSAGE }, { status: 502 });
+    }
     const tasks = buildCompletedTasks(displayUrls, "nano");
 
     const responseBody = {

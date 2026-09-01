@@ -46,7 +46,10 @@ const MODEL_TIERS = [
     icon: Rocket,
     desc: "推荐 · 高性价比",
     variants: [
-      { model: "gemini-3.1-flash-image-preview", label: "默认", credits: { default: 0, priority: 0 } },
+      // 各档发请求前都在画布页落成基础 Flash 模型 + 显式 _nanoResolution 走原生通道锁档
+      { model: "gemini-3.1-flash-image-preview", label: "1K", isDefault: true, credits: { default: 0, priority: 0 } },
+      { model: "gemini-3.1-flash-image-preview-2k", label: "2K", credits: { default: 0, priority: 0 } },
+      { model: "gemini-3.1-flash-image-preview-4k", label: "4K", credits: { default: 0, priority: 0 } },
     ],
     maxInputImages: 10,
     extendedRatios: true,
@@ -70,7 +73,10 @@ const MODEL_TIERS = [
     icon: Crown,
     desc: "专业画质 · Thinking",
     variants: [
-      { model: "gemini-3-pro-image-preview", label: "默认", credits: { default: 0, priority: 0 } },
+      { model: "gemini-3-pro-image-preview-auto", label: "Auto", isDefault: true, credits: { default: 0, priority: 0 } },
+      { model: "gemini-3-pro-image-preview", label: "1K", credits: { default: 0, priority: 0 } },
+      { model: "gemini-3-pro-image-preview-2k", label: "2K", credits: { default: 0, priority: 0 } },
+      { model: "gemini-3-pro-image-preview-4k", label: "4K", credits: { default: 0, priority: 0 } },
     ],
     maxInputImages: 14,
     extendedRatios: false,
@@ -1226,7 +1232,9 @@ export default function ChatPanel({
   };
 
   const setTier = (tier) => {
-    const defaultVariant = tier.variants.find((v) => v.label === "1K") || tier.variants[0];
+    const defaultVariant = tier.variants.find((v) => v.isDefault)
+      || tier.variants.find((v) => v.label === "1K")
+      || tier.variants[0];
     let nextImageSize = params.image_size;
     if (tier.id === "kling-video" && !["16:9", "9:16", "1:1"].includes(nextImageSize)) {
       nextImageSize = "16:9";
@@ -1238,6 +1246,9 @@ export default function ChatPanel({
       ...params,
       model: defaultVariant.model,
       image_size: nextImageSize,
+      // 换模型必须清掉隐藏的分辨率档位：重试/载入历史可能带回老消息的 _nanoResolution（如 2K），
+      // 不清会黏在参数里，导致界面选的是 1K 实际按 2K 出图
+      _nanoResolution: undefined,
       ...(tier.id === "kling-video"
         ? { num: 1, duration: params.duration || "5", mode: params.mode || "pro", sound: params.sound || "off" }
         : {}),
@@ -1710,7 +1721,7 @@ export default function ChatPanel({
                   <span className="block text-[11px] text-text-tertiary mb-1.5">{t("模型规格")}</span>
                   <div className="flex gap-1.5 flex-wrap">
                     {currentTier.variants.map((v) => (
-                      <button key={v.model} onClick={() => onParamsChange({ ...params, model: v.model })}
+                      <button key={v.model} onClick={() => onParamsChange({ ...params, model: v.model, _nanoResolution: undefined })}
                         className={`px-2.5 py-1.5 rounded-lg text-[11px] font-medium transition-all ${params.model === v.model ? PARAM_ACTIVE_CLASS : "bg-bg-tertiary text-text-secondary hover:bg-bg-hover border border-border-primary"}`}>
                         {t(v.label)}
                         {!isKlingVideoTier && (

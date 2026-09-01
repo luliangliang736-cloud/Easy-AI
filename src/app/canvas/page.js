@@ -1416,6 +1416,16 @@ const MODEL_LABELS = {
 
 const GPT_IMAGE_2_MODEL = "gpt-image-2";
 const NANO_PRO_UPSCALE_MODEL = "gemini-3-pro-image-preview";
+/** Pro「Auto」档：发请求前按垫图分辨率落到具体档位，此模型名不会发给服务端 */
+const NANO_PRO_AUTO_MODEL = "gemini-3-pro-image-preview-auto";
+/** 垫图长边达到该值视为 2K 档（Pro 1K 输出长边约 1264-1408，2K 约 2528-2816，取中间值） */
+const NANO_PRO_AUTO_2K_MIN_EDGE = 1600;
+/** 发请求前锁定 1K 输出的 Flash 家族模型（-512 别名服务端会解析回基础 Flash） */
+const NANO_FLASH_LOCK_1K_MODELS = new Set([
+  "gemini-3.1-flash-image-preview",
+  "gemini-3.1-flash-image-preview-512",
+  "gemini-3.1-flash-lite-image",
+]);
 // 材质面板「生成 2K」：走 Pro 基础模型 + _nanoResolution（Gemini 原生 imageSize），
 // 与"Nano Pro 高清放大"同通道；网关没有给 -2k 模型别名配渠道，直接请求别名会 503。
 const MATERIAL_2K_PARAMS = { model: NANO_PRO_UPSCALE_MODEL, _nanoResolution: "2K" };
@@ -1593,7 +1603,9 @@ function HomeInner() {
   const [entryMode, setEntryMode] = useState(DEFAULT_ENTRY_MODE);
   const [composerMode, setComposerMode] = useState(DEFAULT_COMPOSER_MODE);
   const [params, setParams] = useState({
-    model: "gemini-3.1-flash-image-preview-512",
+    // 基础 Flash 模型即 1K 档：与选择器 Nano 2 的 1K 变体同名，保证默认态有档位高亮
+    // （老的 -512 别名行为相同，server 会解析回基础 Flash，仅默认值切换）
+    model: "gemini-3.1-flash-image-preview",
     image_size: "1:1",
     num: 1,
     service_tier: "priority",
@@ -2760,7 +2772,9 @@ function HomeInner() {
         }
       : effectiveParams;
     const hasImages = effectiveRefImages.length > 0;
-    if (hasImages && resolvedParams.image_size === "auto" && (!resolvedParams._autoRatio || !resolvedParams._autoWidth || !resolvedParams._autoHeight)) {
+    // Pro Auto 档需要垫图尺寸来定清晰度，即使用户选了固定比例也要探测一次
+    const needsRefMeta = resolvedParams.image_size === "auto" || resolvedParams.model === NANO_PRO_AUTO_MODEL;
+    if (hasImages && needsRefMeta && (!resolvedParams._autoRatio || !resolvedParams._autoWidth || !resolvedParams._autoHeight)) {
       const meta = await detectRefImageMeta(effectiveRefImages[0]);
       resolvedParams = {
         ...resolvedParams,
@@ -2770,12 +2784,71 @@ function HomeInner() {
         _autoHeight: meta.height || resolvedParams._autoHeight,
       };
     }
+    // Pro 清晰度档位在这里落地：各档全部转成基础 Pro 模型 + 显式 _nanoResolution，
+    // 走与「高清放大」相同的 Gemini 原生通道。不能依赖 chat 通道的默认行为——
+    // 不带档位时输出分辨率由上游渠道随机决定（同一天可能忽 1K 忽 2K），1K 也必须显式锁定。
+    if (resolvedParams.model === NANO_PRO_AUTO_MODEL) {
+      // Auto：垫图长边达到 2K 档出 2K，无垫图或 1K 档垫图锁 1K
+      const refEdge = Math.max(Number(resolvedParams._autoWidth) || 0, Number(resolvedParams._autoHeight) || 0);
+      const use2k = hasImages && refEdge >= NANO_PRO_AUTO_2K_MIN_EDGE;
+      resolvedParams = {
+        ...resolvedParams,
+        model: NANO_PRO_UPSCALE_MODEL,
+        _nanoResolution: use2k ? "2K" : "1K",
+      };
+    } else if (resolvedParams.model === NANO_PRO_UPSCALE_MODEL) {
+      // 基础 Pro 模型（含 1K 档、Agent 自动选 Pro、老用户存档）：默认锁 1K；
+      // 高清放大等自带 _nanoResolution（2K/4K）的请求保持原档位不覆盖
+      resolvedParams = {
+        ...resolvedParams,
+        _nanoResolution: resolvedParams._nanoResolution || "1K",
+      };
+    } else if (resolvedParams.model === "gemini-3-pro-image-preview-2k") {
+      resolvedParams = {
+        ...resolvedParams,
+        model: NANO_PRO_UPSCALE_MODEL,
+        _nanoResolution: "2K",
+      };
+    } else if (resolvedParams.model === "gemini-3-pro-image-preview-4k") {
+      resolvedParams = {
+        ...resolvedParams,
+        model: NANO_PRO_UPSCALE_MODEL,
+        _nanoResolution: "4K",
+      };
+    } else if (NANO_FLASH_LOCK_1K_MODELS.has(resolvedParams.model)) {
+      // Flash/Lite 同样锁 1K 走原生通道：chat 通道对 Flash 会随机给 2K/4K，
+      // 导致出图忽大忽小且耗时翻数倍。
+      // 强制覆盖而非沿用：重试/载入历史会把老消息的 _nanoResolution（如高清放大的 2K）
+      // 整包写回输入框参数，Flash 基础档没有任何合法的 2K/4K 来源（显式档走 -2k/-4k 别名分支），
+      // 沿用残留值会导致界面显示 Nano 2 实际全按 2K 出图
+      resolvedParams = {
+        ...resolvedParams,
+        _nanoResolution: "1K",
+      };
+    } else if (resolvedParams.model === "gemini-3.1-flash-image-preview-2k") {
+      resolvedParams = {
+        ...resolvedParams,
+        model: "gemini-3.1-flash-image-preview",
+        _nanoResolution: "2K",
+      };
+    } else if (resolvedParams.model === "gemini-3.1-flash-image-preview-4k") {
+      resolvedParams = {
+        ...resolvedParams,
+        model: "gemini-3.1-flash-image-preview",
+        _nanoResolution: "4K",
+      };
+    }
     const requestParams = resolvedParams;
     const isKlingVideoRequest = isKlingVideoModel(requestParams.model);
     const isSeedanceVideoRequest = isSeedanceVideoModel(requestParams.model);
     const isAnyVideoRequest = isKlingVideoRequest || isSeedanceVideoRequest;
     const shouldUseEditApi = !isAnyVideoRequest && (Boolean(editMode) || hasImages);
-    const modelLabel = MODEL_LABELS[requestParams.model] || requestParams.model;
+    // Pro/Flash + 显式清晰度档（2K/4K）时标签展示实际档位，与高清放大 / 2K 档 / Auto 落 2K 一致
+    const modelLabel = requestParams._nanoResolution && requestParams.model === NANO_PRO_UPSCALE_MODEL
+      ? `Pro ${requestParams._nanoResolution}`
+      : requestParams._nanoResolution && requestParams._nanoResolution !== "1K" && requestParams.model === AGENT_DEFAULT_MODEL
+        ? `Nano Banana 2 ${requestParams._nanoResolution}`
+        : MODEL_LABELS[requestParams.model] || requestParams.model;
     if (!isAnyVideoRequest && isTextEditing) return;
 
     const messageRefImages = hasImages

@@ -406,6 +406,41 @@ export async function editWithOpenAICompatibleChatImage({
   return await normalizeGeneratedImageUrls(extractChatImageUrls(data));
 }
 
+/** 文生图版原生 Gemini 通道：与 editWithGeminiNativeImage 同一端点，用于无垫图时的 2K/4K 强制档 */
+export async function generateWithGeminiNativeImage({
+  apiBase,
+  apiKey,
+  model,
+  prompt,
+  imageSize = "1K",
+  aspectRatio = "1:1",
+}) {
+  const path = `/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`;
+  const data = await postJson({
+    apiBase: normalizeGeminiBaseUrl(apiBase),
+    apiKey: "",
+    apiKeyHeader: "",
+    path,
+    payload: {
+      contents: [
+        {
+          role: "user",
+          parts: [{ text: String(prompt || "").trim() }],
+        },
+      ],
+      generationConfig: {
+        responseModalities: ["TEXT", "IMAGE"],
+        imageConfig: {
+          aspectRatio: normalizeGeminiAspectRatio(aspectRatio),
+          imageSize: normalizeGeminiImageSize(imageSize),
+        },
+      },
+    },
+  });
+
+  return await normalizeGeneratedImageUrls(extractGeminiImageUrls(data));
+}
+
 export async function editWithGeminiNativeImage({
   apiBase,
   apiKey,
